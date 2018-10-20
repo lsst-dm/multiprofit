@@ -28,12 +28,26 @@ from scipy import special, stats
 import multiprofit.objects as proobj
 
 
+def logstretch(x, lower, factor=1):
+    return np.log10(x-lower)*factor
+
+
+def powstretch(x, lower, factor=1):
+    return 10**(x*factor) + lower
+
+
+def getlogstretch(lower, factor=1):
+    return proobj.Transform(
+        transform=functools.partial(logstretch, lower=lower, factor=factor),
+        reverse=functools.partial(powstretch, lower=lower, factor=1./factor))
+
+
 def logitlimited(x, lower, extent, factor=1):
-    return special.logit((x*factor-lower)/extent)
+    return special.logit((x-lower)/extent)*factor
 
 
 def expitlimited(x, lower, extent, factor=1):
-    return special.expit(x)*factor*extent + lower
+    return special.expit(x*factor)*extent + lower
 
 
 def getlogitlimited(lower, upper, factor=1):
@@ -50,8 +64,9 @@ transformsref = {
                                 reverse=functools.partial(np.divide, 1.)),
     "logit": proobj.Transform(transform=special.logit, reverse=special.expit),
     "logitaxrat": getlogitlimited(1e-4, 1),
-    "logitsersic":  getlogitlimited(0.3, 6),
-    "logitmultigausssersic": getlogitlimited(0.5, 6),
+    "logitsersic":  getlogitlimited(0.3, 6.2),
+    "logitmultigausssersic": getlogitlimited(0.3, 6.2),
+    "logstretchmultigausssersic": getlogstretch(0.3, 6.2),
 }
 
 
@@ -281,6 +296,10 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
     if modeller is None:
         modeller = proobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
     fit = modeller.fit(printfinal=printfinal, printsteps=printsteps)
+    if printfinal:
+        paramsall = model.getparameters(fixed=True)
+        print("Param names:" + ",".join(["{:11s}".format(p.name) for p in paramsall]))
+        print("All params: " + ",".join(["{:+.4e}".format(p.getvalue(transformed=False)) for p in paramsall]))
     # Conveniently sets the parameters to the right values too
     if plot:
         modeldesc = None

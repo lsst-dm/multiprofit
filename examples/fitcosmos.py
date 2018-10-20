@@ -283,7 +283,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
             paramsfixeddefault[modeltype] = [param.fixed for param in
                                              modeldefault.getparameters(fixed=True)]
             existsmodel = modeltype in models
-            model = modeldefault if (redoall or not existsmodel) else models[modeltype]
+            model = modeldefault if not existsmodel else models[modeltype]
             if not existsmodel:
                 models[modeltype] = model
             psfname = modelinfo[specs["psfmodel"]] + ("_pixelated" if mpfutil.str2bool(
@@ -330,12 +330,10 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                             # TODO: Check this more thoroughly
                             modelnamecomps = inittype.split(":")[1].split(";")
                             print(modelnamecomps)
-                        chisqredbest = np.Inf
-                        for modelnamecomp in modelnamecomps:
-                            chisqred = fitsbyengine[engine][modelnamecomp]["fits"][-1]["chisqred"]
-                            if chisqred < chisqredbest:
-                                chisqredbest = chisqred
-                                inittype = modelnamecomp
+                        chisqreds = [fitsengine[modelnamecomp]["fits"][-1]["chisqred"]
+                                     for modelnamecomp in modelnamecomps]
+                        print(chisqreds)
+                        inittype = modelnamecomps[np.argmin(chisqreds)]
                     else:
                         inittype = inittype.split(';')
                         if len(inittype) > 1:
@@ -435,6 +433,10 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                             for _ in range(100):
                                 paramval = np.nextafter(paramval, direction)
                             param.setvalue(paramval, transformed=False)
+
+                paramvals = np.array([x.getvalue(transformed=False) for x in model.getparameters(fixed=True)])
+                if not all(np.isfinite(paramvals)):
+                    raise RuntimeError('Not all params finite for model {}:'.format(modelname), paramvals)
 
                 print("Fitting model {:s} of type {:s} using engine {:s}".format(modelname, modeltype, engine))
                 sys.stdout.flush()
@@ -765,7 +767,9 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                 else:
                     engineopts["drawmethod"] = "no_pixel" if ispsfpixelated else None
                     # TODO: Allow plotting of PSF fit after the fact
-                    if redo or 'psfs' not in results[srcname] or psfname not in results[srcname]['psfs']:
+                    if redo or 'psfs' not in results[srcname] or band not in results[srcname]['psfs'] \
+                            or psfname not in results[srcname]['psfs'][band]:
+                        print('Fitting PSF model {}'.format(psfmodelname))
                         psfmodel = fitpsf(psf.image.array, psfmodelname, {"galsim": engineopts}, band=band,
                                           plot=plot, modelname=psfmodelname, title=fitname,
                                           figaxes=(figure, axes), figurerow=psfrow)["galsim"]
@@ -845,6 +849,7 @@ if __name__ == '__main__':
     args.catalogpath = os.path.expanduser(args.catalogpath)
     modelspecs = getmodelspecs(None if args.modelspecfile is None else os.path.expanduser(args.modelspecfile))
 
+    print('Loading COSMOS catalog at ' + os.path.join(args.catalogpath, args.catalogfile))
     try:
         rgcat = gs.RealGalaxyCatalog(args.catalogfile, dir=args.catalogpath)
     except Exception as e:
