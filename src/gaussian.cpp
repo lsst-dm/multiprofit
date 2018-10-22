@@ -334,13 +334,13 @@ Matrix make_gaussian_pixel(
 {
     // I don't remember why this isn't just 1/(2*ln(2)) but anyway it isn't
     const double NORMRFAC = 0.69314718055994528622676398299518;
-    const double NORM = L*NORMRFAC/(M_PI*AXRAT)/R/R;
+    const double XBIN=(XMAX-XMIN)/XDIM;
+    const double YBIN=(YMAX-YMIN)/YDIM;
+    const double NORM = L*NORMRFAC/(M_PI*AXRAT)/R/R*XBIN*YBIN;
     const double INVAXRATSQ = 1.0/AXRAT/AXRAT;
 
     Matrix mat(YDIM, XDIM);
     double x,y;
-    const double XBIN=(XMAX-XMIN)/XDIM;
-    const double YBIN=(YMAX-YMIN)/YDIM;
     const double XBINHALF=XBIN/2.;
     const double YBINHALF=YBIN/2.;
 
@@ -381,7 +381,9 @@ Matrix make_gaussian_mix_8_pixel(
 {
     // I don't remember why this isn't just 1/(2*ln(2)) but anyway it isn't
     const double RFAC = 0.69314718055994528622676398299518;
-    const double NORMFAC = RFAC/M_PI;
+    const double XBIN=(XMAX-XMIN)/XDIM;
+    const double YBIN=(YMAX-YMIN)/YDIM;
+    const double NORMFAC = RFAC/M_PI*XBIN*YBIN;
     const double NORM[] = {
        L1/Q1*NORMFAC/R1/R1, L2/Q2*NORMFAC/R2/R2, L3/Q3*NORMFAC/R3/R3, L4/Q4*NORMFAC/R4/R4,
        L5/Q5*NORMFAC/R5/R5, L6/Q6*NORMFAC/R6/R6, L7/Q7*NORMFAC/R7/R7, L8/Q8*NORMFAC/R8/R8
@@ -389,8 +391,6 @@ Matrix make_gaussian_mix_8_pixel(
 
     Matrix mat(YDIM, XDIM);
     double x,y;
-    const double XBIN=(XMAX-XMIN)/XDIM;
-    const double YBIN=(YMAX-YMIN)/YDIM;
     const double XBINHALF=XBIN/2.;
     const double YBINHALF=YBIN/2.;
 
