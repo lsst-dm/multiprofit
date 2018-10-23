@@ -97,13 +97,6 @@ def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainv
     return model
 
 
-#            "multigaussiansersic:1,sersic:1": mpfutil.getmodel(
-#                {band: flux}, "multigaussiansersic:1,sersic:1", npiximg,
-#                             valuesinit["re"], valuesinit["axrat"], valuesinit["ang"],
-#                             offsetxy=offsetxy, engine=engine, engineopts=engineopts,
-                             #istransformedvalues=istransformedvalues, slopes=[np.log10(4.), 0])
-
-
 def getmodelspecs(filename=None):
     if filename is None:
         modelspecs = io.StringIO("\n".join([
@@ -116,7 +109,9 @@ def getmodelspecs(filename=None):
         modelspecs = [row for row in csv.reader(filecsv)]
     header = modelspecs[0]
     del modelspecs[0]
-    return modelspecs, header
+    modelspecs = [{name: modelspec[i] for i, name in enumerate(header)} for modelspec in modelspecs]
+    # TODO: Validate modelspecs
+    return modelspecs
 
 
 def fitpsf(imgpsf, psfmodel, engines, band, sigmainverse=None, modellib="scipy",
@@ -199,6 +194,52 @@ def initmodelfrommodelfits(model, modelfits):
                 paramset.setvalue(value, transformed=False)
 
 
+def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine):
+    # TODO: Refactor into function
+    if inittype.startswith("best"):
+        if inittype == "best":
+            modelnamecomps = []
+
+            # Loop through all previous models and add ones of the same type
+            for modelinfocomp in modelinfocomps:
+                if modelinfocomp["model"] == modeltype:
+                    modelnamecomps.append(modelinfocomp['name'])
+        else:
+            # TODO: Check this more thoroughly
+            modelnamecomps = inittype.split(":")[1].split(";")
+            print(modelnamecomps)
+        chisqreds = [fitsengine[modelnamecomp]["fits"][-1]["chisqred"]
+                     for modelnamecomp in modelnamecomps]
+        print(chisqreds)
+        inittype = modelnamecomps[np.argmin(chisqreds)]
+    else:
+        inittype = inittype.split(';')
+        if len(inittype) > 1:
+            modelfits = [{
+                'paramvals': fitsengine[initname]['fits'][-1]['paramsbestall'],
+                'paramtree': models[fitsengine[initname]['modeltype']].getparameters(
+                    fixed=True, flatten=False),
+                'params': models[fitsengine[initname]['modeltype']].getparameters(fixed=True),
+                'chisqred': fitsengine[initname]['fits'][-1]['chisqred'],
+                'modeltype': fitsengine[initname]['modeltype'],
+                'name': initname, }
+                for initname in inittype
+            ]
+            initmodelfrommodelfits(model, modelfits)
+            inittype = None
+        else:
+            inittype = inittype[0]
+            if inittype not in fitsengine:
+                # TODO: Fail or fall back here?
+                raise RuntimeError("Model {} can't find reference {} "
+                                   "to initialize from".format(modelname, inittype))
+    if inittype and 'fits' in fitsengine[inittype]:
+        print('Initializing from best model=' + inittype)
+        paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
+        for param, value in zip(model.getparameters(fixed=True), paramvalsinit):
+            param.setvalue(value, transformed=False)
+
+
 def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=None, modellibopts=None,
               plot=False, name=None, models=None, fitsbyengine=None, redoall=True,
               ):
@@ -249,8 +290,6 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
     psfs = psfs[band]
     mask = masks[band] if band in masks else None
     sigmainverse = sigmainverses[band]
-    # TODO: validate specs
-    specs = {name: idx for idx, name in enumerate(modelspecs[1])}
     models = {} if (models is None) or redoall else models
     paramsfixeddefault = {}
     fitsbyengine = {} if ((models is None) or (fitsbyengine is None) or redoall) else fitsbyengine
@@ -260,7 +299,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
             fitsbyengine[engine] = {}
         fitsengine = fitsbyengine[engine]
         if plot:
-            nrows = len(modelspecs[0])
+            nrows = len(modelspecs)
             # Change to landscape
             figure, axes = plt.subplots(nrows=min([5, nrows]), ncols=max([5, nrows]))
             if nrows > 5:
@@ -274,9 +313,9 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
             figure = None
             axes = None
             flipplot = None
-        for modelidx, modelinfo in enumerate(modelspecs[0]):
-            modelname = modelinfo[specs["name"]]
-            modeltype = modelinfo[specs["model"]]
+        for modelidx, modelinfo in enumerate(modelspecs):
+            modelname = modelinfo["name"]
+            modeltype = modelinfo["model"]
             modeldefault = mpfutil.getmodel(
                 {band: fluxes[band]}, modeltype, npiximg, engine=engine, engineopts=engineopts
             )
@@ -286,8 +325,8 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
             model = modeldefault if not existsmodel else models[modeltype]
             if not existsmodel:
                 models[modeltype] = model
-            psfname = modelinfo[specs["psfmodel"]] + ("_pixelated" if mpfutil.str2bool(
-                modelinfo[specs["psfpixel"]]) else "")
+            psfname = modelinfo["psfmodel"] + ("_pixelated" if mpfutil.str2bool(
+                modelinfo["psfpixel"]) else "")
             mpfutil.setexposure(model, band, image=img.array, sigmainverse=sigmainverse,
                                 psf=psfs[psfname]["object"], mask=mask)
             if not redoall and modelname in fitsbyengine[engine] and \
@@ -316,50 +355,9 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                                    figurerow=modelidx, flipplot=flipplot)
                     plt.show(block=False)
             else:
-                inittype = modelinfo[specs["inittype"]]
+                inittype = modelinfo["inittype"]
                 if inittype != 'moments':
-                    # TODO: Refactor into function
-                    if inittype.startswith("best"):
-                        if inittype == "best":
-                            modelnamecomps = []
-                            for modelidxcomp in range(modelidx):
-                                modelinfocomp = modelspecs[0][modelidxcomp]
-                                if modelinfocomp[specs["model"]] == modeltype:
-                                    modelnamecomps.append(modelinfocomp[specs['name']])
-                        else:
-                            # TODO: Check this more thoroughly
-                            modelnamecomps = inittype.split(":")[1].split(";")
-                            print(modelnamecomps)
-                        chisqreds = [fitsengine[modelnamecomp]["fits"][-1]["chisqred"]
-                                     for modelnamecomp in modelnamecomps]
-                        print(chisqreds)
-                        inittype = modelnamecomps[np.argmin(chisqreds)]
-                    else:
-                        inittype = inittype.split(';')
-                        if len(inittype) > 1:
-                            modelfits = [{
-                                'paramvals': fitsengine[initname]['fits'][-1]['paramsbestall'],
-                                'paramtree': models[fitsengine[initname]['modeltype']].getparameters(
-                                    fixed=True, flatten=False),
-                                'params': models[fitsengine[initname]['modeltype']].getparameters(fixed=True),
-                                'chisqred': fitsengine[initname]['fits'][-1]['chisqred'],
-                                'modeltype': fitsengine[initname]['modeltype'],
-                                'name': initname,}
-                                for initname in inittype
-                            ]
-                            initmodelfrommodelfits(model, modelfits)
-                            inittype = None
-                        else:
-                            inittype = inittype[0]
-                            if inittype not in fitsbyengine[engine]:
-                                # TODO: Fail or fall back here?
-                                raise RuntimeError("Model {} can't find reference {} "
-                                    "to initialize from".format(modelname, inittype))
-                    if inittype and 'fits' in fitsbyengine[engine][inittype]:
-                        print('Initializing from best model=' + inittype)
-                        paramvalsinit = fitsbyengine[engine][inittype]["fits"][-1]["paramsbestall"]
-                        for param, value in zip(model.getparameters(fixed=True), paramvalsinit):
-                            param.setvalue(value, transformed=False)
+                    initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], fitsengine)
                 if inittype == "moments":
                     print('Initializing from moments')
                     for param in model.getparameters(fixed=False):
@@ -373,7 +371,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                 paramflags = {}
                 for flag in ["fixedparams", "initparams"]:
                     paramflags[flag] = {}
-                    values = modelinfo[specs[flag]]
+                    values = modelinfo[flag]
                     if values:
                         for flagvalue in values.split(";"):
                             if flag == "fixedparams":
@@ -719,18 +717,17 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                     # TODO: Use the mask properly
                     # mask = exposure.getMaskedImage().getMask()
                     # mask = mask.array[idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]]
-                    for band in hscbands:
-                        if useNoiseReplacer:
-                            img = copy.deepcopy(exposure.maskedImage.image.array[idshsc[3]: idshsc[2],
-                                                idshsc[1]: idshsc[0]])
-                        else:
-                            footprint = measCat[row].getFootprint()
-                            # TODO: There is presumably a much better way of doing this
-                            img = copy.deepcopy(exposure.maskedImage.image)*0
-                            footprint.getSpans().copyImage(exposure.maskedImage.image, img)
-                        psf = imgpsfgs
-                        mask = img != 0
-                        img = gs.Image(img, scale=scalehsc)
+                    if useNoiseReplacer:
+                        img = copy.deepcopy(exposure.maskedImage.image.array[idshsc[3]: idshsc[2],
+                                            idshsc[1]: idshsc[0]])
+                    else:
+                        footprint = measCat[row].getFootprint()
+                        # TODO: There is presumably a much better way of doing this
+                        img = copy.deepcopy(exposure.maskedImage.image)*0
+                        footprint.getSpans().copyImage(exposure.maskedImage.image, img)
+                    psf = imgpsfgs
+                    mask = img != 0
+                    img = gs.Image(img, scale=scalehsc)
                 imgs[band] = img
                 psfsband[band] = psf
                 sigmainverses[band] = 1.0 / np.sqrt(var)
@@ -741,9 +738,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
         if srcname not in results:
             results[srcname] = {}
         psfs = {}
-        specs = {name: idx for idx, name in enumerate(modelspecs[1])}
-        psfmodels = set([(x[specs["psfmodel"]], mpfutil.str2bool(x[specs["psfpixel"]])) for x in
-                          modelspecs[0]])
+        psfmodels = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
         engineopts = {
             "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
         }
