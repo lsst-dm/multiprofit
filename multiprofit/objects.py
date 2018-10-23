@@ -1987,6 +1987,7 @@ class MultiGaussianApproximationProfile(Component):
             [value for value in self.parameters.values() if \
                 (value.fixed and fixed) or (not value.fixed and free)]
 
+
     def getprofiles(self, bandfluxes, engine, cenx, ceny, engineopts=None):
         self._checkengine(engine)
 
@@ -2123,7 +2124,7 @@ class MultiGaussianApproximationProfile(Component):
                        "\n".join(errors) + "\nPassed params:" + str(parameters)
             raise ValueError(errorstr)
 
-    def __init__(self, fluxes, name="", profile="exp", parameters=None, order=8):
+    def __init__(self, fluxes, name="", profile="sersic", parameters=None, order=8):
         if profile not in MultiGaussianApproximationProfile.profilesavailable:
             raise ValueError("Profile type={:s} not in available: ".format(profile) + str(
                 MultiGaussianApproximationProfile.profilesavailable))
