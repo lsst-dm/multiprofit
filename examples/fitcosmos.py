@@ -131,9 +131,8 @@ def fitpsf(imgpsf, psfmodel, engines, band, sigmainverse=None, modellib="scipy",
 
 
 def initmodelfrommodelfits(model, modelfits):
-    # This is going to be complicated, ugh
     # TODO: Come up with a better structure for parameter
-    # TODO: Put this is utils as a generic init model from other model(s) method
+    # TODO: Move to utils as a generic init model from other model(s) method
     chisqreds = [value['chisqred'] for value in modelfits]
     modelbest = chisqreds.index(min(chisqreds))
     print('Initializing from best model=' + modelfits[modelbest]['name'])
@@ -151,7 +150,7 @@ def initmodelfrommodelfits(model, modelfits):
         for comp in paramtree[0][1][1:len(paramtree[0][1])]:
             compsinit.append([(param, param.getvalue(transformed=False)) for param in comp])
     params = model.getparameters(fixed=True, flatten=False)
-    # one source
+    # Assume one source
     paramssrc = params[0]
     fluxcomps = paramssrc[1]
     fluxcens = fluxcomps[0] + paramssrc[0]
@@ -194,7 +193,7 @@ def initmodelfrommodelfits(model, modelfits):
                 paramset.setvalue(value, transformed=False)
 
 
-def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine):
+def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitsengine, paramsinherit=None):
     # TODO: Refactor into function
     if inittype.startswith("best"):
         if inittype == "best":
@@ -232,12 +231,37 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine):
             if inittype not in fitsengine:
                 # TODO: Fail or fall back here?
                 raise RuntimeError("Model {} can't find reference {} "
-                                   "to initialize from".format(modelname, inittype))
+                                   "to initialize from".format(modeltype, inittype))
     if inittype and 'fits' in fitsengine[inittype]:
         print('Initializing from best model=' + inittype)
         paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
-        for param, value in zip(model.getparameters(fixed=True), paramvalsinit):
-            param.setvalue(value, transformed=False)
+        # TODO: Find a more elegant method to do this
+        ismgtogauss = (modeltype == 'gaussian:8' and
+                       fitsengine[inittype]['modeltype'] == 'multigaussiansersic:1')
+        if ismgtogauss:
+            modelnew = model
+            model = models['multigaussiansersic:1']
+        for i in range(1+ismgtogauss):
+            paramsall = model.getparameters(fixed=True)
+            if len(paramvalsinit) != len(paramsall):
+                raise RuntimeError('len(paramvalsinit)={} != len(params)={}'.format(
+                    len(paramvalsinit), len(paramsall)))
+            for param, value in zip(paramsall, paramvalsinit):
+                param.setvalue(value, transformed=False)
+            if ismgtogauss and i == 0:
+                componentsnew = mpfutil.getmultigaussians(
+                    model.getprofiles(bands, engine='libprofit'), paramsinherit=paramsinherit)
+                componentsold = model.sources[0].modelphotometric.components
+                for modeli in [model, modelnew]:
+                    modeli.sources[0].modelphotometric.components = []
+                paramvalsinit = [param.getvalue(transformed=False)
+                                 for param in model.getparameters(fixed=True)]
+                model.sources[0].modelphotometric.components = componentsold
+                model = modelnew
+        if ismgtogauss:
+            model.sources[0].modelphotometric.components = componentsnew
+
+    return model
 
 
 def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=None, modellibopts=None,
@@ -355,48 +379,59 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                                    figurerow=modelidx, flipplot=flipplot)
                     plt.show(block=False)
             else:
+                # Parse default overrides from model spec
+                paramflags = {'inherit': []}
+                for flag in ['fixed', 'init']:
+                    paramflags[flag] = {}
+                    values = modelinfo[flag + 'params']
+                    if values:
+                        for flagvalue in values.split(";"):
+                            if flag == "fixed":
+                                paramflags[flag][flagvalue] = None
+                            elif flag == "init":
+                                value = flagvalue.split("=")
+                                # TODO: improve input handling here or just revamp the whole system later
+                                if value[1] == 'inherit':
+                                    paramflags['inherit'].append(value[0])
+                                else:
+                                    valuesplit = [np.float(x) for x in value[1].split(',')]
+                                    paramflags[flag][value[0]] = valuesplit
+                # Initialize model from estimate of moments (size/ellipticity) or from another fit
                 inittype = modelinfo["inittype"]
-                if inittype != 'moments':
-                    initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], fitsengine)
                 if inittype == "moments":
                     print('Initializing from moments')
                     for param in model.getparameters(fixed=False):
                         if param.name in initfrommoments[band]:
                             param.setvalue(initfrommoments[band][param.name], transformed=False)
+                else:
+                    model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], bands,
+                                      fitsengine, paramflags['inherit'])
 
                 # Reset parameter fixed status
                 for param, fixed in zip(model.getparameters(fixed=True), paramsfixeddefault[modeltype]):
-                    param.fixed = fixed
-                # Parse default overrides from model spec
-                paramflags = {}
-                for flag in ["fixedparams", "initparams"]:
-                    paramflags[flag] = {}
-                    values = modelinfo[flag]
-                    if values:
-                        for flagvalue in values.split(";"):
-                            if flag == "fixedparams":
-                                paramflags[flag][flagvalue] = None
-                            elif flag == "initparams":
-                                value = flagvalue.split("=")
-                                # TODO: sort this out
-                                valuesplit = [np.float(x) for x in value[1].split(',')]
-                                paramflags[flag][value[0]] = valuesplit
+                    if param.name not in paramflags['inherit']:
+                        param.fixed = fixed
                 # For printing parameter values when plotting
                 modelnameappendparams = []
                 # Now actually apply the overrides and the hardcoded maxima
                 timesmatched = {}
                 for param in model.getparameters(fixed=True):
-                    if param.name in paramflags["fixedparams"]:
+                    paramname = param.name if not isinstance(param, mpfobj.FluxParameter) else \
+                        'flux' + 'ratio' if param.isfluxratio else ''
+                    if paramname in paramflags["fixed"]:
                         param.fixed = True
-                    if param.name in paramflags["initparams"]:
-                        if param.name not in timesmatched:
-                            timesmatched[param.name] = 0
-                        param.setvalue(paramflags["initparams"][param.name][timesmatched[param.name]],
+                    if paramname in paramflags["init"]:
+                        if paramname not in timesmatched:
+                            timesmatched[paramname] = 0
+                        # If there's only one input value, assume it applies to all instances of this param
+                        idxparaminit = (0 if len(paramflags["init"][paramname]) == 1 else
+                                        timesmatched[paramname])
+                        param.setvalue(paramflags["init"][paramname][idxparaminit],
                                        transformed=False)
-                        timesmatched[param.name] += 1
+                        timesmatched[paramname] += 1
                     isfluxrat = isfluxratio(param)
                     if plot and not param.fixed:
-                        if param.name == "nser":
+                        if paramname == "nser":
                             modelnameappendparams += [("n={:.2f}", param)]
                         elif isfluxrat:
                             modelnameappendparams += [("f={:.2f}", param)]
@@ -404,18 +439,18 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                     # This way even methods that don't respect bounds will have to until the transformed
                     # value reaches +/-inf, at least
                     valuesmaxband = valuesmax[band]
-                    if param.name in valuesmaxband and not isfluxrat:
+                    if paramname in valuesmaxband and not isfluxrat:
                         # Most scipy algos ignore limits, so we need to restrict the range manually
                         if modellib == 'scipy':
                             factor = 1/fluxes[band] if param.name == 'flux' else 1
-                            value = np.min([param.getvalue(transformed=False), valuesmaxband[param.name]])
-                            param.transform = mpfutil.getlogitlimited(0, valuesmaxband[param.name],
+                            value = np.min([param.getvalue(transformed=False), valuesmaxband[paramname]])
+                            param.transform = mpfutil.getlogitlimited(0, valuesmaxband[paramname],
                                                                       factor=factor)
                             param.setvalue(value, transformed=False)
                         else:
                             transform = param.transform.transform
                             param.limits = mpfobj.Limits(
-                                lower=transform(0), upper=transform(valuesmaxband[param.name]),
+                                lower=transform(0), upper=transform(valuesmaxband[paramname]),
                                 transformed=True)
                     # Reset non-finite free param values
                     # This occurs e.g. at the limits of a logit transformed param
@@ -480,6 +515,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
         plt.show(block=False)
 
     return fitsbyengine, models
+
 
 # Take a source (HST) image, convolve with a target (HSC) PSF, shift, rotate, and scale in amplitude until
 # they sort of match.

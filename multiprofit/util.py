@@ -174,6 +174,48 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
     return param
 
 
+# TODO: Should work multi-band as well
+def getcomponents(profile, bands, fluxfracs, values={}, istransformedvalues=False):
+    fluxfracs = np.array(fluxfracs)
+    sumfluxfracs = np.sum(fluxfracs)
+    if any(np.logical_not(fluxfracs > 0)) or not sumfluxfracs < 1:
+        raise RuntimeError('fluxfracs={} has elements not > 0 or sum {} < 1'.format(fluxfracs, sumfluxfracs))
+    if len(fluxfracs) == 0:
+        fluxfracs = np.ones(1)
+    else:
+        fluxfracs /= np.concatenate([np.array([1.0]), 1-np.cumsum(fluxfracs[:-1])])
+        fluxfracs = np.append(fluxfracs, 1)
+    components = []
+    isgaussian = profile == "gaussian"
+    ismultigaussiansersic = profile == "multigaussiansersic"
+    issoftened = profile == "lux" or profile == "luv"
+    if isgaussian or ismultigaussiansersic:
+        profile = "sersic"
+
+    ncomps = len(fluxfracs)
+    for compi, fluxfrac in enumerate(fluxfracs):
+        islast = compi == (ncomps - 1)
+        paramfluxescomp = [
+            proobj.FluxParameter(
+                band, "flux", special.logit(fluxfrac), None, limits=limitsref["none"],
+                transform=transformsref["logit"], fixed=islast, isfluxratio=True)
+            for band in bands
+        ]
+        params = [getparamdefault(param, valueslice[compi], profile,
+                                  fixed=param == "slope" and isgaussian,
+                                  isvaluetransformed=istransformedvalues,
+                                  ismultigauss=ismultigaussiansersic)
+                  for param, valueslice in values.items()]
+        if ismultigaussiansersic or issoftened:
+            components.append(proobj.MultiGaussianApproximationProfile(
+                paramfluxescomp, profile=profile, parameters=params))
+        else:
+            components.append(proobj.EllipticalProfile(
+                paramfluxescomp, profile=profile, parameters=params))
+
+    return components
+
+
 def getmodel(
     fluxesbyband, modelstr, imagesize, sizes=None, axrats=None, angs=None, slopes=None, fluxfracs=None,
     offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False
@@ -188,7 +230,6 @@ def getmodel(
         ncompsprof = np.int(ncompsprof)
         profiles[profile] = ncompsprof
         ncomps += ncompsprof
-
     try:
         noneall = np.repeat(None, ncomps)
         sizes = np.array(sizes) if sizes is not None else noneall
@@ -225,48 +266,25 @@ def getmodel(
     components = []
 
     if fluxfracs is None:
-        fluxfracs = 1.0 / np.arange(ncomps, 0, -1)
+        fluxfracs = 1.0/ncomps + np.zeros(ncomps)
 
     compnum = 0
     for profile, nprofiles in profiles.items():
         comprange = range(compnum, compnum + nprofiles)
-        isgaussian = profile == "gaussian"
-        ismultigaussiansersic = profile == "multigaussiansersic"
-        issoftened = profile == "lux" or profile == "luv"
-        if isgaussian:
-            profile = "sersic"
+        if profile == "gaussian":
             for compi in comprange:
-                sizes[compi] /= 2.
-        if ismultigaussiansersic:
-            profile = "sersic"
+                if sizes[compi] is not None:
+                    sizes[compi] /= 2.
         values = {
-            "size": sizes,
-            "axrat": axrats,
-            "ang": angs,
+            "size": sizes[comprange],
+            "axrat": axrats[comprange],
+            "ang": angs[comprange],
         }
-        if not issoftened:
-            values["slope"] = slopes
+        if not profile == "lux" or profile == "luv":
+            values["slope"] = slopes[comprange]
 
-        for compi in comprange:
-            islast = compi == (ncomps - 1)
-            paramfluxescomp = [
-                proobj.FluxParameter(
-                    band, "flux", special.logit(fluxfracs[compi]), None, limits=limitsref["none"],
-                    transform=transformsref["logit"], fixed=islast, isfluxratio=True)
-                for band in bands
-            ]
-            params = [getparamdefault(param, valueslice[compi], profile,
-                                      fixed=param == "slope" and isgaussian,
-                                      isvaluetransformed=istransformedvalues,
-                                      ismultigauss=ismultigaussiansersic)
-                      for param, valueslice in values.items()]
-            if ismultigaussiansersic or issoftened:
-                components.append(proobj.MultiGaussianApproximationProfile(
-                    paramfluxescomp, profile=profile, parameters=params))
-            else:
-                components.append(proobj.EllipticalProfile(
-                    paramfluxescomp, profile=profile, parameters=params))
-
+        components += getcomponents(profile, bands, [fluxfracs[i] for i in comprange][:-1], values,
+                                    istransformedvalues)
         compnum += nprofiles
 
     paramfluxes = [proobj.FluxParameter(
@@ -358,3 +376,33 @@ def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None,
     exposure.psf = psf
     exposure.mask = mask
     return model
+
+
+# TODO: Figure out multi-band operation here
+def getmultigaussians(profiles, paramsinherit=None):
+    band = list(profiles[0].keys())[0]
+    params = ['mag', 're', 'axrat', 'ang', 'nser']
+    values = {
+        'size' if name == 're' else 'slope' if name == 'nser' else name:
+            np.array([profile[band][name] for profile in profiles])
+        for name in params
+    }
+
+    fluxfracs = 10**(-0.4*values['mag'])
+    fluxfracs /= np.sum(fluxfracs)
+    fluxfracs = fluxfracs[:-1]
+
+    del values['mag']
+
+    components = getcomponents('gaussian', [band], fluxfracs=fluxfracs, values=values)
+    if paramsinherit is not None and len(components) > 1:
+        paramvaluesinherit = {param.name: param.value for param in components[0].getparameters() if
+                              param.name in paramsinherit}
+        for comp in components[1:]:
+            for param in comp.getparameters():
+                if param.name in paramsinherit:
+                    # This param will map onto the first component's param
+                    param.fixed = True
+                    param.value = paramvaluesinherit[param.name]
+
+    return components
