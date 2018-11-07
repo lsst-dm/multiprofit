@@ -368,6 +368,9 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                             modeldescs['r'].append(param)
                         elif isfluxratio(param) and param.getvalue(transformed=False) < 1:
                             modeldescs['f'].append(param)
+                    for key in ['n', 'r', 'f']:
+                        if len(modeldescs[key]) > 3:
+                            del modeldescs[key]
                     modeldescs = [paramname + '=' + ','.join(
                         [formats[paramname] .format(param.getvalue(transformed=False)) for param in params])
                         for paramname, params in modeldescs.items() if params]
