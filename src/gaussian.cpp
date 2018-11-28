@@ -366,6 +366,7 @@ Matrix make_gaussian_pixel(
     return mat;
 }
 
+// TODO: Template this
 Matrix make_gaussian_mix_8_pixel(
     const double XCEN, const double YCEN,
     const double L1, const double L2, const double L3, const double L4,

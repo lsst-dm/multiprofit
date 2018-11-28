@@ -29,6 +29,11 @@ typedef Eigen::MatrixXd Matrix;
 
 namespace multiprofit {
 
+/*
+    Numerically integrate a 2D Gaussian centered on (XCEN, YCEN) with magnitude MAG, half-light radius RE,
+    position angle ANG (annoying GALFIT convention of up=0), axis ratio AXRAT, over a grid of defined by the
+    corners (XMIN, YMIN) and (XMAX, YMAX) with XDIM x YDIM pixels, to a relative tolerance ACC.
+*/
 Matrix make_gaussian(
     const double XCEN, const double YCEN, const double MAG, const double RE,
     const double ANG, const double AXRAT,
@@ -36,12 +41,22 @@ Matrix make_gaussian(
     const unsigned int XDIM, const unsigned int YDIM,
     const double ACC);
 
+/*
+    Efficiently evaluate a 2D Gaussian centered on (XCEN, YCEN) with total flux L, half-light radius R,
+    position angle ANG (annoying GALFIT convention of up=0), axis ratio AXRAT, at the centers of pixels on a
+    grid defined by the corners (XMIN, YMIN) and (XMAX, YMAX) with XDIM x YDIM pixels.
+*/
 Matrix make_gaussian_pixel(
     const double XCEN, const double YCEN, const double L, const double R,
     const double ANG, const double AXRAT,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM);
 
+/*
+    As make_gaussian_pixel but for eight different Gaussians.
+
+    TODO: Template this
+*/
 Matrix make_gaussian_mix_8_pixel(
     const double XCEN, const double YCEN,
     const double L1, const double L2, const double L3, const double L4,
