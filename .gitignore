@@ -1,5 +1,7 @@
 .idea/
+__pycache__/
 build/
 dist/
 multiprofit.egg-info/
+multiprofit/__pycache__/
 venv/
