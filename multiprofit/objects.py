@@ -3223,6 +3223,9 @@ class Parameter:
         elif not transformed and self.transformed:
             value = self.transform.transform(value)
         self.value = value
+        # TODO: Error checking, etc. There are probably better ways to do this
+        for param in self.inheritors:
+            param.value = self.value
 
     def __init__(self, name, value, unit="", limits=None, transform=Transform(), transformed=True, prior=None,
                  fixed=False):
@@ -3242,6 +3245,8 @@ class Parameter:
         self.transform = transform
         self.transformed = transformed
         self.prior = prior
+        # List of parameters that should inherit values from this one
+        self.inheritors = []
 
 
 class FluxParameter(Parameter):

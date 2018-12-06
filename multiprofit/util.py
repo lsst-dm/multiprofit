@@ -396,13 +396,16 @@ def getmultigaussians(profiles, paramsinherit=None):
 
     components = getcomponents('gaussian', [band], fluxfracs=fluxfracs, values=values)
     if paramsinherit is not None and len(components) > 1:
-        paramvaluesinherit = {param.name: param.value for param in components[0].getparameters() if
-                              param.name in paramsinherit}
+        # Inheritee has every right to be a word
+        paramsinheritees = {param.name: param for param in components[0].getparameters() if
+                            param.name in paramsinherit}
+        for param in paramsinheritees.values():
+            param.inheritors = []
         for comp in components[1:]:
             for param in comp.getparameters():
                 if param.name in paramsinherit:
                     # This param will map onto the first component's param
                     param.fixed = True
-                    param.value = paramvaluesinherit[param.name]
+                    paramsinheritees[param.name].inheritors.append(param)
 
     return components
