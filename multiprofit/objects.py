@@ -909,6 +909,8 @@ class ModellerPygmoUDP:
         return self.boundslower, self.boundsupper
 
     def gradient(self, x):
+        # TODO: Fix this; it doesn't actually work now that the import is conditional
+        # Putting an import statement here is probably a terrible idea
         return pg.estimate_gradient(self.fitness, x)
 
     def __init__(self, modeller, boundslower, boundsupper, timing=False):
@@ -3029,7 +3031,7 @@ class MultiGaussianApproximationProfile(Component):
                     nsermin = min(nsers)
                     nsermax = max(nsers)
                     if nser < nsermin or nser > nsermax:
-                        raise RuntimeError("Asked for Multigaussiansersic with n=plt{} not {}<n<{}".format(
+                        raise RuntimeError("Asked for Multigaussiansersic with n={} not {}<n<{}".format(
                             nser, nsermin, nsermax
                         ))
 
