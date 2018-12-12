@@ -240,7 +240,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
                        fitsengine[inittype]['modeltype'] == 'multigaussiansersic:1')
         if ismgtogauss:
             modelnew = model
-            model = models['multigaussiansersic:1']
+            model = models[fitsengine[inittype]['modeltype']]
         for i in range(1+ismgtogauss):
             paramsall = model.getparameters(fixed=True)
             if len(paramvalsinit) != len(paramsall):
@@ -265,7 +265,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
 
 
 def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=None, modellibopts=None,
-              plot=False, name=None, models=None, fitsbyengine=None, redoall=True,
+              plot=False, name=None, models=None, fitsbyengine=None, redo=True,
               ):
     """
 
@@ -314,12 +314,12 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
     psfs = psfs[band]
     mask = masks[band] if band in masks else None
     sigmainverse = sigmainverses[band]
-    models = {} if (models is None) or redoall else models
+    models = {} if (models is None) else models
     paramsfixeddefault = {}
-    fitsbyengine = {} if ((models is None) or (fitsbyengine is None) or redoall) else fitsbyengine
+    fitsbyengine = {} if ((models is None) or (fitsbyengine is None)) else fitsbyengine
     usemodellibdefault = modellibopts is None
     for engine, engineopts in engines.items():
-        if (engine not in fitsbyengine) or redoall:
+        if engine not in fitsbyengine:
             fitsbyengine[engine] = {}
         fitsengine = fitsbyengine[engine]
         if plot:
@@ -353,7 +353,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                 modelinfo["psfpixel"]) else "")
             mpfutil.setexposure(model, band, image=img.array, sigmainverse=sigmainverse,
                                 psf=psfs[psfname]["object"], mask=mask)
-            if not redoall and modelname in fitsbyengine[engine] and \
+            if not redo and modelname in fitsbyengine[engine] and \
                     'fits' in fitsbyengine[engine][modelname]:
                 if plot:
                     valuesbest = fitsengine[modelname]['fits'][-1]['paramsbestalltransformed']
@@ -590,7 +590,7 @@ def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, v
 
 
 # PSFmodels: array of tuples (modelname, ispixelated)
-def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=True,
+def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=True, redopsfs=False,
                     modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
                     resetimages=False, resetfitlogs=False):
     if results is None:
@@ -776,7 +776,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
         # Having worked out what the image, psf and variance map are, fit PSFs and images
         if srcname not in results:
             results[srcname] = {}
-        psfs = {}
+        psfs = results[srcname]['psfs'] if 'psfs' in results[srcname] else {}
         psfmodels = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
         engineopts = {
             "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
@@ -792,7 +792,8 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                 figure, axes = plt.subplots(nrows=min([5, npsfs]), ncols=max([5, npsfs]))
                 psfrow = 0
         for band, psf in psfsband.items():
-            psfs[band] = {}
+            if band not in psfs:
+                psfs[band] = {}
             for psfmodelname, ispsfpixelated in psfmodels:
                 psfname = psfmodelname + ("_pixelated" if ispsfpixelated else "")
                 if psfmodelname == "empirical":
@@ -801,7 +802,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                 else:
                     engineopts["drawmethod"] = "no_pixel" if ispsfpixelated else None
                     # TODO: Allow plotting of PSF fit after the fact
-                    if redo or 'psfs' not in results[srcname] or band not in results[srcname]['psfs'] \
+                    if redopsfs or 'psfs' not in results[srcname] or band not in results[srcname]['psfs'] \
                             or psfname not in results[srcname]['psfs'][band]:
                         print('Fitting PSF model {}'.format(psfmodelname))
                         psfmodel = fitpsf(psf.image.array, psfmodelname, {"galsim": engineopts}, band=band,
@@ -815,12 +816,12 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                         psfmodel = results[srcname]['psfs'][band][psfname]['model']
                         psfexposure = results[srcname]['psfs'][band][psfname]['object']
                 psfs[band][psfname] = {"model": psfmodel, "object": psfexposure}
-        fitsbyengine = None if redo or 'fits' not in results[srcname] else results[srcname]['fits']
-        models = None if redo or 'models' not in results[srcname] else results[srcname]['models']
+        fitsbyengine = None if 'fits' not in results[srcname] else results[srcname]['fits']
+        models = None if 'models' not in results[srcname] else results[srcname]['models']
         fits, models = fitgalaxy(
             imgs=imgs, psfs=psfs, sigmainverses=sigmainverses, masks=masks, bands=bands,
             modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
-            fitsbyengine=fitsbyengine, redoall=redo)
+            fitsbyengine=fitsbyengine, redo=redo)
         if resetimages:
             for psfmodelname, psf in psfs.items():
                 if "model" in psf:
@@ -867,6 +868,7 @@ if __name__ == '__main__':
         'plot':        {'type': mpfutil.str2bool, 'default': False, 'help': 'Toggle plotting of final fits'},
 #        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
         'redo':        {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
+        'redopsfs':    {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
     }
 
     for key, value in flags.items():
@@ -937,9 +939,9 @@ if __name__ == '__main__':
             print("Fitting COSMOS galaxy with ID: {}".format(idnum))
             try:
                 fits = fitcosmosgalaxy(idnum, srcs=srcs, modelspecs=modelspecs, plot=args.plot,
-                                       redo=args.redo, resetimages=True, resetfitlogs=True,
-                                       hst2hscmodel=args.hst2hscmodel, hscbands=args.hscbands,
-                                       modellib=args.modellib,
+                                       redo=args.redo, redopsfs=args.redopsfs, resetimages=True,
+                                       resetfitlogs=True, hst2hscmodel=args.hst2hscmodel,
+                                       hscbands=args.hscbands, modellib=args.modellib,
                                        results=data[idnum] if idnum in data else None)
                 data[idnum] = fits
             except Exception as e:
