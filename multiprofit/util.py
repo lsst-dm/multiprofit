@@ -187,10 +187,14 @@ def getcomponents(profile, bands, fluxfracs, values={}, istransformedvalues=Fals
         fluxfracs = np.append(fluxfracs, 1)
     components = []
     isgaussian = profile == "gaussian"
-    ismultigaussiansersic = profile == "multigaussiansersic"
+    ismultigaussiansersic = profile.startswith('mgsersic')
+    if ismultigaussiansersic:
+        order = np.int(profile.split('mgsersic')[1])
     issoftened = profile == "lux" or profile == "luv"
     if isgaussian or ismultigaussiansersic:
         profile = "sersic"
+        if 'nser' in values:
+            values['nser'] = np.zeros_like(values['nser'])
 
     ncomps = len(fluxfracs)
     for compi, fluxfrac in enumerate(fluxfracs):
@@ -208,7 +212,7 @@ def getcomponents(profile, bands, fluxfracs, values={}, istransformedvalues=Fals
                   for param, valueslice in values.items()]
         if ismultigaussiansersic or issoftened:
             components.append(proobj.MultiGaussianApproximationProfile(
-                paramfluxescomp, profile=profile, parameters=params))
+                paramfluxescomp, profile=profile, parameters=params, order=order))
         else:
             components.append(proobj.EllipticalProfile(
                 paramfluxescomp, profile=profile, parameters=params))
@@ -379,7 +383,8 @@ def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None,
 
 
 # TODO: Figure out multi-band operation here
-def getmultigaussians(profiles, paramsinherit=None):
+# ncomponents is an array of ints specifying the number of Gaussian components in each physical component
+def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
     band = list(profiles[0].keys())[0]
     params = ['mag', 're', 'axrat', 'ang', 'nser']
     values = {
@@ -394,18 +399,30 @@ def getmultigaussians(profiles, paramsinherit=None):
 
     del values['mag']
 
-    components = getcomponents('gaussian', [band], fluxfracs=fluxfracs, values=values)
-    if paramsinherit is not None and len(components) > 1:
-        # Inheritee has every right to be a word
-        paramsinheritees = {param.name: param for param in components[0].getparameters() if
-                            param.name in paramsinherit}
-        for param in paramsinheritees.values():
-            param.inheritors = []
-        for comp in components[1:]:
-            for param in comp.getparameters():
-                if param.name in paramsinherit:
-                    # This param will map onto the first component's param
-                    param.fixed = True
-                    paramsinheritees[param.name].inheritors.append(param)
+    # These are the Gaussian components
+    componentsgauss = getcomponents('gaussian', [band], fluxfracs=fluxfracs, values=values)
+    ncomponentsgauss = len(componentsgauss)
+    if paramsinherit is not None and ncomponentsgauss > 1:
+        if ncomponents is None:
+            ncomponents = np.array([ncomponentsgauss])
+        if np.sum(ncomponents) != ncomponentsgauss:
+            raise ValueError('Number of Gaussian components={} != total number of Gaussian sub-components '
+                             'in physical components={}; list={}'.format(
+                ncomponentsgauss, np.sum(ncomponents), ncomponents))
 
-    return components
+        # Inheritee has every right to be a word
+        componentinit = 0
+        for ncompstoadd in ncomponents:
+            paramsinheritees = {param.name: param for param in componentsgauss[componentinit].getparameters()
+                                if param.name in paramsinherit}
+            for param in paramsinheritees.values():
+                param.inheritors = []
+            for comp in componentsgauss[componentinit+1:componentinit+ncompstoadd]:
+                for param in comp.getparameters():
+                    if param.name in paramsinherit:
+                        # This param will map onto the first component's param
+                        param.fixed = True
+                        paramsinheritees[param.name].inheritors.append(param)
+            componentinit += ncompstoadd
+
+    return componentsgauss

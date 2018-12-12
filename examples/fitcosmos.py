@@ -214,6 +214,9 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
     else:
         inittype = inittype.split(';')
         if len(inittype) > 1:
+            # Example:
+            # mg8devexppx,mgsersic8:2,nser,"nser=4,1",mg8dev2px;mg8exppx,gaussian:3,T
+            # ... means init two mgsersic8 profiles from some combination of the m8dev and mg8exp fits
             modelfits = [{
                 'paramvals': fitsengine[initname]['fits'][-1]['paramsbestall'],
                 'paramtree': models[fitsengine[initname]['modeltype']].getparameters(
@@ -236,9 +239,16 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
         print('Initializing from best model=' + inittype)
         paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
         # TODO: Find a more elegant method to do this
-        ismgtogauss = (modeltype == 'gaussian:8' and
-                       fitsengine[inittype]['modeltype'] == 'multigaussiansersic:1')
+        inittypesplit = fitsengine[inittype]['modeltype'].split(':')
+        ismgtogauss = (modeltype in ['gaussian:' + str(order) for order in
+                       mpfobj.MultiGaussianApproximationProfile.weights['sersic']] and
+                       len(inittypesplit) == 2 and inittypesplit[0] in
+                       ['mgsersic' + str(order) for order in
+                        mpfobj.MultiGaussianApproximationProfile.weights['sersic']] and
+                       inittypesplit[1].isdecimal()
+                       )
         if ismgtogauss:
+            ncomponents = np.repeat(np.int(inittypesplit[0].split('mgsersic')[1]), inittypesplit[1])
             modelnew = model
             model = models[fitsengine[inittype]['modeltype']]
         for i in range(1+ismgtogauss):
@@ -247,10 +257,19 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
                 raise RuntimeError('len(paramvalsinit)={} != len(params)={}'.format(
                     len(paramvalsinit), len(paramsall)))
             for param, value in zip(paramsall, paramvalsinit):
+                # The logic here is that we can't start off an MG Sersic at n=0.5 since it's just one Gauss.
+                # It's possible that a Gaussian mixture is better than an n<0.5 fit, so start it close to 0.55
+                # Note that getcomponents (called by getmultigaussians below) will ignore input values of nser
+                # This prevents having a multigaussian model with components having n>0.5 (bad!)
+                if ismgtogauss and param.name == 'nser' and value <= 0.55:
+                    value = 0.55
                 param.setvalue(value, transformed=False)
+            # Set the ellipse parameters fixed the first time through
+            # The second time through, uh, ...? TODO Remember what happens
             if ismgtogauss and i == 0:
                 componentsnew = mpfutil.getmultigaussians(
-                    model.getprofiles(bands, engine='libprofit'), paramsinherit=paramsinherit)
+                    model.getprofiles(bands, engine='libprofit'), paramsinherit=paramsinherit,
+                    ncomponents=ncomponents)
                 componentsold = model.sources[0].modelphotometric.components
                 for modeli in [model, modelnew]:
                     modeli.sources[0].modelphotometric.components = []
