@@ -482,7 +482,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                     dosecond = (len(model.sources[0].modelphotometric.components) > 1) or not usemodellibdefault
                     if usemodellibdefault:
                         modellibopts = {
-                            "algo": ("cobyla" if modellib == "pygmo" else "COBYLA") if dosecond else
+                            "algo": ("lbfgs" if modellib == "pygmo" else "L-BFGS-B") if dosecond else
                             ("neldermead" if modellib == "pygmo" else "Nelder-Mead")
                         }
                         if modellib == "scipy":
