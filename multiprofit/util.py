@@ -363,7 +363,7 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
     return fit, modeller
 
 
-def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None, factorsigma=1):
+def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None, meta=None, factorsigma=1):
     if band not in model.data.exposures:
         model.data.exposures[band] = [proobj.Exposure(band=band, image=None)]
     exposure = model.data.exposures[band][0]
@@ -379,6 +379,7 @@ def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None,
             exposure.sigmainverse = sigmainverse
     exposure.psf = psf
     exposure.mask = mask
+    exposure.meta = {} if meta is None else meta
     return model
 
 

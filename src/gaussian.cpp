@@ -24,9 +24,10 @@
 #ifndef __MULTIPROFIT_GAUSSIAN_H_
 #include "gaussian.h"
 
-#include <iostream>
+//#include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace multiprofit {
@@ -289,12 +290,12 @@ Matrix make_gaussian(
 
     double bottomval=0;
     std::vector<double> leftvals(YDIM);
-    int i=0,j=0;
+
     x = XMIN-XCEN; xhi = x + XBIN;
-    for(i = 0; i < XDIM; i++)
+    for(unsigned int i = 0; i < XDIM; i++)
     {
         y = YMIN - YCEN; yhi = y + YBIN;
-        for(j = 0; j < YDIM; j++)
+        for(unsigned int j = 0; j < YDIM; j++)
         {
             /*
             if(i >= 13 && i <= 14 && j == 50)
@@ -326,7 +327,195 @@ Matrix make_gaussian(
     return mat;
 }
 
+inline std::pair<std::vector<double>, std::vector<double>> gaussian_pixel_x_xx(
+    const double XCEN, const double XMIN, const double XBIN, const unsigned int XDIM,
+    const double XXNORMINV, const double XYNORMINV)
+{
+    const double XINIT = XMIN - XCEN + XBIN/2.;
+    std::vector<double> x(XDIM);
+    std::vector<double> xx(XDIM);
+    for(unsigned int i = 0; i < XDIM; i++)
+    {
+        x[i] = XINIT + i*XBIN;
+        xx[i] = x[i]*x[i]*XXNORMINV;
+        x[i] *= XYNORMINV;
+    }
+    return {x, xx};
+}
+
+inline void gaussian_pixel(Matrix & mat, const double NORM, const double XCEN, const double YCEN,
+    const double XMIN, const double YMIN, const double XBIN, const double YBIN,
+    const double XXNORMINV, const double YYNORMINV, const double XYNORMINV)
+{
+    // don't ask me why these are reversed
+    const unsigned int XDIM = mat.cols();
+    const unsigned int YDIM = mat.rows();
+
+    const auto YVALS = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, YYNORMINV, XYNORMINV);
+    const std::vector<double> & Y = YVALS.first;
+    const std::vector<double> & YY = YVALS.second;
+
+    double x = XMIN-XCEN+XBIN/2.;
+    // TODO: Consider a version with cached xy, although it doubles memory usage
+    for(unsigned int i = 0; i < XDIM; i++)
+    {
+        const double XSQ = x*x*XXNORMINV;
+        for(unsigned int j = 0; j < YDIM; j++)
+        {
+           // mat(j,i) = ... is slower, but perhaps allows for images with XDIM*YDIM > INT_MAX ?
+           // if(i == 0 && j == 0) std::cout << NORM << ";" <<  XSQ << "," << YY[j] << "," << x*Y[j] <<
+           // std::endl;
+           mat(j + i*YDIM) = NORM*exp(-(XSQ + YY[j] - x*Y[j]));
+        }
+        x += XBIN;
+    }
+}
+
+/*
+This is some largely unnecessary algebra to derive conversions between the ellipse parameterization and the
+covariance matrix parameterization of a bivariate Gaussian.
+
+See e.g. http://mathworld.wolfram.com/BivariateNormalDistribution.html
+... and https://www.unige.ch/sciences/astro/files/5413/8971/4090/2_Segransan_StatClassUnige.pdf
+
+tan 2th = 2*rho*sigx*sigy/(sigx^2 - sigy^2)
+
+sigma_maj^2 = (cos2t*sigx^2 - sin2t*sigy^2)/(cos2t-sin2t)
+sigma_min^2 = (cos2t*sigy^2 - sin2t*sigx^2)/(cos2t-sin2t)
+
+(sigma_maj^2*(cos2t-sin2t) + sin2t*sigy^2)/cos2t = sigx^2
+-(sigma_min^2*(cos2t-sin2t) - cos2t*sigy^2)/sin2t = sigx^2
+
+(sigma_maj^2*(cos2t-sin2t) + sin2t*sigy^2)/cos2t = -(sigma_min^2(cos2t-sin2t) - cos2t*sigy^2)/sin2t
+sin2t*(sigma_maj^2*(cos2t-sin2t) + sin2t*sigy^2) + cos2t*(sigma_min^2*(cos2t-sin2t) - cos2t*sigy^2) = 0
+cos4t*sigy^2 - sin^4th*sigy^2 = sin2t*(sigma_maj^2*(cos2t-sin2t)) + cos2t*(sigma_min^2*(cos2t-sin2t))
+
+cos^4x - sin^4x = (cos^2 + sin^2)*(cos^2-sin^2) = cos^2 - sin^2
+
+sigy^2 = (sin2t*(sigma_maj^2*(cos2t-sin2t)) + cos2t*(sigma_min^2*(cos2t-sin2t)))/(cos2t - sin2t)
+       = (sin2t*sigma_maj^2 + cos2t*sigma_min^2)
+
+sigma_maj^2*(cos2t-sin2t) + sin2t*sigy^2 = cos2t*sigx^2
+sigx^2 = (sigma_maj^2*(cos2t-sin2t) + sin2t*sigy^2)/cos2t
+       = (sigma_maj^2*(cos2t-sin2t) + sin2t*(sin2t*sigma_maj^2 + cos2t*sigma_min^2))/cos2t
+       = (sigma_maj^2*(cos2t-sin2t+sin4t) + sin2tcos2t*sigma_min^2)/cos2t
+       = (sigma_maj^2*cos4t + sin2t*cos2t*sigma_min^2)/cos2t
+       = (sigma_maj^2*cos2t + sigma_min^2*sin2t)
+
+sigx^2 - sigy^2 = sigma_maj^2*cos2t + sigma_min^2*sin2t - sigma_maj^2*sin2t - sigma_min^2*cos2t
+                = (sigma_maj^2 - sigma_min^2*)*(cos2t-sin2t)
+                = (sigma_maj^2 - sigma_min^2*)*(1-tan2t)*cos2t
+
+rho = tan2th/2/(sigx*sigy)*(sigx^2 - sigy^2)
+    = tanth/(1-tan2t)/(sigx*sigy)*(sigx^2 - sigy^2)
+    = tanth/(1-tan2t)/(sigx*sigy)*(sigma_maj^2 - sigma_min^2*)*(1-tan2t)*cos2t
+    = tanth/(sigx*sigy)*(sigma_maj^2 - sigma_min^2)*cos2t
+    = sint*cost/(sigx*sigy)*(sigma_maj^2 - sigma_min^2)
+*/
+
+// Conversion constant of ln(2); gaussian FWHM = 2*R_eff
+inline double reff_to_sigma_gauss(double reff)
+{
+    return reff/1.1774100225154746635070068805362097918987;
+}
+inline double degrees_to_radians(double degrees)
+{
+    return degrees*M_PI/180.;
+}
+
+struct Covar
+{
+    double sigx;
+    double sigy;
+    double rho;
+};
+
+Covar ellipse_to_covar(const double SIGMAMAJ, const double AXRAT, const double ANGINRAD)
+{
+    const double SIGMAMIN = SIGMAMAJ*AXRAT;
+    // TODO: Check optimal order for precision
+    const double SIGMAMAJSQ = SIGMAMAJ * SIGMAMAJ;
+    const double SIGMAMINSQ = SIGMAMIN * SIGMAMIN;
+
+    const double SINT = sin(ANGINRAD);
+    const double COST = cos(ANGINRAD);
+    // TODO: Remember if this is actually preferable to sin/cos
+    const double SINSQT = std::pow(SINT, 2.0);
+    const double COSSQT = std::pow(COST, 2.0);
+    const bool ISCIRCLE = AXRAT == 1;
+    const double SIGX = ISCIRCLE ? SIGMAMAJ : sqrt(COSSQT*SIGMAMAJSQ + SINSQT*SIGMAMINSQ);
+    const double SIGY = ISCIRCLE ? SIGMAMAJ : sqrt(SINSQT*SIGMAMAJSQ + COSSQT*SIGMAMINSQ);
+
+    Covar rval = {
+        .sigx = SIGX,
+        .sigy = SIGY,
+        .rho = ISCIRCLE ? 0 : SINT*COST/SIGX/SIGY*(SIGMAMAJSQ-SIGMAMINSQ)
+    };
+    return rval;
+}
+
+// Various multiplicative terms that appread in a Gaussian PDF
+struct TermsGaussPDF
+{
+    double norm;
+    double xx;
+    double yy;
+    double xy;
+};
+
+TermsGaussPDF terms_from_covar(const double NORM, const Covar & COV)
+{
+    const double EXPNORM = 1./(2*(1-COV.rho*COV.rho));
+    TermsGaussPDF rval = {
+        .norm = NORM/(2.*M_PI*COV.sigx*COV.sigy)*sqrt(2.*EXPNORM),
+        .xx = EXPNORM/COV.sigx/COV.sigx,
+        .yy = EXPNORM/COV.sigy/COV.sigy,
+        .xy = 2.*COV.rho*EXPNORM/COV.sigx/COV.sigy
+    };
+    return rval;
+}
+
+// Evaluate a Gaussian on a grid given the three elements of the symmetric covariance matrix
+// Actually, rho is scaled by sigx and sigy (i.e. the covariance is RHO*SIGX*SIGY)
+Matrix make_gaussian_pixel_covar(const double XCEN, const double YCEN, const double L,
+    const double SIGX, const double SIGY, const double RHO,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const unsigned int XDIM, const unsigned int YDIM)
+{
+    const double XBIN=(XMAX-XMIN)/XDIM;
+    const double YBIN=(YMAX-YMIN)/YDIM;
+    const Covar COV {.sigx = SIGX, .sigy=SIGY, .rho=RHO};
+    const TermsGaussPDF TERMS = terms_from_covar(L*XBIN*YBIN, COV);
+
+    Matrix mat(YDIM, XDIM);
+    gaussian_pixel(mat, TERMS.norm, XCEN, YCEN, XMIN, YMIN, XBIN, YBIN, TERMS.xx, TERMS.yy, TERMS.xy);
+
+    return mat;
+}
+
+// Evaluate a Gaussian on a grid given R_e, the axis ratio and position angle
 Matrix make_gaussian_pixel(
+    const double XCEN, const double YCEN, const double L, const double R,
+    const double ANG, const double AXRAT,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const unsigned int XDIM, const unsigned int YDIM)
+{
+    const Covar COV = ellipse_to_covar(reff_to_sigma_gauss(R), AXRAT, degrees_to_radians(ANG));
+
+// Verify transformations
+// TODO: Move this to a test somewhere and fix inverse transforms to work over the whole domain
+/*
+    std::cout << SIGMAMAJ << "," << SIGMAMIN << "," << ANGRAD << std::endl;
+    std::cout << SIGX << "," << SIGY << "," << RHO << std::endl;
+    std::cout << sqrt((COSSQT*SIGXSQ - SINSQT*SIGYSQ)/(COSSQT-SINSQT)) << "," <<
+        sqrt((COSSQT*SIGYSQ - SINSQT*SIGXSQ)/(COSSQT-SINSQT)) << "," <<
+        atan(2*RHO*SIGX*SIGY/(SIGXSQ-SIGYSQ))/2. << std::endl;
+*/
+    return make_gaussian_pixel_covar(XCEN, YCEN, L, COV.sigx, COV.sigy, COV.rho, XMIN, XMAX, YMIN, YMAX,
+        XDIM, YDIM);
+}
+
+Matrix make_gaussian_pixel_sersic(
     const double XCEN, const double YCEN, const double L, const double R,
     const double ANG, const double AXRAT,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
@@ -356,6 +545,8 @@ Matrix make_gaussian_pixel(
         {
            const double DISTONE = (x*INVREX + y*INVREY);
            const double DISTTWO = (x*INVREY - y*INVREX);
+           //if(i == 0 && j==0) std::cout << NORM << ";" <<  DISTONE << "," << DISTTWO << "," << INVAXRATSQ <<
+           //std::endl;
            // mat(j,i) = ... is slower, but perhaps allows for images with XDIM*YDIM > INT_MAX ?
            mat(i*YDIM + j) = NORM*exp(-(DISTONE*DISTONE + DISTTWO*DISTTWO*INVAXRATSQ));
            y += YBIN;
@@ -364,6 +555,73 @@ Matrix make_gaussian_pixel(
     }
 
     return mat;
+}
+
+double loglike_gaussian_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
+    const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX)
+{
+    // TODO: Reconsider this - Eigen is row-major by default; numpy is column-major
+    const unsigned int XDIM = DATA.cols();
+    const unsigned int YDIM = DATA.rows();
+
+    // The case of constant variance per pixel
+    const int IDXVAR = 1 - (VARINVERSE.rows() == 1 && VARINVERSE.cols() == 1);
+    if(IDXVAR == 1 && (XDIM != VARINVERSE.rows() || YDIM != VARINVERSE.cols()))
+    {
+        throw std::runtime_error("Data matrix dimensions [" + std::to_string(XDIM) + ',' +
+            std::to_string(YDIM) + "] don't match inverse variance dimensions [" +
+            std::to_string(VARINVERSE.rows()) + ',' + std::to_string(VARINVERSE.cols()) + ']');
+    }
+    const double XBIN=(XMAX-XMIN)/XDIM;
+    const double YBIN=(YMAX-YMIN)/YDIM;
+
+    const size_t NGAUSSIANS = GAUSSIANS.rows();
+    std::vector<std::vector<double>> ys;
+    std::vector<std::vector<double>> yys;
+    std::vector<double> xs;
+    std::vector<double> normsxx;
+    std::vector<double> norms;
+
+    for(size_t g = 0; g < NGAUSSIANS; ++g)
+    {
+        const double XCEN = GAUSSIANS(g, 0); const double YCEN = GAUSSIANS(g, 1);
+        const double L = GAUSSIANS(g, 2), R = GAUSSIANS(g, 3);
+        const double ANG = GAUSSIANS(g, 4), AXRAT = GAUSSIANS(g, 5);
+        const Covar COV = ellipse_to_covar(reff_to_sigma_gauss(R), AXRAT, degrees_to_radians(ANG));
+        const TermsGaussPDF TERMS = terms_from_covar(L*XBIN*YBIN, COV);
+
+        auto yvals = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, TERMS.yy, TERMS.xy);
+
+        ys.push_back(yvals.first);
+        yys.push_back(yvals.second);
+        xs.push_back(XMIN-XCEN+XBIN/2.);
+        normsxx.push_back(TERMS.xx);
+        norms.push_back(TERMS.norm);
+    }
+
+    std::vector<double> xsqs(NGAUSSIANS);
+    double loglike = 0;
+    // TODO: Consider a version with cached xy, although it doubles memory usage
+    for(unsigned int i = 0; i < XDIM; i++)
+    {
+        for(size_t g = 0; g < NGAUSSIANS; ++g) xsqs[g] = xs[g]*xs[g]*normsxx[g];
+        for(unsigned int j = 0; j < YDIM; j++)
+        {
+            // TODO: Verify whether this solves the row/column-major irritation
+            const unsigned int INDEX = i*YDIM + j;
+            double model = 0;
+            for(size_t g = 0; g < NGAUSSIANS; ++g)
+            {
+                // mat(j,i) = ... is slower, but perhaps allows for images with XDIM*YDIM > INT_MAX ?
+                model += norms[g]*exp(-(xsqs[g] + yys[g][j] - xs[g]*ys[g][j]));
+            }
+            const double DIFF = DATA(INDEX) - model;
+            // TODO: Check what the performance penalty for using IDXVAR is and rewrite if it's worth it
+            loglike += -DIFF*DIFF*VARINVERSE(IDXVAR*INDEX)/2.;
+        }
+        for(size_t g = 0; g < NGAUSSIANS; ++g) xs[g] += XBIN;
+    }
+    return loglike;
 }
 
 // TODO: Template this

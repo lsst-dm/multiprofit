@@ -26,6 +26,7 @@
 
 #include <Eigen/Core>
 typedef Eigen::MatrixXd Matrix;
+typedef Eigen::Matrix<double, Eigen::Dynamic, 6> paramsgauss;
 
 namespace multiprofit {
 
@@ -47,10 +48,35 @@ Matrix make_gaussian(
     grid defined by the corners (XMIN, YMIN) and (XMAX, YMAX) with XDIM x YDIM pixels.
 */
 Matrix make_gaussian_pixel(
-    const double XCEN, const double YCEN, const double L, const double R,
-    const double ANG, const double AXRAT,
+    const double XCEN, const double YCEN, const double L,
+    const double R, const double ANG, const double AXRAT,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM);
+
+/*
+    An alternative implementation of make_gaussian_pixel based on the Sersic PDF. Should be the same +/-
+    machine eps.
+*/
+Matrix make_gaussian_pixel_sersic(
+    const double XCEN, const double YCEN, const double L,
+    const double R, const double ANG, const double AXRAT,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const unsigned int XDIM, const unsigned int YDIM);
+
+/*
+    As make_gaussian_pixel but taking (modified) elements of a covariance matrix - sig_x, sig_y, and rho
+    Where rho is covar[0,1]/sigx/sigy
+*/
+Matrix make_gaussian_pixel_covar(const double XCEN, const double YCEN, const double L,
+    const double SIGX, const double SIGY, const double RHO,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const unsigned int XDIM, const unsigned int YDIM);
+
+/*
+    TODO: Describe
+*/
+double loglike_gaussian_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
+    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX);
 
 /*
     As make_gaussian_pixel but for eight different Gaussians.

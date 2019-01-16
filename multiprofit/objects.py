@@ -231,8 +231,9 @@ class Model:
 
     def evaluate(self, params=None, data=None, bands=None, engine=None, engineopts=None,
                  paramstransformed=True, getlikelihood=True, likelihoodlog=True, keeplikelihood=False,
-                 keepimages=False, keepmodels=False, plot=False, figure=None, axes=None, figurerow=None,
-                 modelname="Model", modeldesc=None, drawimage=True, scale=1, clock=False, flipplot=False):
+                 likelihoodonly=False, keepimages=False, keepmodels=False, plot=False, figure=None,
+                 axes=None, figurerow=None, modelname="Model", modeldesc=None, drawimage=True, scale=1,
+                 clock=False, flipplot=False):
         """
             Get the likelihood and/or model images
         """
@@ -293,29 +294,57 @@ class Model:
         for band in bands:
             # TODO: Check band
             for idxexposure, exposure in enumerate(data.exposures[band]):
-                image, model, timesmodel = self.getexposuremodel(
-                    exposure, engine=engine, engineopts=engineopts, drawimage=drawimage, scale=scale,
-                    clock=clock)
-                if clock:
-                    nameexposure = '_'.join([band, str(idxexposure)])
-                    times['_'.join([nameexposure, 'modeltotal'])] = time.time() - timenow
-                    for timename, timevalue in timesmodel.items():
-                        times['_'.join([nameexposure, timename])] = timevalue
-                    timenow = time.time()
-                if keepimages:
-                    exposure.meta["modelimage"] = np.array(image)
-                if keepmodels:
-                    exposure.meta["model"] = model
+                profiles, metamodel, times = self._getexposuremodelsetup(
+                    exposure, engine=engine, engineopts=engineopts, clock=clock, times=times)
+                if likelihoodonly and metamodel['allgaussian'] and metamodel['usefastgauss']:
+                    profilemat = np.array([np.array([
+                            p['cenx'], p['ceny'], 10**(-0.4*p['mag']), p['re'], p['ang'], p['axrat']
+                        ])
+                        for p in [profile[band] for profile in profiles]])
+                    varinverse = exposure.sigmainverse ** 2
+                    varisscalar = not hasattr(varinverse, 'shape') or varinverse.shape == ()
+                    # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
+                    if 'likeconst' not in exposure.meta:
+                        exposure.meta['likeconst'] = np.sum(np.log(exposure.sigmainverse/np.sqrt(2.*np.pi)))
+                        if varisscalar or np.prod(exposure.meta['likeconst'].shape) == 1:
+                            npix = np.prod(exposure.image.shape)
+                            print('Setting exposure.meta[\'likeconst\']=', exposure.meta['likeconst']*npix)
+                            exposure.meta['likeconst'] *= np.prod(exposure.image.shape)
+                    if varisscalar:
+                        # I think this is the easiest way to reshape it into a 1x1 matrix
+                        varinverse = np.zeros((1, 1)) + varinverse
+                    likelihoodexposure = exposure.meta['likeconst'] + mpf.loglike_gaussian_pixel(
+                        exposure.image, varinverse, profilemat, 0, exposure.image.shape[1],
+                        0, exposure.image.shape[0])
+                    if not likelihoodlog:
+                        likelihoodexposure = 10**likelihoodexposure
+                    chi = None
+                else:
+                    image, model, timesmodel = self.getexposuremodel(
+                        exposure, profiles=profiles, metamodel=metamodel, engine=engine,
+                        engineopts=engineopts, drawimage=drawimage, scale=scale, clock=clock, times=times)
+                    if clock:
+                        nameexposure = '_'.join([band, str(idxexposure)])
+                        times['_'.join([nameexposure, 'modeltotal'])] = time.time() - timenow
+                        for timename, timevalue in timesmodel.items():
+                            times['_'.join([nameexposure, timename])] = timevalue
+                        timenow = time.time()
+                    if keepimages:
+                        exposure.meta["modelimage"] = np.array(image)
+                    if keepmodels:
+                        exposure.meta["model"] = model
+                    if getlikelihood or plot:
+                        if plot:
+                            figaxes = (figure, axes[figurerow])
+                        likelihoodexposure, chi, chiimg, chiclip, imgclip, modelclip = \
+                            self.getexposurelikelihood(
+                                exposure, image, log=likelihoodlog, figaxes=figaxes, modelname=modelname,
+                                modeldesc=modeldesc, istoprow=figurerow is None or figurerow == 0,
+                                isbottomrow=figurerow is None or axes is None or
+                                            (figurerow+1) == axes.shape[0],
+                                flipplot=flipplot
+                            )
                 if getlikelihood or plot:
-                    if plot:
-                        figaxes = (figure, axes[figurerow])
-                    likelihoodexposure, chi, chiimg, chiclip, imgclip, modelclip = \
-                        self.getexposurelikelihood(
-                            exposure, image, log=likelihoodlog, figaxes=figaxes, modelname=modelname,
-                            modeldesc=modeldesc, istoprow=figurerow is None or figurerow == 0,
-                            isbottomrow=figurerow is None or axes is None or (figurerow+1) == axes.shape[0],
-                            flipplot=flipplot
-                        )
                     if clock:
                         times['_'.join([nameexposure, 'like'])] = time.time() - timenow
                         timenow = time.time()
@@ -425,8 +454,8 @@ class Model:
             if hasmask:
                 axes[2].contour(x, y, z)
             # The chi (data-model)/error map clipped at +/- 5 sigma
-            chi *= exposure.sigmainverse
             chiclip = np.copy(chi)
+            chi *= exposure.sigmainverse
             chiclip[chi < -5] = -5
             chiclip[chi > 5] = 5
             if hasmask:
@@ -481,7 +510,7 @@ class Model:
             dof = max(min(dof, float('inf')), 0)
             likelihood = np.sum(spstats.t.logpdf(chi, dof))
         elif likefunc == "normal":
-            likelihood = np.sum(spstats.norm.logpdf(chi))
+            likelihood = np.sum(spstats.norm.logpdf(chi) + np.log(exposure.sigmainverse))
         else:
             raise ValueError("Unknown likelihood function {:s}".format(self.likefunc))
 
@@ -490,13 +519,7 @@ class Model:
 
         return likelihood, chi, chilog, chiclip, imgclips[0], imgclips[1]
 
-
-    def getexposuremodel(self, exposure, engine=None, engineopts=None, drawimage=True, scale=1, clock=False):
-        """
-            Draw model image for one exposure with one PSF
-
-            Returns the image and the engine-dependent model used to draw it
-        """
+    def _getexposuremodelsetup(self, exposure, engine=None, engineopts=None, clock=False, times={}):
         if engine is None:
             engine = self.engine
         if engineopts is None:
@@ -504,10 +527,8 @@ class Model:
         Model._checkengine(engine)
         if engine == "galsim":
             gsparams = getgsparams(engineopts)
-        ny, nx = exposure.image.shape
         band = exposure.band
         if clock:
-            times = {}
             timenow = time.time()
         else:
             times = None
@@ -515,28 +536,27 @@ class Model:
         if clock:
             times['getprofiles'] = time.time() - timenow
             timenow = time.time()
-        if profiles:
-            haspsf = exposure.psf is not None
-            psfispixelated = haspsf and exposure.psf.model is not None and exposure.psf.modelpixelated
-            profilesgaussian = [comp.isgaussian()
-                                for comps in [src.modelphotometric.components for src in self.sources]
-                                for comp in comps]
-            allgaussian = not haspsf or (exposure.psf.model is not None and
-                all([comp.isgaussian() for comp in exposure.psf.model.modelphotometric.components]))
-            anygaussian = allgaussian and any(profilesgaussian)
-            allgaussian = allgaussian and all(profilesgaussian)
-            # Use fast, efficient Gaussian evaluators only if everything's a Gaussian mixture model
-            usefastgauss = allgaussian and (
-                    psfispixelated or
-                    (engine == 'galsim' and self.engineopts is not None and
-                     "drawmethod" in self.engineopts and self.engineopts["drawmethod"] == 'no_pixel') or
-                    (engine == 'libprofit' and self.engineopts is not None and
-                     "drawmethod" in self.engineopts and self.engineopts["drawmethod"] == 'rough'))
-            if usefastgauss and engine != 'libprofit':
-                engine = 'libprofit'
-                # Down below we'll get the libprofit format profiles anyway, unless not haspsf
-                if not haspsf:
-                    profiles = self.getprofiles([band], engine="libprofit")
+        haspsf = exposure.psf is not None
+        psfispixelated = haspsf and exposure.psf.model is not None and exposure.psf.modelpixelated
+        profilesgaussian = [comp.isgaussian()
+                            for comps in [src.modelphotometric.components for src in self.sources]
+                            for comp in comps]
+        allgaussian = not haspsf or (exposure.psf.model is not None and
+            all([comp.isgaussian() for comp in exposure.psf.model.modelphotometric.components]))
+        anygaussian = allgaussian and any(profilesgaussian)
+        allgaussian = allgaussian and all(profilesgaussian)
+        # Use fast, efficient Gaussian evaluators only if everything's a Gaussian mixture model
+        usefastgauss = allgaussian and (
+                psfispixelated or
+                (engine == 'galsim' and self.engineopts is not None and
+                 "drawmethod" in self.engineopts and self.engineopts["drawmethod"] == 'no_pixel') or
+                (engine == 'libprofit' and self.engineopts is not None and
+                 "drawmethod" in self.engineopts and self.engineopts["drawmethod"] == 'rough'))
+        if usefastgauss and engine != 'libprofit':
+            engine = 'libprofit'
+            # Down below we'll get the libprofit format profiles anyway, unless not haspsf
+            if not haspsf:
+                profiles = self.getprofiles([band], engine="libprofit")
 
         if profiles:
             # Do analytic convolution of any Gaussian model with the Gaussian PSF
@@ -596,50 +616,81 @@ class Model:
                     times['modelallgauss'] = time.time() - timenow
                     timenow = time.time()
 
-            # TODO: Do this in a smarter way
-            if usefastgauss:
-                profilesrunning = []
-                image = None
-                if clock:
-                    times['modelsetup'] = time.time() - timenow
-                    timenow = time.time()
-                for profile in profiles:
+        if clock:
+            times['modelsetup'] = time.time() - timenow
+
+        metamodel = {
+            'allgaussian': allgaussian,
+            'haspsf': haspsf,
+            'profiles': profiles,
+            'psfispixelated': psfispixelated,
+            'usefastgauss': usefastgauss,
+        }
+        return profiles, metamodel, times
+
+    def getexposuremodel(self, exposure, profiles=None, metamodel=None, engine=None, engineopts=None,
+                         drawimage=True, scale=1, clock=False, times={}):
+        """
+            Draw model image for one exposure with one PSF
+
+            Returns the image and the engine-dependent model used to draw it
+        """
+        # TODO: Rewrite this completely at some point as validating inputs is a pain
+        if profiles is None or metamodel is None:
+            profiles, metamodel, times = self._getexposuremodelsetup(
+                exposure, engine=engine, engineopts=engineopts, clock=clock, times=times)
+        ny, nx = exposure.image.shape
+        band = exposure.band
+        haspsf = metamodel['haspsf']
+
+        if clock:
+            times = metamodel['times'] if 'times' in metamodel else []
+            timenow = time.time()
+
+        if engine == "galsim":
+            gsparams = getgsparams(engineopts)
+
+        # TODO: Do this in a smarter way
+        if metamodel['usefastgauss']:
+            profilesrunning = []
+            image = None
+            model = None
+            for profile in profiles:
+                params = profile[band]
+                profilesrunning.append(profile)
+                if len(profilesrunning) == 8:
+                    paramsall = [x[band] for x in profilesrunning]
+                    imgprofile = np.array(mpf.make_gaussian_mix_8_pixel(
+                        params['cenx'], params['ceny'],
+                        magtoflux(paramsall[0]['mag']), magtoflux(paramsall[1]['mag']),
+                        magtoflux(paramsall[2]['mag']), magtoflux(paramsall[3]['mag']),
+                        magtoflux(paramsall[4]['mag']), magtoflux(paramsall[5]['mag']),
+                        magtoflux(paramsall[6]['mag']), magtoflux(paramsall[7]['mag']),
+                        paramsall[0]['re'], paramsall[1]['re'], paramsall[2]['re'], paramsall[3]['re'],
+                        paramsall[4]['re'], paramsall[5]['re'], paramsall[6]['re'], paramsall[7]['re'],
+                        paramsall[0]['ang'], paramsall[1]['ang'], paramsall[2]['ang'],
+                        paramsall[3]['ang'], paramsall[4]['ang'], paramsall[5]['ang'],
+                        paramsall[6]['ang'], paramsall[7]['ang'],
+                        paramsall[0]['axrat'], paramsall[1]['axrat'], paramsall[2]['axrat'],
+                        paramsall[3]['axrat'], paramsall[4]['axrat'], paramsall[5]['axrat'],
+                        paramsall[6]['axrat'], paramsall[7]['axrat'],
+                        0, nx, 0, ny, nx, ny))
+                    if image is None:
+                        image = imgprofile
+                    else:
+                        image += imgprofile
+                    profilesrunning = []
+            if profilesrunning:
+                for profile in profilesrunning:
                     params = profile[band]
-                    profilesrunning.append(profile)
-                    if len(profilesrunning) == 8:
-                        paramsall = [x[band] for x in profilesrunning]
-                        imgprofile = np.array(mpf.make_gaussian_mix_8_pixel(
-                            params['cenx'], params['ceny'],
-                            magtoflux(paramsall[0]['mag']), magtoflux(paramsall[1]['mag']),
-                            magtoflux(paramsall[2]['mag']), magtoflux(paramsall[3]['mag']),
-                            magtoflux(paramsall[4]['mag']), magtoflux(paramsall[5]['mag']),
-                            magtoflux(paramsall[6]['mag']), magtoflux(paramsall[7]['mag']),
-                            paramsall[0]['re'], paramsall[1]['re'], paramsall[2]['re'], paramsall[3]['re'],
-                            paramsall[4]['re'], paramsall[5]['re'], paramsall[6]['re'], paramsall[7]['re'],
-                            paramsall[0]['ang'], paramsall[1]['ang'], paramsall[2]['ang'],
-                            paramsall[3]['ang'], paramsall[4]['ang'], paramsall[5]['ang'],
-                            paramsall[6]['ang'], paramsall[7]['ang'],
-                            paramsall[0]['axrat'], paramsall[1]['axrat'], paramsall[2]['axrat'],
-                            paramsall[3]['axrat'], paramsall[4]['axrat'], paramsall[5]['axrat'],
-                            paramsall[6]['axrat'], paramsall[7]['axrat'],
-                            0, nx, 0, ny, nx, ny))
-                        if image is None:
-                            image = imgprofile
-                        else:
-                            image += imgprofile
-                        profilesrunning = []
-                if profilesrunning:
-                    for profile in profilesrunning:
-                        params = profile[band]
-                        imgprofile = np.array(mpf.make_gaussian_pixel(
-                            params['cenx'], params['ceny'], 10**(-0.4*params['mag']), params['re'],
-                            params['ang'], params['axrat'], 0, nx, 0, ny, nx, ny))
-                        if image is None:
-                            image = imgprofile
-                        else:
-                            image += imgprofile
-                profiles = []
-                model = None
+                    imgprofile = np.array(mpf.make_gaussian_pixel(
+                        params['cenx'], params['ceny'], magtoflux(params['mag']), params['re'],
+                        params['ang'], params['axrat'], 0, nx, 0, ny, nx, ny))
+                    if image is None:
+                        image = imgprofile
+                    else:
+                        image += imgprofile
+            profiles = []
 
         if profiles:
             if engine == 'libprofit':
@@ -748,7 +799,7 @@ class Model:
                     model = profilesgs[False]
                 # TODO: test this, and make sure that it works in all cases, not just gauss. mix
                 # Has a PSF and it's a pixelated analytic model, so all sources must use no_pixel
-                if psfispixelated:
+                if metamodel['psfispixelated']:
                     method = "no_pixel"
                 else:
                     if (self.engineopts is not None and "drawmethod" in self.engineopts and
@@ -806,9 +857,12 @@ class Model:
                 except Exception as e:
                     print("Exception attempting to draw image from profiles:", profilesgs)
                     raise e
-                # TODO: Determine why this is necessary. Should we keep an imageD per exposure?
+                # TODO: Check that this isn't destroyed
                 if drawimage:
-                    image = np.copy(imagegs.array)
+                    image = imagegs.array
+            else:
+                errmsg = "engine is None" if engine is None else "engine type " + engine + " not implemented"
+                raise RuntimeError(errmsg)
 
         if clock:
             times['modeldraw'] = time.time() - timenow
@@ -903,7 +957,7 @@ class Model:
 
 class ModellerPygmoUDP:
     def fitness(self, x):
-        return [-self.modeller.evaluate(x, returnlponly=True, timing=self.timing)]
+        return [-self.modeller.evaluate(x, returnlponly=True, timing=self.timing, likelihoodonly=True)]
 
     def get_bounds(self):
         return self.boundslower, self.boundsupper
@@ -944,13 +998,14 @@ class Modeller:
         store info that they don't track (mainly per-iteration info, including parameter values,
         running time, separate priors and likelihoods rather than just the objective, etc.).
     """
-    def evaluate(self, paramsfree=None, timing=False, returnlponly=False, returnlog=True, plot=False):
+    def evaluate(self, paramsfree=None, timing=False, returnlponly=False, likelihoodonly=False,
+                 returnlog=True, plot=False):
 
         if timing:
             tinit = time.time()
         # TODO: Attempt to prevent/detect defeating this by modifying fixed/free params?
         prior = self.fitinfo["priorLogfixed"] + self.model.getpriorvalue(free=True, fixed=False)
-        likelihood = self.model.getlikelihood(paramsfree, plot=plot)
+        likelihood = self.model.getlikelihood(paramsfree, plot=plot, likelihoodonly=likelihoodonly)
         # return LL, LP, etc.
         if returnlponly:
             rv = likelihood + prior
@@ -1007,7 +1062,7 @@ class Modeller:
 
         if self.modellib == "scipy":
             def neg_like_model(params, modeller):
-                return -modeller.evaluate(params, timing=timing, returnlponly=True)
+                return -modeller.evaluate(params, timing=timing, returnlponly=True, likelihoodonly=True)
 
             tinit = time.time()
             result = spopt.minimize(neg_like_model, paramsinit, method=algo, bounds=np.array(limits),

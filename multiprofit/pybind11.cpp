@@ -39,22 +39,50 @@ PYBIND11_MODULE(_multiprofit, m)
     m.def(
         "make_gaussian", &multiprofit::make_gaussian,
         "Integrate a 2D Gaussian over a rectangular grid.",
-        py::arg("xcen"), py::arg("ycen"), py::arg("mag"), py::arg("re"), py::arg("ang"), py::arg( "axrat"),
+        py::arg("xcen"), py::arg("ycen"), py::arg("mag"), py::arg("re"), py::arg("ang"), py::arg("axrat"),
         py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax"),
-        py::arg("xdim"), py::arg( "ydim"), py::arg( "acc")
+        py::arg("xdim"), py::arg("ydim"), py::arg("acc")
     );
 
     m.def(
         "make_gaussian_pixel", &multiprofit::make_gaussian_pixel,
-        "Evaluate a 2D Gaussian at the centers of pixels on a rectangular grid.",
-        py::arg("xcen"), py::arg("ycen"), py::arg("l"), py::arg("r"), py::arg("ang"), py::arg( "axrat"),
+        "Evaluate a 2D Gaussian at the centers of pixels on a rectangular grid using the standard bivariate"
+        "Gaussian PDF.",
+        py::arg("xcen"), py::arg("ycen"), py::arg("l"), py::arg("r"), py::arg("ang"), py::arg("axrat"),
         py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax"),
-        py::arg("xdim"), py::arg( "ydim")
+        py::arg("xdim"), py::arg("ydim")
+    );
+
+   
+    m.def(
+        "make_gaussian_pixel_sersic", &multiprofit::make_gaussian_pixel_sersic,
+        "Evaluate a 2D Gaussian at the centers of pixels on a rectangular grid using the 2D Sersic PDF.",
+        py::arg("xcen"), py::arg("ycen"), py::arg("l"), py::arg("r"), py::arg("ang"), py::arg("axrat"),
+        py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax"),
+        py::arg("xdim"), py::arg("ydim")
+    );
+ 
+
+    m.def(
+        "make_gaussian_pixel_covar", &multiprofit::make_gaussian_pixel_covar,
+        "Evaluate a 2D Gaussian at the centers of pixels on a rectangular grid using the standard bivariate"
+        "Gaussian PDF and given a covariance matrix.",
+        py::arg("xcen"), py::arg("ycen"), py::arg("l"), py::arg("sigx"), py::arg("sigy"), py::arg("rho"),
+        py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax"),
+        py::arg("xdim"), py::arg("ydim")
+    );
+
+    m.def(
+        "loglike_gaussian_pixel", &multiprofit::loglike_gaussian_pixel,
+        "Evaluate the log likelihood of a 2D Gaussian mixture model at the centers of pixels on a rectangular"
+        "grid using the standard bivariate Gaussian PDF.",
+        py::arg("data"), py::arg("varinverse"), py::arg("gaussians"),
+        py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax")
     );
 
     m.def(
         "make_gaussian_mix_8_pixel", &multiprofit::make_gaussian_mix_8_pixel,
-        "Evaluate eight 2D Gaussians at the centers of pixels on a rectangular grid.",
+        "Evaluate eight 2D Gaussians at the centers of pixels on a rectangular grid using the 2D Sersic PDF.",
         py::arg("xcen"), py::arg("ycen"),
         py::arg("l1"), py::arg("l2"), py::arg("l3"), py::arg("l4"),
         py::arg("l5"), py::arg("l6"), py::arg("l7"), py::arg("l8"),

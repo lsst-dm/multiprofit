@@ -659,7 +659,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
         if src == "hst":
             imgs = {bands[0]: imghst}
             psfsband = {bands[0]: psfhst}
-            sigmainverses = {bands[0]: [np.power(rgcat.getNoiseProperties(idcosmosgs)[2], -0.5)]}
+            sigmainverses = {bands[0]: np.array([np.power(rgcat.getNoiseProperties(idcosmosgs)[2], -0.5)])}
         elif src.startswith("hsc") or src == 'hst2hsc':
             imgs = {}
             psfsband = {band: exposures[band].getPsf() for band in hscbands}
