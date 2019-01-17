@@ -220,6 +220,7 @@ def getcomponents(profile, bands, fluxfracs, values={}, istransformedvalues=Fals
     return components
 
 
+# Convenience function to get a model with 'standard' limits and transforms
 def getmodel(
     fluxesbyband, modelstr, imagesize, sizes=None, axrats=None, angs=None, slopes=None, fluxfracs=None,
     offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False
@@ -312,17 +313,9 @@ def getchisqred(chis):
     return chisum/chicount
 
 
-def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Nelder-Mead"}, printfinal=True,
-             printsteps=100, plot=False, modelname=None, figure=None, title=None, axes=None,
-             figurerow=None, modelnameappendparams=None, flipplot=False):
-    if modeller is None:
-        modeller = proobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
-    fit = modeller.fit(printfinal=printfinal, printsteps=printsteps)
-    if printfinal:
-        paramsall = model.getparameters(fixed=True)
-        print("Param names:" + ",".join(["{:11s}".format(p.name) for p in paramsall]))
-        print("All params: " + ",".join(["{:+.4e}".format(p.getvalue(transformed=False)) for p in paramsall]))
-    # Conveniently sets the parameters to the right values too
+# Convenience function to evaluate a model and make a reasonable plot of it if desired
+def evaluatemodel(model, params, plot=False, modelname=None, figure=None, title=None, axes=None,
+                  figurerow=None, modelnameappendparams=None, flipplot=False):
     if plot:
         modeldesc = None
         if modelnameappendparams is not None:
@@ -344,13 +337,30 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
             modeldesc = modeldesc[:-1]
     else:
         modeldesc = None
-    _, _, chis, _ = model.evaluate(params=fit["paramsbest"], plot=plot, modelname=modelname,
+    _, _, chis, _ = model.evaluate(params=params, plot=plot, modelname=modelname,
                                    modeldesc=modeldesc, figure=figure, axes=axes, figurerow=figurerow,
                                    flipplot=flipplot)
+
     if plot:
         if title is not None:
             plt.suptitle(title)
         plt.show(block=False)
+
+    return chis
+
+
+# Convenience function to fit a model. kwargs are passed on to evaluatemodel
+def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Nelder-Mead"}, printfinal=True,
+             printsteps=100, plot=False, **kwargs):
+    if modeller is None:
+        modeller = proobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
+    fit = modeller.fit(printfinal=printfinal, printsteps=printsteps)
+    if printfinal:
+        paramsall = model.getparameters(fixed=True)
+        print("Param names:" + ",".join(["{:11s}".format(p.name) for p in paramsall]))
+        print("All params: " + ",".join(["{:+.4e}".format(p.getvalue(transformed=False)) for p in paramsall]))
+    # Conveniently sets the parameters to the right values too
+    chis = evaluatemodel(model, fit["paramsbest"], plot=plot, **kwargs)
     fit["chisqred"] = getchisqred(chis)
     params = model.getparameters()
     for item in ['paramsbestall', 'paramsbestalltransformed', 'paramsallfixed']:
@@ -363,6 +373,8 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
     return fit, modeller
 
 
+# Convenience function to set an exposure object with optional defaults for the sigma (variance) map
+# Can be used to nullify an exposure before saving to disk, for example
 def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None, meta=None, factorsigma=1):
     if band not in model.data.exposures:
         model.data.exposures[band] = [proobj.Exposure(band=band, image=None)]
@@ -384,6 +396,7 @@ def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None,
 
 
 # TODO: Figure out multi-band operation here
+# Get Gaussian component objects from profiles that are multi-Gaussian approximations (to e.g. Sersic)
 # ncomponents is an array of ints specifying the number of Gaussian components in each physical component
 def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
     band = list(profiles[0].keys())[0]

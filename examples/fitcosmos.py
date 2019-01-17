@@ -114,20 +114,43 @@ def getmodelspecs(filename=None):
     return modelspecs
 
 
-def fitpsf(imgpsf, psfmodel, engines, band, sigmainverse=None, modellib="scipy",
-           modellibopts={'algo': 'Nelder-Mead'}, plot=False, title="", modelname="", printfinal=True,
-           printsteps=100, figaxes=(None, None), figurerow=None):
-    psfmodels = {}
+def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=None, modellib="scipy",
+           modellibopts={'algo': 'Nelder-Mead'}, plot=False, title="", modelname=None, printfinal=True,
+           printsteps=100, figaxes=(None, None), figurerow=None, redo=True):
+    if psfmodelfits is None:
+        psfmodelfits = {}
+    if modelname is None:
+        modelname = modeltype
     # Fit the PSF
-    numcomps = np.int(psfmodel.split(":")[1])
+    numcomps = np.int(modeltype.split(":")[1])
     for engine, engineopts in engines.items():
-        model = getpsfmodel(engine, engineopts, numcomps, band, psfmodel, imgpsf,
-                            sigmainverse=sigmainverse)
-        fit = mpfutil.fitmodel(model, modellib=modellib, modellibopts=modellibopts, printfinal=printfinal,
-                               printsteps=printsteps, plot=plot, title=title, modelname=modelname + " PSF",
-                               figure=figaxes[0], axes=figaxes[1], figurerow=figurerow)
-        psfmodels[engine] = {"model": model, "fit": fit}
-    return psfmodels
+        if engine not in psfmodelfits:
+            psfmodelfits[engine] = {}
+        if redo or modelname not in psfmodelfits[engine]:
+            model = getpsfmodel(engine, engineopts, numcomps, band, modeltype, imgpsf,
+                                sigmainverse=sigmainverse)
+            psfmodelfits[engine][modelname] = {}
+        else:
+            model = psfmodelfits[engine][modelname]['modeller'].model
+        if redo or 'fit' not in psfmodelfits[engine][modelname]:
+            psfmodelfits[engine][modelname]['fit'], psfmodelfits[engine][modelname]['modeller'] = \
+                mpfutil.fitmodel(
+                model, modellib=modellib, modellibopts=modellibopts, printfinal=printfinal,
+                printsteps=printsteps, plot=plot, title=title, modelname=modelname + " PSF",
+                figure=figaxes[0], axes=figaxes[1], figurerow=figurerow)
+        elif plot:
+            exposure = model.data.exposures[band][0]
+            isempty = isinstance(exposure.image, mpfutil.ImageEmpty)
+            if isempty:
+                mpfutil.setexposure(model, band, image=imgpsf, sigmainverse=sigmainverse)
+            mpfutil.evaluatemodel(
+                model, psfmodelfits[engine][modelname]['fit']['paramsbest'],
+                plot=plot, title=title, modelname=modelname + " PSF", figure=figaxes[0],
+                axes=figaxes[1], figurerow=figurerow)
+            if isempty:
+                mpfutil.setexposure(model, band, 'empty')
+
+    return psfmodelfits
 
 
 def initmodelfrommodelfits(model, modelfits):
@@ -283,6 +306,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
     return model
 
 
+# Engine is galsim; TODO: add options
 def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=None, modellibopts=None,
               plot=False, name=None, models=None, fitsbyengine=None, redo=True,
               ):
@@ -312,9 +336,12 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                                                getellipseestimate(imgs[band].array))
         } for band in bands
     }
+    engine = 'galsim'
     engines = {
-        "galsim": {"gsparams": gs.GSParams(kvalue_accuracy=1e-2, integration_relerr=1e-2,
-                                           integration_abserr=1e-3, maximum_fft_size=32768)}
+        engine: {
+            "gsparams": gs.GSParams(
+                kvalue_accuracy=1e-2, integration_relerr=1e-2, integration_abserr=1e-3,
+                maximum_fft_size=32768)}
     }
     title = name if plot else None
     img = imgs[bands[0]]
@@ -330,7 +357,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
     }
     # TODO: Remove when finished implementing multiband, maybe also img = ... above
     band = bands[0]
-    psfs = psfs[band]
+    psfs = psfs[band][engine]
     mask = masks[band] if band in masks else None
     sigmainverse = sigmainverses[band]
     models = {} if (models is None) else models
@@ -797,6 +824,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
             results[srcname] = {}
         psfs = results[srcname]['psfs'] if 'psfs' in results[srcname] else {}
         psfmodels = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
+        engine = 'galsim'
         engineopts = {
             "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
         }
@@ -805,36 +833,37 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
         psfrow = None
         if plot:
             npsfs = 0
-            for psfmodelname, _ in psfmodels:
-                npsfs += psfmodelname != "empirical"
+            for psfmodeltype, _ in psfmodels:
+                npsfs += psfmodeltype != "empirical"
             if npsfs > 1:
                 figure, axes = plt.subplots(nrows=min([5, npsfs]), ncols=max([5, npsfs]))
                 psfrow = 0
         for band, psf in psfsband.items():
             if band not in psfs:
-                psfs[band] = {}
-            for psfmodelname, ispsfpixelated in psfmodels:
-                psfname = psfmodelname + ("_pixelated" if ispsfpixelated else "")
-                if psfmodelname == "empirical":
-                    psfmodel = psf
-                    psfexposure = mpfobj.PSF(band=band, engine="galsim", image=psf.image.array)
+                psfs[band] = {engine: {}}
+            for psfmodeltype, ispsfpixelated in psfmodels:
+                psfname = psfmodeltype + ("_pixelated" if ispsfpixelated else "")
+                if psfmodeltype == "empirical":
+                    # TODO: Check if this works
+                    psfs[band][engine][psfname] = {'object': mpfobj.PSF(
+                        band=band, engine=engine, image=psf.image.array)}
                 else:
                     engineopts["drawmethod"] = "no_pixel" if ispsfpixelated else None
-                    # TODO: Allow plotting of PSF fit after the fact
-                    if redopsfs or 'psfs' not in results[srcname] or band not in results[srcname]['psfs'] \
-                            or psfname not in results[srcname]['psfs'][band]:
-                        print('Fitting PSF model {}'.format(psfmodelname))
-                        psfmodel = fitpsf(psf.image.array, psfmodelname, {"galsim": engineopts}, band=band,
-                                          plot=plot, modelname=psfmodelname, title=fitname,
-                                          figaxes=(figure, axes), figurerow=psfrow)["galsim"]
-                        psfexposure = mpfobj.PSF(band=band, engine="galsim", model=psfmodel["model"].sources[0],
-                                                 modelpixelated=ispsfpixelated)
+                    refit = redopsfs or psfname not in psfs[band][engine]
+                    if refit or plot:
+                        if refit:
+                            print('Fitting PSF model {}'.format(psfname))
+                        psfs[band] = fitpsf(
+                            psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
+                            psfmodelfits=psfs[band], plot=plot, modelname=psfname, title=fitname,
+                            figaxes=(figure, axes), figurerow=psfrow, redo=redo)
+                        if redo or 'object' not in psfs[band][engine][psfname]:
+                            psfs[band][engine][psfname]['object'] = mpfobj.PSF(
+                                band=band, engine=engine,
+                                model=psfs[band][engine][psfname]['modeller'].model.sources[0],
+                                modelpixelated=ispsfpixelated)
                         if plot and psfrow is not None:
                             psfrow += 1
-                    else:
-                        psfmodel = results[srcname]['psfs'][band][psfname]['model']
-                        psfexposure = results[srcname]['psfs'][band][psfname]['object']
-                psfs[band][psfname] = {"model": psfmodel, "object": psfexposure}
         fitsbyengine = None if 'fits' not in results[srcname] else results[srcname]['fits']
         models = None if 'models' not in results[srcname] else results[srcname]['models']
         fits, models = fitgalaxy(
@@ -842,9 +871,10 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
             modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
             fitsbyengine=fitsbyengine, redo=redo)
         if resetimages:
-            for psfmodelname, psf in psfs.items():
-                if "model" in psf:
-                    mpfutil.setexposure(psf["model"]["model"], band, "empty")
+            for band, psfsband in psfs.items():
+                if engine in psfsband:
+                    for psfmodeltype, psf in psfsband[engine].items():
+                        mpfutil.setexposure(psf['modeller'].model, band, "empty")
             for modelname, model in models.items():
                 mpfutil.setexposure(model, band, "empty")
             for engine, modelfitinfo in fits.items():
