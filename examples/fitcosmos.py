@@ -901,7 +901,7 @@ if __name__ == '__main__':
     flags = {
         'catalogpath': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog path'},
         'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
-        'fileout':     {'type': str, 'nargs': '?', 'default': None, 'help': 'File prefix to output results'},
+        'file':        {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
         'fithsc':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
         'fithst':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
         'fithst2hsc':  {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
@@ -918,6 +918,7 @@ if __name__ == '__main__':
 #        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
         'redo':        {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
         'redopsfs':    {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
+        'write':       {'type': mpfutil.str2bool, 'default': True, 'help': 'Write file?'},
     }
 
     for key, value in flags.items():
@@ -950,10 +951,10 @@ if __name__ == '__main__':
         print("Not using COSMOSCatalog")
         ccat = None
 
-    if args.fileout is not None:
-        args.fileout = os.path.expanduser(args.fileout)
-    if args.fileout is not None and os.path.isfile(args.fileout):
-            with open(args.fileout, 'rb') as f:
+    if args.file is not None:
+        args.file = os.path.expanduser(args.file)
+    if args.file is not None and os.path.isfile(args.file):
+            with open(args.file, 'rb') as f:
                 data = pickle.load(f)
     else:
         data = {}
@@ -1001,12 +1002,12 @@ if __name__ == '__main__':
                 if idnum not in data:
                     data[idnum] = {'error': e, 'trace': trace}
             nfit += 1
-            if args.fileout is not None and (nfit % args.nwrite) == 0:
-                with open(args.fileout, 'wb') as f:
+            if args.write and args.file is not None and (nfit % args.nwrite) == 0:
+                with open(args.file, 'wb') as f:
                     pickle.dump(data, f)
 
-    if args.fileout is not None:
-        with open(args.fileout, 'wb') as f:
+    if args.write and args.file is not None:
+        with open(args.file, 'wb') as f:
             pickle.dump(data, f)
     if args.plot:
         input("Press Enter to finish")
