@@ -69,17 +69,27 @@ class Exposure:
     """
         A class to hold an image, sigma map, bad pixel mask and reference to a PSF model/image
     """
-    def __init__(self, band, image, maskinverse=None, sigmainverse=None, psf=None, calcinvmask=None, meta={}):
+    def __init__(self, band, image, maskinverse=None, sigmainverse=None, psf=None, calcinvmask=None,
+                 meta=None):
         if psf is not None and not isinstance(psf, PSF):
             raise TypeError("Exposure (band={}) PSF type={:s} not instanceof({:s})".format(
                 band, type(psf), type(PSF)))
         self.band = band
         self.image = image
+        extraargs = {
+            'sigmainverse': sigmainverse,
+            'maskinverse': maskinverse,
+        }
+        for key, value in extraargs.items():
+            if value is not None and not (value.shape == image.shape or
+                                          (key == 'sigmainverse' and np.prod(np.shape(value)) == 1)):
+                raise ValueError('Exposure input {:s} shape={} not same as image.shape={}'.format(
+                    key, value.shape, image.shape))
         self.maskinverse = maskinverse
         self.sigmainverse = sigmainverse
         self.psf = psf
         self.calcinvmask = calcinvmask
-        self.meta = meta
+        self.meta = dict() if meta is None else meta
 
 
 class Data:
@@ -231,9 +241,9 @@ class Model:
 
     def evaluate(self, params=None, data=None, bands=None, engine=None, engineopts=None,
                  paramstransformed=True, getlikelihood=True, likelihoodlog=True, keeplikelihood=False,
-                 likelihoodonly=False, keepimages=False, keepmodels=False, plot=False, figure=None,
-                 axes=None, figurerow=None, modelname="Model", modeldesc=None, drawimage=True, scale=1,
-                 clock=False, flipplot=False):
+                 likelihoodonly=False, keepimages=False, keepmodels=False, plot=False,
+                 plotmulti=False, figure=None, axes=None, figurerow=None, modelname="Model", modeldesc=None,
+                 drawimage=True, scale=1, clock=False, flipplot=False):
         """
             Get the likelihood and/or model images
         """
@@ -271,17 +281,20 @@ class Model:
             bands = data.exposures.keys()
         if plot:
             plotslen = 0
-            if figure is None or axes is None or figurerow is None:
+            singlemodel = figure is None or axes is None or figurerow is None
+            if singlemodel:
                 for band in bands:
                     plotslen += len(data.exposures[band])
-                nrows = plotslen + (plotslen == 3)
-                figure, axes = plt.subplots(nrows=nrows, ncols=5,
-                                            figsize=(10, 2*nrows), dpi=100)
+                nrows = plotslen + plotmulti
+                figure, axes = plt.subplots(nrows=nrows, ncols=5, figsize=(10, 2*nrows), dpi=100)
                 if plotslen == 1:
                     axes.shape = (1, 5)
                 figurerow = 0
+            figaxes = (figure, axes)
         else:
             figaxes = None
+        if plot and (figaxes is None or any(x is None for x in figaxes)):
+            raise RuntimeError("WTF figaxes {}".format(figaxes))
         chis = []
         chiclips = []
         chiimgs = []
@@ -306,10 +319,9 @@ class Model:
                     # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                     if 'likeconst' not in exposure.meta:
                         exposure.meta['likeconst'] = np.sum(np.log(exposure.sigmainverse/np.sqrt(2.*np.pi)))
-                        if varisscalar or np.prod(exposure.meta['likeconst'].shape) == 1:
-                            npix = np.prod(exposure.image.shape)
-                            print('Setting exposure.meta[\'likeconst\']=', exposure.meta['likeconst']*npix)
+                        if varisscalar or np.prod(exposure.sigmainverse.shape) == 1:
                             exposure.meta['likeconst'] *= np.prod(exposure.image.shape)
+                        print('Setting exposure.meta[\'likeconst\']=', exposure.meta['likeconst'])
                     if varisscalar:
                         # I think this is the easiest way to reshape it into a 1x1 matrix
                         varinverse = np.zeros((1, 1)) + varinverse
@@ -335,13 +347,21 @@ class Model:
                         exposure.meta["model"] = model
                     if getlikelihood or plot:
                         if plot:
-                            figaxes = (figure, axes[figurerow])
+                            nrows = (axes[band] if plotmulti else axes).shape[0]
+                            if plotmulti:
+                                figaxes = (figure[band], axes[band][figurerow])
+                            else:
+                                figaxes = (figure, axes[figurerow])
+                            istoprow = figurerow is None or figurerow == 0
+                            isbottomrow = figurerow is None or axes is None or ((figurerow + 1) == nrows)
+                        else:
+                            istoprow = None
+                            isbottomrow = None
+
                         likelihoodexposure, chi, chiimg, chiclip, imgclip, modelclip = \
                             self.getexposurelikelihood(
                                 exposure, image, log=likelihoodlog, figaxes=figaxes, modelname=modelname,
-                                modeldesc=modeldesc, istoprow=figurerow is None or figurerow == 0,
-                                isbottomrow=figurerow is None or axes is None or
-                                            (figurerow+1) == axes.shape[0],
+                                modeldesc=modeldesc, istoprow=istoprow, isbottomrow=isbottomrow,
                                 flipplot=flipplot
                             )
                 if getlikelihood or plot:
@@ -357,18 +377,23 @@ class Model:
                         likelihood *= likelihoodexposure
                     chis.append(chi)
                     if plot:
-                        figurerow += 1
-                        if plotslen == 3:
+                        if not plotmulti:
+                            figurerow += 1
+                        if plotmulti:
                             chiclips.append(chiclip)
                             chiimgs.append(chiimg)
                             imgclips.append(imgclip)
                             modelclips.append(modelclip)
         # Color images! whooo
-        if plot:
-            # TODO:
-            if plotslen == 3:
-                self.plotexposurescolor(imgclips, modelclips, chis, chiimgs,
-                                        chiclips, (figure, axes[figurerow]))
+        if plot and plotmulti:
+            if singlemodel:
+                self.plotexposurescolor(
+                    imgclips, modelclips, chis, chiimgs, chiclips, (figure, axes[figurerow]))
+            else:
+                self.plotexposurescolor(
+                    imgclips, modelclips, chis, chiimgs, chiclips,
+                    (figure['multi'], axes['multi'][figurerow]))
+            figurerow += 1
         if clock:
             print(','.join(['{}={:.2e}'.format(name, value) for name, value in times.items()]))
         return likelihood, params, chis, times
@@ -454,8 +479,8 @@ class Model:
             if hasmask:
                 axes[2].contour(x, y, z)
             # The chi (data-model)/error map clipped at +/- 5 sigma
-            chiclip = np.copy(chi)
             chi *= exposure.sigmainverse
+            chiclip = np.copy(chi)
             chiclip[chi < -5] = -5
             chiclip[chi > 5] = 5
             if hasmask:

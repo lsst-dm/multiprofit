@@ -115,8 +115,8 @@ def getmodelspecs(filename=None):
 
 
 def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=None, modellib="scipy",
-           modellibopts={'algo': 'Nelder-Mead'}, plot=False, title="", modelname=None, printfinal=True,
-           printsteps=100, figaxes=(None, None), figurerow=None, redo=True):
+           modellibopts={'algo': 'Nelder-Mead'}, plot=False, title='', modelname=None,
+           label=None, printfinal=True, printsteps=100, figaxes=(None, None), figurerow=None, redo=True):
     if psfmodelfits is None:
         psfmodelfits = {}
     if modelname is None:
@@ -136,7 +136,7 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
             psfmodelfits[engine][modelname]['fit'], psfmodelfits[engine][modelname]['modeller'] = \
                 mpfutil.fitmodel(
                 model, modellib=modellib, modellibopts=modellibopts, printfinal=printfinal,
-                printsteps=printsteps, plot=plot, title=title, modelname=modelname + " PSF",
+                printsteps=printsteps, plot=plot, title=title, modelname=label,
                 figure=figaxes[0], axes=figaxes[1], figurerow=figurerow)
         elif plot:
             exposure = model.data.exposures[band][0]
@@ -145,10 +145,10 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
                 mpfutil.setexposure(model, band, image=imgpsf, sigmainverse=sigmainverse)
             mpfutil.evaluatemodel(
                 model, psfmodelfits[engine][modelname]['fit']['paramsbest'],
-                plot=plot, title=title, modelname=modelname + " PSF", figure=figaxes[0],
-                axes=figaxes[1], figurerow=figurerow)
+                plot=plot, title=title, modelname=label, figure=figaxes[0], axes=figaxes[1],
+                figurerow=figurerow)
             if isempty:
-                mpfutil.setexposure(model, band, 'empty')
+                mpfutil.setexposure(model, band, image='empty')
 
     return psfmodelfits
 
@@ -168,8 +168,14 @@ def initmodelfrommodelfits(model, modelfits):
         paramtree = modelfit['paramtree']
         for param, value in zip(modelfit['params'], modelfit['paramvals']):
             param.setvalue(value, transformed=False)
-        for flux in paramtree[0][1][0]:
-            fluxesinit.append(flux)
+        for iflux, flux in enumerate(paramtree[0][1][0]):
+            fluxisflux = isinstance(flux, mpfobj.FluxParameter)
+            if fluxisflux and not flux.isfluxratio:
+                fluxesinit.append(flux)
+            else:
+                raise RuntimeError(
+                    "paramtree[0][1][0][{}] (type={}) isFluxParameter={} and/or isfluxratio".format(
+                        iflux, type(flux), fluxisflux))
         for comp in paramtree[0][1][1:len(paramtree[0][1])]:
             compsinit.append([(param, param.getvalue(transformed=False)) for param in comp])
     params = model.getparameters(fixed=True, flatten=False)
@@ -180,17 +186,27 @@ def initmodelfrommodelfits(model, modelfits):
     comps = [comp for comp in fluxcomps[1:len(fluxcomps)]]
     # Check if fluxcens all length three with a total flux parameter and two centers named
     #  cenx and ceny
-    # TODO: More informative errors
+    # TODO: More informative errors; check fluxesinit
+    bands = set([flux.band for flux in fluxesinit])
+    nbands = len(bands)
     for name, fluxcen in {"init": fluxcensinit, "new": fluxcens}.items():
-        if len(fluxcen) != 3:
-            raise RuntimeError("{} len(fluxcen[)={} != 3".format(name, len(fluxcen)))
-        fluxisflux = isinstance(fluxcen[0], mpfobj.FluxParameter)
-        if not fluxisflux or fluxcen[0].isfluxratio:
-            raise RuntimeError("{} fluxcen[0] (type={}) isFluxParameter={} or isfluxratio".format(
-                name, type(fluxcen[0]), fluxisflux))
-        if not (fluxcen[1].name == "cenx" and fluxcen[2].name == "ceny"):
-            raise RuntimeError("{}[1:2] names=({},{}) not ('cenx','ceny')".format(
-                name, fluxcen[1].name, fluxcen[2].name))
+        lenfluxcensexpect = 2 + nbands
+        errfluxcens = len(fluxcens) != lenfluxcensexpect
+        errfluxcensinit = len(fluxcensinit) != lenfluxcensexpect
+        errmsg = None if not (errfluxcens or errfluxcensinit) else\
+            '{} len(fluxcen{})={} != {}=(2 x,y cens + nbands={})'.format(
+                name, 'init' if errfluxcensinit else '', len(fluxcens) if errfluxcens else len(fluxcensinit),
+                lenfluxcensexpect, nbands)
+        if errmsg is not None:
+            raise RuntimeError(errmsg)
+        for idxband in range(nbands):
+            fluxisflux = isinstance(fluxcen[0], mpfobj.FluxParameter)
+            if not fluxisflux or fluxcen[0].isfluxratio:
+                raise RuntimeError("{} fluxcen[0] (type={}) isFluxParameter={} or isfluxratio".format(
+                    name, type(fluxcen[0]), fluxisflux))
+        if not (fluxcen[nbands].name == "cenx" and fluxcen[nbands+1].name == "ceny"):
+            raise RuntimeError("{}[{}:{}] names=({},{}) not ('cenx','ceny')".format(
+                name, nbands, nbands+1, fluxcen[nbands].name, fluxcen[nbands+1].name))
     for paramset, paraminit in zip(fluxcens, fluxcensinit):
         paramset.setvalue(paraminit.getvalue(transformed=False), transformed=False)
     # Check if ncomps equal
@@ -307,35 +323,49 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
 
 
 # Engine is galsim; TODO: add options
-def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=None, modellibopts=None,
-              plot=False, name=None, models=None, fitsbyengine=None, redo=True,
+def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
+              fitsbyengine=None, redo=True,
               ):
     """
 
-    :param img: ndarray; 2D Image
-    :param psfs: Collection of mpfutil.PSF object
-    :param sigmainverse: ndarray; 2D Inverse sigma image ndarr
-    :param band: string; Filter/passband name
-    :param mask: ndarray; 2D Inverse mask image (1=include, 0=omit)
+    :param exposurepsfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
     :param modelspecs: Model specifications as returned by getmodelspecs
     :param modellib: string; Model fitting library
     :param modellibopts: dict; Model fitting library options
     :param plot: bool; Make plots?
     :param name: string; Name of the model for plot labelling
+    :param models: dict; key=model name: value=mpfobj.Model
 
-    :return: fitsbyengine, models: tuple of complicated structures:
+    :return: fitsbyengine: dict; key=engine: value=dict; key=modelname: value=dict;
+        key='fits': value=array of fit results, key='modeltype': value =
+        fitsbyengine[engine][modelname] = {"fits": fits, "modeltype": modeltype}
+        , models: tuple of complicated structures:
+
         modelinfos: dict; key=model name: value=dict; TBD
-        models: dict; key=engine name: value=dict(key=model type: value=mpfobj.Model of that type)
+        models: dict; key=model name: value=mpfobj.Model
         psfmodels: dict: TBD
     """
+    bands = set()
+    initfrommoments = {}
+    fluxes = {}
+    npiximg = None
+    for exposure, _ in exposurespsfs:
+        band = exposure.band
+        imgarr = exposure.image
+        npiximgexp = imgarr.shape
+        if npiximg is None:
+            npiximg = npiximgexp
+        elif npiximgexp != npiximg:
+            'fitgalaxy exposure image shape={} not same as first={}'.format(npiximgexp, npiximg)
+        if band not in bands:
+            initfrommoments[band] = {
+                name: value for name, value in zip(["axrat", "ang", "re"], getellipseestimate(imgarr))
+            }
+            bands.add(exposure.band)
+        # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
+        fluxes[band] = np.sum(imgarr[exposure.maskinverse] if exposure.maskinverse is not None else imgarr)
+    npiximg = np.flip(npiximg, axis=0)
     print("Bands:", bands)
-    print(imgs.keys())
-    initfrommoments = {
-        band: {
-            name: value for name, value in zip(["axrat", "ang", "re"],
-                                               getellipseestimate(imgs[band].array))
-        } for band in bands
-    }
     engine = 'galsim'
     engines = {
         engine: {
@@ -344,10 +374,6 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                 maximum_fft_size=32768)}
     }
     title = name if plot else None
-    img = imgs[bands[0]]
-    npiximg = np.flip(img.array.shape, axis=0)
-    fluxes = {band: np.sum(imgs[band].array[mask] if band in masks and masks[band] is not None else
-                           imgs[band].array) for band in bands}
 
     valuesmax = {
         band: {
@@ -355,11 +381,6 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
             "flux": 10*fluxes[band],
         } for band in bands
     }
-    # TODO: Remove when finished implementing multiband, maybe also img = ... above
-    band = bands[0]
-    psfs = psfs[band][engine]
-    mask = masks[band] if band in masks else None
-    sigmainverse = sigmainverses[band]
     models = {} if (models is None) else models
     paramsfixeddefault = {}
     fitsbyengine = {} if ((models is None) or (fitsbyengine is None)) else fitsbyengine
@@ -370,24 +391,32 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
         fitsengine = fitsbyengine[engine]
         if plot:
             nrows = len(modelspecs)
-            # Change to landscape
-            figure, axes = plt.subplots(nrows=min([5, nrows]), ncols=max([5, nrows]))
-            if nrows > 5:
-                axes = np.transpose(axes)
-            # This keeps things consistent with the nrows>1 case
-            if nrows == 1:
-                axes = np.array([axes])
-            plt.suptitle(title + " {} model".format(engine))
+            figures = {}
+            axeses = {}
+            for band in list(bands) + (['multi'] if len(bands) > 1 else []):
+                # Change to landscape
+                figure, axes = plt.subplots(nrows=min([5, nrows]), ncols=max([5, nrows]))
+                if nrows > 5:
+                    axes = np.transpose(axes)
+                # This keeps things consistent with the nrows>1 case
+                if nrows == 1:
+                    axes = np.array([axes])
+                plt.suptitle(title + " {} model".format(engine))
+                figures[band] = figure
+                axeses[band] = axes
+            if len(bands) == 1:
+                figures = figures[band]
+                axeses = axeses[band]
             flipplot = nrows > 5
         else:
-            figure = None
-            axes = None
+            figures = None
+            axeses = None
             flipplot = None
         for modelidx, modelinfo in enumerate(modelspecs):
             modelname = modelinfo["name"]
             modeltype = modelinfo["model"]
             modeldefault = mpfutil.getmodel(
-                {band: fluxes[band]}, modeltype, npiximg, engine=engine, engineopts=engineopts
+                fluxes, modeltype, npiximg, engine=engine, engineopts=engineopts
             )
             paramsfixeddefault[modeltype] = [param.fixed for param in
                                              modeldefault.getparameters(fixed=True)]
@@ -397,8 +426,11 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                 models[modeltype] = model
             psfname = modelinfo["psfmodel"] + ("_pixelated" if mpfutil.str2bool(
                 modelinfo["psfpixel"]) else "")
-            mpfutil.setexposure(model, band, image=img.array, sigmainverse=sigmainverse,
-                                psf=psfs[psfname]["object"], mask=mask)
+            model.data.exposures = {band: [] for band in bands}
+            for exposure, psfs in exposurespsfs:
+                exposure.psf = psfs[engine][psfname]['object']
+                model.data.exposures[exposure.band].append(exposure)
+            plotmulti = plot and len(bands) > 1
             if not redo and modelname in fitsbyengine[engine] and \
                     'fits' in fitsbyengine[engine][modelname]:
                 if plot:
@@ -423,9 +455,10 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                     modeldescs = ';'.join(modeldescs)
                     if title is not None:
                         plt.suptitle(title)
-                    model.evaluate(plot=plot, modelname=modelname,
-                                   modeldesc=modeldescs if modeldescs else None, figure=figure, axes=axes,
-                                   figurerow=modelidx, flipplot=flipplot)
+                    model.evaluate(
+                        plot=plot, modelname=modelname, modeldesc=modeldescs if modeldescs else None,
+                        figure=figures, axes=axeses, figurerow=modelidx, flipplot=flipplot,
+                        plotmulti=plotmulti)
                     plt.show(block=False)
             else:
                 # Parse default overrides from model spec
@@ -446,12 +479,13 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                                     valuesplit = [np.float(x) for x in value[1].split(',')]
                                     paramflags[flag][value[0]] = valuesplit
                 # Initialize model from estimate of moments (size/ellipticity) or from another fit
-                inittype = modelinfo["inittype"]
-                if inittype == "moments":
+                inittype = modelinfo['inittype']
+                if inittype == 'moments':
                     print('Initializing from moments')
                     for param in model.getparameters(fixed=False):
-                        if param.name in initfrommoments[band]:
-                            param.setvalue(initfrommoments[band][param.name], transformed=False)
+                        for band in bands:
+                            if param.name in initfrommoments[band]:
+                                param.setvalue(initfrommoments[band][param.name], transformed=False)
                 else:
                     model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], bands,
                                       fitsengine, paramflags['inherit'])
@@ -525,7 +559,7 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                 model.evaluate()
                 try:
                     fits = []
-                    dosecond = (len(model.sources[0].modelphotometric.components) > 1) or not usemodellibdefault
+                    dosecond = len(model.sources[0].modelphotometric.components) > 1 or not usemodellibdefault
                     if usemodellibdefault:
                         modellibopts = {
                             "algo": ("lbfgs" if modellib == "pygmo" else "L-BFGS-B") if dosecond else
@@ -535,8 +569,8 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                             modellibopts['options'] = {'maxfun': 1e4}
                     fit1, modeller = mpfutil.fitmodel(model, modellib=modellib, modellibopts=modellibopts,
                                                       printfinal=True, printsteps=100,
-                                                      plot=plot and not dosecond,
-                                                      figure=figure, axes=axes, figurerow=modelidx,
+                                                      plot=plot and not dosecond, plotmulti=plotmulti,
+                                                      figure=figures, axes=axeses, figurerow=modelidx,
                                                       flipplot=flipplot, modelname=modelname,
                                                       modelnameappendparams=modelnameappendparams
                                                       )
@@ -546,8 +580,9 @@ def fitgalaxy(imgs, psfs, sigmainverses, bands, modelspecs, masks={}, modellib=N
                             modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
                                 "Nelder-Mead"
                         fit2, _ = mpfutil.fitmodel(model, modeller, printfinal=True, printsteps=100,
-                                                   plot=plot, figure=figure, axes=axes, figurerow=modelidx,
-                                                   flipplot=flipplot, modelname=modelname,
+                                                   plot=plot, plotmulti=plotmulti, figure=figures,
+                                                   axes=axeses, figurerow=modelidx, flipplot=flipplot,
+                                                   modelname=modelname,
                                                    modelnameappendparams=modelnameappendparams)
                         fits.append(fit2)
                     fitsbyengine[engine][modelname] = {"fits": fits, "modeltype": modeltype}
@@ -647,6 +682,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
     scalehst = rgcfits[idcosmosgs]['PIXEL_SCALE']
     bandhst = rgcat.band[idcosmosgs]
     psfhst = rgcat.getPSF(idcosmosgs)
+    coaddshsc = None
     if "hsc" in srcs or "hst2hsc" in srcs:
         # Get the HSC dataRef
         spherePoint = geom.SpherePoint(radec[0], radec[1], geom.degrees)
@@ -658,8 +694,8 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
             "deepCoadd", dataId={"tract": 9813, "patch": patch, "filter": band})
             for band in set(hscbands + [bandref])}
         # Get the coadd
-        exposures = {key: dataRef.get("deepCoadd_calexp") for key, dataRef in dataRefs.items()}
-        scalehsc = exposures[bandref].getWcs().getPixelScale().asArcseconds()
+        coaddshsc = {key: dataRef.get("deepCoadd_calexp") for key, dataRef in dataRefs.items()}
+        scalehsc = coaddshsc[bandref].getWcs().getPixelScale().asArcseconds()
         # Get the measurements
         measCat = dataRefs[bandref].get("deepCoadd_meas")
         # Get and verify match
@@ -679,33 +715,32 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
     # This does all of the necessary setup for each src. It should persist somehow
     for src in srcs:
         srcname = src
-        # TODO: None of this actually works in multiband, which it should for HSC one day
         bands = [rgcat.band[idcosmosgs]] if src == "hst" else hscbands
         metadata = {"bands": bands}
-        masks = {}
+        exposures = {}
         if src == "hst":
-            imgs = {bands[0]: imghst}
-            psfsband = {bands[0]: psfhst}
-            sigmainverses = {bands[0]: np.array([np.power(rgcat.getNoiseProperties(idcosmosgs)[2], -0.5)])}
+            exposures[bands[0]] = mpfobj.Exposure(
+                bands[0], imghst.array,
+                sigmainverse=np.array([np.power(rgcat.getNoiseProperties(idcosmosgs)[2], -0.5)]))
+            psfimgs = {bands[0]: psfhst}
         elif src.startswith("hsc") or src == 'hst2hsc':
-            imgs = {}
-            psfsband = {band: exposures[band].getPsf() for band in hscbands}
-            sigmainverses = {}
-            for band in hscbands:
-                exposure = exposures[band]
-                psf = psfsband[band]
+            psfimgs = {band: coaddshsc[band].getPsf() for band in hscbands}
+            for band in bands:
+                coadd = coaddshsc[band]
+                psf = psfimgs[band]
                 scalehscpsf = psf.getWcs(0).getPixelScale().asArcseconds()
                 imgpsf = psf.computeImage().array
                 imgpsfgs = gs.InterpolatedImage(gs.Image(imgpsf, scale=scalehscpsf))
 
                 useNoiseReplacer = True
                 if useNoiseReplacer:
-                    noiseReplacer = rebuildNoiseReplacer(exposure, measCat)
+                    measCat = dataRefs[band].get("deepCoadd_meas")
+                    noiseReplacer = rebuildNoiseReplacer(coadd, measCat)
                     noiseReplacer.insertSource(idHsc)
                 cutouthsc = make_cutout.make_cutout_lsst(
-                    spherePoint, exposure, size=np.floor_divide(sizeCutout, 2))
+                    spherePoint, coadd, size=np.floor_divide(sizeCutout, 2))
                 idshsc = cutouthsc[4]
-                var = exposure.getMaskedImage().getVariance().array[
+                var = coadd.getMaskedImage().getVariance().array[
                       idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]]
 
                 if src == "hst2hsc":
@@ -745,7 +780,6 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                             modeltouse = hst2hscmodel
                         modeltype = fits[modeltouse]['modeltype']
                         srcname = "_".join([src, hst2hscmodel])
-                        # TODO: Store the name of the PyProFit model somewhere
                         # In fact there wasn't really any need to store a model since we
                         # can reconstruct it, but let's go ahead and use the unpickled one
                         paramsbest = fits[modeltouse]['fits'][-1]['paramsbestalltransformed']
@@ -755,6 +789,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                         scalefactor = scalehst / scalehsc
                         imghstshape = imghst.array.shape
                         # I'm pretty sure that these should all be converted to arcsec units
+                        # TODO: Verify above
                         for param, value in zip(modeltouse.getparameters(fixed=True), paramsbest):
                             param.setvalue(value, transformed=True)
                             valueset = param.getvalue(transformed=False)
@@ -774,7 +809,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                         # Save the GalSim model object
                         modeltouse.evaluate(keepmodels=True, getlikelihood=False, drawimage=False)
                         img = gs.Convolve(exposuremodel.meta['model'], imgpsfgs).drawImage(
-                            nx=sizeCutout, ny=sizeCutout, scale=scalehsc) * fluxscale
+                            nx=sizeCutout, ny=sizeCutout, scale=scalehsc).array * fluxscale
                         psf = imgpsfgs
 
                     noisetoadd = np.random.normal(scale=np.sqrt(var))
@@ -803,19 +838,17 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                     # mask = exposure.getMaskedImage().getMask()
                     # mask = mask.array[idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]]
                     if useNoiseReplacer:
-                        img = copy.deepcopy(exposure.maskedImage.image.array[idshsc[3]: idshsc[2],
-                                            idshsc[1]: idshsc[0]])
+                        img = copy.deepcopy(coadd.getMaskedImage().getImage().getArray()[
+                                                idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]])
                     else:
                         footprint = measCat[row].getFootprint()
                         # TODO: There is presumably a much better way of doing this
-                        img = copy.deepcopy(exposure.maskedImage.image)*0
-                        footprint.getSpans().copyImage(exposure.maskedImage.image, img)
+                        img = copy.deepcopy(coadd.maskedImage.image) * 0
+                        footprint.getSpans().copyImage(coadd.maskedImage.image, img)
                     psf = imgpsfgs
                     mask = img != 0
-                    img = gs.Image(img, scale=scalehsc)
-                imgs[band] = img
-                psfsband[band] = psf
-                sigmainverses[band] = 1.0 / np.sqrt(var)
+                exposures[band] = mpfobj.Exposure(band, img, sigmainverse=1.0/np.sqrt(var))
+                psfimgs[band] = psf
         else:
             raise RuntimeError('Unknown src ' + src)
 
@@ -835,14 +868,16 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
             npsfs = 0
             for psfmodeltype, _ in psfmodels:
                 npsfs += psfmodeltype != "empirical"
+            npsfs *= len(bands)
             if npsfs > 1:
                 figure, axes = plt.subplots(nrows=min([5, npsfs]), ncols=max([5, npsfs]))
                 psfrow = 0
-        for band, psf in psfsband.items():
+        for band, psf in psfimgs.items():
             if band not in psfs:
                 psfs[band] = {engine: {}}
             for psfmodeltype, ispsfpixelated in psfmodels:
                 psfname = psfmodeltype + ("_pixelated" if ispsfpixelated else "")
+                label = psfmodeltype + (" pix." if ispsfpixelated else "") + " PSF"
                 if psfmodeltype == "empirical":
                     # TODO: Check if this works
                     psfs[band][engine][psfname] = {'object': mpfobj.PSF(
@@ -855,7 +890,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                             print('Fitting PSF model {}'.format(psfname))
                         psfs[band] = fitpsf(
                             psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
-                            psfmodelfits=psfs[band], plot=plot, modelname=psfname, title=fitname,
+                            psfmodelfits=psfs[band], plot=plot, modelname=psfname, label=label, title=fitname,
                             figaxes=(figure, axes), figurerow=psfrow, redo=redo)
                         if redo or 'object' not in psfs[band][engine][psfname]:
                             psfs[band][engine][psfname]['object'] = mpfobj.PSF(
@@ -866,17 +901,18 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                             psfrow += 1
         fitsbyengine = None if 'fits' not in results[srcname] else results[srcname]['fits']
         models = None if 'models' not in results[srcname] else results[srcname]['models']
+        exposurespsfs = [(exposures[band], psfs[band]) for band in bands]
         fits, models = fitgalaxy(
-            imgs=imgs, psfs=psfs, sigmainverses=sigmainverses, masks=masks, bands=bands,
-            modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
+            exposurespsfs, modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
             fitsbyengine=fitsbyengine, redo=redo)
         if resetimages:
             for band, psfsband in psfs.items():
                 if engine in psfsband:
                     for psfmodeltype, psf in psfsband[engine].items():
-                        mpfutil.setexposure(psf['modeller'].model, band, "empty")
+                        mpfutil.setexposure(psf['modeller'].model, band, image='empty')
             for modelname, model in models.items():
-                mpfutil.setexposure(model, band, "empty")
+                for band in bands:
+                    mpfutil.setexposure(model, band, image='empty')
             for engine, modelfitinfo in fits.items():
                 for modelname, modelfits in modelfitinfo.items():
                     if 'fits' in modelfits:

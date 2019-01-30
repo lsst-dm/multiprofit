@@ -174,17 +174,30 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
     return param
 
 
-# TODO: Should work multi-band as well
-def getcomponents(profile, bands, fluxfracs, values={}, istransformedvalues=False):
-    fluxfracs = np.array(fluxfracs)
-    sumfluxfracs = np.sum(fluxfracs)
-    if any(np.logical_not(fluxfracs > 0)) or not sumfluxfracs < 1:
-        raise RuntimeError('fluxfracs={} has elements not > 0 or sum {} < 1'.format(fluxfracs, sumfluxfracs))
-    if len(fluxfracs) == 0:
-        fluxfracs = np.ones(1)
-    else:
-        fluxfracs /= np.concatenate([np.array([1.0]), 1-np.cumsum(fluxfracs[:-1])])
-        fluxfracs = np.append(fluxfracs, 1)
+# TODO: Think about whether this should work with a dict of fluxfracs by band (and how)
+def getcomponents(profile, fluxfracs, values={}, istransformedvalues=False):
+    bands = list(fluxfracs.keys())
+    bandref = bands[0]
+    for band in bands:
+        fluxfracsband = fluxfracs[band]
+        fluxfracsband = np.array(fluxfracsband)
+        sumfluxfracsband = np.sum(fluxfracsband)
+        if any(np.logical_not(fluxfracsband > 0)) or not sumfluxfracsband < 1:
+            raise RuntimeError('fluxfracsband={} has elements not > 0 or sum {} < 1'.format(
+                fluxfracsband, sumfluxfracsband))
+        if len(fluxfracsband) == 0:
+            fluxfracsband = np.ones(1)
+        else:
+            fluxfracsband /= np.concatenate([np.array([1.0]), 1-np.cumsum(fluxfracsband[:-1])])
+            fluxfracsband = np.append(fluxfracsband, 1)
+        fluxfracs[band] = fluxfracsband
+        ncompsband = len(fluxfracs[band])
+        if band == bandref:
+            ncomps = ncompsband
+        elif ncompsband != ncomps:
+            raise RuntimeError('getcomponents for profile {} has ncomps[{}]={} != ncomps[{}]={}'.format(
+                profile, ncompsband, band, ncomps, bandref
+            ))
     components = []
     isgaussian = profile == "gaussian"
     ismultigaussiansersic = profile.startswith('mgsersic')
@@ -196,12 +209,11 @@ def getcomponents(profile, bands, fluxfracs, values={}, istransformedvalues=Fals
         if 'nser' in values:
             values['nser'] = np.zeros_like(values['nser'])
 
-    ncomps = len(fluxfracs)
-    for compi, fluxfrac in enumerate(fluxfracs):
+    for compi in range(ncomps):
         islast = compi == (ncomps - 1)
         paramfluxescomp = [
             proobj.FluxParameter(
-                band, "flux", special.logit(fluxfrac), None, limits=limitsref["none"],
+                band, "flux", special.logit(fluxfracs[band][compi]), None, limits=limitsref["none"],
                 transform=transformsref["logit"], fixed=islast, isfluxratio=True)
             for band in bands
         ]
@@ -225,7 +237,7 @@ def getmodel(
     fluxesbyband, modelstr, imagesize, sizes=None, axrats=None, angs=None, slopes=None, fluxfracs=None,
     offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False
 ):
-    bands = fluxesbyband.keys()
+    bands = list(fluxesbyband.keys())
     modelstrs = modelstr.split(",")
 
     profiles = {}
@@ -247,6 +259,7 @@ def getmodel(
     except Exception as error:
         raise error
 
+    # TODO: Figure out how this should work in multiband
     cenx, ceny = [x / 2.0 for x in imagesize]
     if offsetxy is not None:
         cenx += offsetxy[0]
@@ -255,8 +268,8 @@ def getmodel(
         exposures = []
         for band in bands:
             for _ in range(nexposures):
-                exposures.append(proobj.Exposure(band, image=np.zeros(shape=imagesize), maskinverse=None,
-                                                 sigmainverse=None))
+                exposures.append(proobj.Exposure(band, image=np.zeros(shape=imagesize),
+                                                 maskinverse=None, sigmainverse=None))
         data = proobj.Data(exposures)
     else:
         data = None
@@ -276,6 +289,9 @@ def getmodel(
     compnum = 0
     for profile, nprofiles in profiles.items():
         comprange = range(compnum, compnum + nprofiles)
+        # TODO: Review whether this should change to support band-dependent fluxfracs
+        fluxfracscomp = [fluxfracs[i] for i in comprange][:-1]
+        fluxfracscomp = {band: fluxfracscomp for band in bands}
         if profile == "gaussian":
             for compi in comprange:
                 if sizes[compi] is not None:
@@ -288,8 +304,7 @@ def getmodel(
         if not profile == "lux" or profile == "luv":
             values["slope"] = slopes[comprange]
 
-        components += getcomponents(profile, bands, [fluxfracs[i] for i in comprange][:-1], values,
-                                    istransformedvalues)
+        components += getcomponents(profile, fluxfracscomp, values, istransformedvalues)
         compnum += nprofiles
 
     paramfluxes = [proobj.FluxParameter(
@@ -314,8 +329,8 @@ def getchisqred(chis):
 
 
 # Convenience function to evaluate a model and make a reasonable plot of it if desired
-def evaluatemodel(model, params, plot=False, modelname=None, figure=None, title=None, axes=None,
-                  figurerow=None, modelnameappendparams=None, flipplot=False):
+def evaluatemodel(model, params, plot=False, plotmulti=False, modelname=None, figure=None, title=None,
+                  axes=None, figurerow=None, modelnameappendparams=None, flipplot=False):
     if plot:
         modeldesc = None
         if modelnameappendparams is not None:
@@ -337,7 +352,7 @@ def evaluatemodel(model, params, plot=False, modelname=None, figure=None, title=
             modeldesc = modeldesc[:-1]
     else:
         modeldesc = None
-    _, _, chis, _ = model.evaluate(params=params, plot=plot, modelname=modelname,
+    _, _, chis, _ = model.evaluate(params=params, plot=plot, plotmulti=plotmulti, modelname=modelname,
                                    modeldesc=modeldesc, figure=figure, axes=axes, figurerow=figurerow,
                                    flipplot=flipplot)
 
@@ -375,10 +390,11 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
 
 # Convenience function to set an exposure object with optional defaults for the sigma (variance) map
 # Can be used to nullify an exposure before saving to disk, for example
-def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None, meta=None, factorsigma=1):
+def setexposure(model, band, index=0, image=None, sigmainverse=None, psf=None, mask=None, meta=None,
+                factorsigma=1):
     if band not in model.data.exposures:
         model.data.exposures[band] = [proobj.Exposure(band=band, image=None)]
-    exposure = model.data.exposures[band][0]
+    exposure = model.data.exposures[band][index]
     imageisempty = image is "empty"
     exposure.image = image if not imageisempty else ImageEmpty(exposure.image.shape)
     if imageisempty:
@@ -398,23 +414,48 @@ def setexposure(model, band, image=None, sigmainverse=None, psf=None, mask=None,
 # TODO: Figure out multi-band operation here
 # Get Gaussian component objects from profiles that are multi-Gaussian approximations (to e.g. Sersic)
 # ncomponents is an array of ints specifying the number of Gaussian components in each physical component
-def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
-    band = list(profiles[0].keys())[0]
+def getmultigaussians(profiles, paramsinherit=None, ncomponents=None, fluxfracmin=1e-4):
+    bands = set()
+    if not 0 <= fluxfracmin < 1:
+        raise ValueError('Invalid fluxfracmin not 0 <= {} < 1'.format(fluxfracmin))
+    for profile in profiles:
+        for band in profile.keys():
+            bands.add(band)
+    bands = list(bands)
+    bandref = bands[0]
     params = ['mag', 're', 'axrat', 'ang', 'nser']
-    values = {
-        'size' if name == 're' else 'slope' if name == 'nser' else name:
-            np.array([profile[band][name] for profile in profiles])
-        for name in params
-    }
+    fluxfracs = {}
+    values = {}
+    samefluxfracs = ncomponents is None or len(ncomponents) == 1
+    for band in bands:
+        values[band] = {
+            'size' if name == 're' else 'slope' if name == 'nser' else name:
+                [profile[band][name] for profile in profiles]
+            for name in params
+        }
+        fluxfracs[band] = 10 ** (-0.4 * np.array(values[band]['mag']))
+        if fluxfracmin > 0:
+            fluxfracs[band] /= np.sum(fluxfracs[band])
+            fluxfracs[band][fluxfracs[band] < fluxfracmin] = fluxfracmin
+        fluxfracs[band] /= np.sum(fluxfracs[band])
+        fluxfracs[band] = fluxfracs[band][:-1]
+        del values[band]['mag']
+        if samefluxfracs:
+            isclosefluxfracs = np.isclose(fluxfracs[band], fluxfracs[bandref], rtol=0, atol=1e-12)
+            if not np.all(isclosefluxfracs):
+                raise RuntimeError(
+                    'isclosefluxfracs={} so fluxfracs[{}]={} != fluxfracs[{}]={}; '
+                    'band-dependent fluxfracs unsupported'.format(
+                        isclosefluxfracs, band, fluxfracs[band], bandref, fluxfracs[bandref]))
+        if not values[band] == values[bandref]:
+            raise RuntimeError('values[{}]={} != values[{}]={}; band-dependent values unsupported'.format(
+                band, values[band], bandref, values[bandref]))
 
-    fluxfracs = 10**(-0.4*values['mag'])
-    fluxfracs /= np.sum(fluxfracs)
-    fluxfracs = fluxfracs[:-1]
-
-    del values['mag']
+    # Comparing dicts above is easier with list elements but we want np arrays in the end
+    values = {key: np.array(value) for key, value in values[band].items()}
 
     # These are the Gaussian components
-    componentsgauss = getcomponents('gaussian', [band], fluxfracs=fluxfracs, values=values)
+    componentsgauss = getcomponents('gaussian', fluxfracs, values=values)
     ncomponentsgauss = len(componentsgauss)
     if paramsinherit is not None and ncomponentsgauss > 1:
         if ncomponents is None:
