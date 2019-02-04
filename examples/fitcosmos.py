@@ -1024,7 +1024,7 @@ if __name__ == '__main__':
         from lsst.meas.base import (SingleFrameMeasurementConfig,
                                     SingleFrameMeasurementTask)
         tract = 9813
-        butler = dafPersist.Butler("/datasets/hsc/repo/rerun/RC/w_2018_30/DM-15120/")
+        butler = dafPersist.Butler('/datasets/hsc/repo/rerun/RC/w_2019_02/DM-16110/')
         dataId = {"tract": tract}
         skymap = butler.get("deepCoadd_skyMap", dataId=dataId)
     if args.fithsc:
