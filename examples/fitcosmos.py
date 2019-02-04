@@ -35,6 +35,8 @@ import scipy.optimize as spopt
 import sys
 import traceback
 
+from collections import OrderedDict
+
 import multiprofit.objects as mpfobj
 import multiprofit.util as mpfutil
 
@@ -81,14 +83,10 @@ def getellipseestimate(img, denoise=True):
     return axrat, ang, np.sqrt(evals[idxevalmax]/np.sum(flux))
 
 
-def isfluxratio(param):
-    return isinstance(param, mpfobj.FluxParameter) and param.isfluxratio
-
-
 def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainverse=None, factorsigma=1):
     model = mpfutil.getmodel({band: 1}, psfmodel, np.flip(psfimage.shape, axis=0),
                              8.0 * 10 ** ((np.arange(numcomps) - numcomps / 2) / numcomps),
-                             np.repeat(0.8, numcomps),
+                             np.repeat(0.95, numcomps),
                              np.linspace(start=0, stop=180, num=numcomps + 2)[1:(numcomps + 1)],
                              engine=engine, engineopts=engineopts)
     for param in model.getparameters(fixed=False):
@@ -158,7 +156,9 @@ def initmodelfrommodelfits(model, modelfits):
     # TODO: Move to utils as a generic init model from other model(s) method
     chisqreds = [value['chisqred'] for value in modelfits]
     modelbest = chisqreds.index(min(chisqreds))
-    print('Initializing from best model=' + modelfits[modelbest]['name'])
+    fluxfracs = 1./np.array(chisqreds)
+    fluxfracs = fluxfracs/np.sum(fluxfracs)
+    print('Initializing from best model={} w/fluxfracs: {}'.format(modelfits[modelbest]['name'], fluxfracs))
     paramtreebest = modelfits[modelbest]['paramtree']
     fluxcensinit = paramtreebest[0][1][0] + paramtreebest[0][0]
     # Get fluxes and components for init
@@ -184,8 +184,7 @@ def initmodelfrommodelfits(model, modelfits):
     fluxcomps = paramssrc[1]
     fluxcens = fluxcomps[0] + paramssrc[0]
     comps = [comp for comp in fluxcomps[1:len(fluxcomps)]]
-    # Check if fluxcens all length three with a total flux parameter and two centers named
-    #  cenx and ceny
+    # Check if fluxcens all length three with a total flux parameter and two centers named cenx and ceny
     # TODO: More informative errors; check fluxesinit
     bands = set([flux.band for flux in fluxesinit])
     nbands = len(bands)
@@ -217,11 +216,15 @@ def initmodelfrommodelfits(model, modelfits):
     for idxcomp, (compset, compinit) in enumerate(zip(comps, compsinit)):
         if len(compset) != len(compinit):
             # TODO: More informative error plz
-            raise RuntimeError("Comps not same length")
+            raise RuntimeError(
+                '[len(compset)={}, len(compinit)={}, len(fluxfracs)={}] not identical'.format(
+                    len(compset), len(compinit), len(fluxfracs)
+                ))
         for paramset, (paraminit, value) in zip(compset, compinit):
             if isinstance(paramset, mpfobj.FluxParameter):
-                # TODO: Should this be checked? Eventually we should override it smartly
-                ratio = paramset.getvalue(transformed=False)
+                if not paramset.isfluxratio:
+                    raise RuntimeError('Component flux parameter is not ratio')
+                paramset.setvalue(fluxfracs[idxcomp], transformed=False)
             else:
                 if type(paramset) != type(paraminit):
                     # TODO: finish this
@@ -275,7 +278,6 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
                 raise RuntimeError("Model {} can't find reference {} "
                                    "to initialize from".format(modeltype, inittype))
     if inittype and 'fits' in fitsengine[inittype]:
-        print('Initializing from best model=' + inittype)
         paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
         # TODO: Find a more elegant method to do this
         inittypesplit = fitsengine[inittype]['modeltype'].split(':')
@@ -290,7 +292,11 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
             ncomponents = np.repeat(np.int(inittypesplit[0].split('mgsersic')[1]), inittypesplit[1])
             modelnew = model
             model = models[fitsengine[inittype]['modeltype']]
+        print('Initializing from best model=' + inittype +
+              ' (MGA to {} GMM)'.format(ncomponents) if ismgtogauss else '')
         for i in range(1+ismgtogauss):
+            if ismgtogauss:
+                print('Paramvalsinit:', paramvalsinit)
             paramsall = model.getparameters(fixed=True)
             if len(paramvalsinit) != len(paramsall):
                 raise RuntimeError('len(paramvalsinit)={} != len(params)={}'.format(
@@ -303,6 +309,8 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
                 if ismgtogauss and param.name == 'nser' and value <= 0.55:
                     value = 0.55
                 param.setvalue(value, transformed=False)
+            if ismgtogauss:
+                print('Param vals:', [param.getvalue(transformed=False) for param in model.getparameters()])
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if ismgtogauss and i == 0:
@@ -323,9 +331,10 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
 
 
 # Engine is galsim; TODO: add options
-def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
-              fitsbyengine=None, redo=True,
-              ):
+def fitgalaxy(
+        exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
+        fitsbyengine=None, redo=True,
+):
     """
 
     :param exposurepsfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
@@ -345,10 +354,11 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
         models: dict; key=model name: value=mpfobj.Model
         psfmodels: dict: TBD
     """
-    bands = set()
-    initfrommoments = {}
+    bands = OrderedDict()
     fluxes = {}
     npiximg = None
+    paramnamesmomentsinit = ["axrat", "ang", "re"]
+    initfrommoments = {paramname: 0 for paramname in paramnamesmomentsinit}
     for exposure, _ in exposurespsfs:
         band = exposure.band
         imgarr = exposure.image
@@ -358,14 +368,22 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
         elif npiximgexp != npiximg:
             'fitgalaxy exposure image shape={} not same as first={}'.format(npiximgexp, npiximg)
         if band not in bands:
-            initfrommoments[band] = {
-                name: value for name, value in zip(["axrat", "ang", "re"], getellipseestimate(imgarr))
-            }
-            bands.add(exposure.band)
+            for paramname, value in zip(paramnamesmomentsinit, getellipseestimate(imgarr)):
+                # TODO: Find a way to average/median angles without annoying periodicity problems
+                # i.e. average([1, 359]) = 180
+                # Obvious solution is to convert to another parameterization like covariance, etc.
+                if paramname == 'ang':
+                    initfrommoments[paramname] = value
+                else:
+                    initfrommoments[paramname] += value**2
+            bands[exposure.band] = None
         # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
         fluxes[band] = np.sum(imgarr[exposure.maskinverse] if exposure.maskinverse is not None else imgarr)
     npiximg = np.flip(npiximg, axis=0)
-    print("Bands:", bands)
+    for paramname in initfrommoments:
+        if paramname != 'ang':
+            initfrommoments[paramname] = np.sqrt(initfrommoments[paramname]/len(bands))
+    print('Bands:', bands, 'Moment init.:', initfrommoments)
     engine = 'galsim'
     engines = {
         engine: {
@@ -376,11 +394,10 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
     title = name if plot else None
 
     valuesmax = {
-        band: {
-            "re": np.sqrt(np.sum((npiximg/2.)**2)),
-            "flux": 10*fluxes[band],
-        } for band in bands
+       "re": np.sqrt(np.sum((npiximg/2.)**2)),
     }
+    for band in bands:
+        valuesmax["flux_" + band] = 10 * fluxes[band]
     models = {} if (models is None) else models
     paramsfixeddefault = {}
     fitsbyengine = {} if ((models is None) or (fitsbyengine is None)) else fitsbyengine
@@ -436,27 +453,18 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
                 if plot:
                     valuesbest = fitsengine[modelname]['fits'][-1]['paramsbestalltransformed']
                     # TODO: consider how to avoid code repetition here and below
-                    modeldescs = {x: [] for x in ['f', 'n', 'r']}
-                    formats = {x: '{:.1f}' if x == 'r' else '{:.2f}' for x in ['f', 'n', 'r']}
+                    modelnameappendparams = []
                     for param, value in zip(model.getparameters(fixed=True), valuesbest):
                         param.setvalue(value, transformed=True)
-                        if param.name == "nser":
-                            modeldescs['n'].append(param)
-                        elif param.name == "re":
-                            modeldescs['r'].append(param)
-                        elif isfluxratio(param) and param.getvalue(transformed=False) < 1:
-                            modeldescs['f'].append(param)
-                    for key in ['n', 'r', 'f']:
-                        if len(modeldescs[key]) > 3:
-                            del modeldescs[key]
-                    modeldescs = [paramname + '=' + ','.join(
-                        [formats[paramname] .format(param.getvalue(transformed=False)) for param in params])
-                        for paramname, params in modeldescs.items() if params]
-                    modeldescs = ';'.join(modeldescs)
+                        if (param.name == "nser" and (
+                                not param.fixed or param.getvalue(transformed=False) != 0.5)) or \
+                            param.name == "re" or (mpfutil.isfluxratio(param) and param.getvalue(
+                                transformed=False) < 1):
+                            modelnameappendparams += [('{:.2f}', param)]
                     if title is not None:
                         plt.suptitle(title)
                     model.evaluate(
-                        plot=plot, modelname=modelname, modeldesc=modeldescs if modeldescs else None,
+                        plot=plot, modelname=modelname, modelnameappendparams=modelnameappendparams,
                         figure=figures, axes=axeses, figurerow=modelidx, flipplot=flipplot,
                         plotmulti=plotmulti)
                     plt.show(block=False)
@@ -483,9 +491,8 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
                 if inittype == 'moments':
                     print('Initializing from moments')
                     for param in model.getparameters(fixed=False):
-                        for band in bands:
-                            if param.name in initfrommoments[band]:
-                                param.setvalue(initfrommoments[band][param.name], transformed=False)
+                        if param.name in initfrommoments:
+                            param.setvalue(initfrommoments[param.name], transformed=False)
                 else:
                     model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], bands,
                                       fitsengine, paramflags['inherit'])
@@ -499,8 +506,10 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
                 # Now actually apply the overrides and the hardcoded maxima
                 timesmatched = {}
                 for param in model.getparameters(fixed=True):
-                    paramname = param.name if not isinstance(param, mpfobj.FluxParameter) else \
-                        'flux' + 'ratio' if param.isfluxratio else ''
+                    isflux = isinstance(param, mpfobj.FluxParameter)
+                    isfluxrat = mpfutil.isfluxratio(param)
+                    paramname = param.name if not isflux else (
+                            'flux' + ('ratio' if isfluxrat else '') + '_' + param.band)
                     if paramname in paramflags["fixed"]:
                         param.fixed = True
                     if paramname in paramflags["init"]:
@@ -512,23 +521,19 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
                         param.setvalue(paramflags["init"][paramname][idxparaminit],
                                        transformed=False)
                         timesmatched[paramname] += 1
-                    isfluxrat = isfluxratio(param)
                     if plot and not param.fixed:
-                        if paramname == "nser":
-                            modelnameappendparams += [("n={:.2f}", param)]
-                        elif isfluxrat:
-                            modelnameappendparams += [("f={:.2f}", param)]
+                        if paramname == "nser" or isfluxrat:
+                            modelnameappendparams += [('{:.2f}', param)]
                     # Try to set a hard limit on params that need them with a logit transform
                     # This way even methods that don't respect bounds will have to until the transformed
                     # value reaches +/-inf, at least
-                    valuesmaxband = valuesmax[band]
-                    if paramname in valuesmaxband and not isfluxrat:
+                    if paramname in valuesmax:
+                        valuemax = valuesmax[paramname]
                         # Most scipy algos ignore limits, so we need to restrict the range manually
                         if modellib == 'scipy':
-                            factor = 1/fluxes[band] if param.name == 'flux' else 1
-                            value = np.min([param.getvalue(transformed=False), valuesmaxband[paramname]])
-                            param.transform = mpfutil.getlogitlimited(0, valuesmaxband[paramname],
-                                                                      factor=factor)
+                            factor = 1/fluxes[param.band] if isflux else 1
+                            value = np.min([param.getvalue(transformed=False), valuemax])
+                            param.transform = mpfutil.getlogitlimited(0, valuemax, factor=factor)
                             param.setvalue(value, transformed=False)
                         else:
                             transform = param.transform.transform
@@ -593,9 +598,12 @@ def fitgalaxy(exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=
                     print(trace)
                     fitsbyengine[engine][modelname] = e, trace
     if plot:
-        plt.show(block=False)
-        plt.tight_layout()
-        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+        if len(bands) > 1:
+            for figure in figures.values():
+                plt.figure(figure.number)
+                plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
+        else:
+            plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
         plt.show(block=False)
 
     return fitsbyengine, models
@@ -736,6 +744,9 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                 if useNoiseReplacer:
                     measCat = dataRefs[band].get("deepCoadd_meas")
                     noiseReplacer = rebuildNoiseReplacer(coadd, measCat)
+                    print('noiseReplacer band={} seedMult={}, mean+/-std={:4f}+/-{:4f}'.format(
+                        band, noiseReplacer.noiseSeedMultiplier, noiseReplacer.noiseGenMean,
+                        noiseReplacer.noiseGenStd))
                     noiseReplacer.insertSource(idHsc)
                 cutouthsc = make_cutout.make_cutout_lsst(
                     spherePoint, coadd, size=np.floor_divide(sizeCutout, 2))
@@ -747,7 +758,8 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                     # The COSMOS GalSim catalog is in the original HST frame, which is rotated by
                     # 10-12 degrees from RA/Dec axes; fit for this
                     result, anglehst, offsetxhst, offsetyhst = fitcosmosgalaxytransform(
-                        radec[0], radec[1], imghst, imgpsfgs, sizeCutout, cutouthsc[0], var, scalehsc, plot=plot
+                        radec[0], radec[1], imghst, imgpsfgs, sizeCutout, cutouthsc[0], var, scalehsc,
+                        plot=plot
                     )
                     fluxscale = (10 ** result.x[0])
                     metadata["lenhst2hsc"] = scalehst/scalehsc
@@ -891,7 +903,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                         psfs[band] = fitpsf(
                             psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
                             psfmodelfits=psfs[band], plot=plot, modelname=psfname, label=label, title=fitname,
-                            figaxes=(figure, axes), figurerow=psfrow, redo=redo)
+                            figaxes=(figure, axes), figurerow=psfrow, redo=refit)
                         if redo or 'object' not in psfs[band][engine][psfname]:
                             psfs[band][engine][psfname]['object'] = mpfobj.PSF(
                                 band=band, engine=engine,
@@ -899,6 +911,8 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                                 modelpixelated=ispsfpixelated)
                         if plot and psfrow is not None:
                             psfrow += 1
+        if plot:
+            plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
         fitsbyengine = None if 'fits' not in results[srcname] else results[srcname]['fits']
         models = None if 'models' not in results[srcname] else results[srcname]['models']
         exposurespsfs = [(exposures[band], psfs[band]) for band in bands]

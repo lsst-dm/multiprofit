@@ -130,6 +130,10 @@ def truncnormlogpdfmean(x, mean=0., scale=1., a=-np.inf, b=np.inf):
     return stats.truncnorm.logpdf(x - mean, scale=scale, a=a, b=b)
 
 
+def isfluxratio(param):
+    return isinstance(param, proobj.FluxParameter) and param.isfluxratio
+
+
 def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransformed=False,
                     sersiclogit=True, ismultigauss=False):
     transform = transformsref["none"]
@@ -330,37 +334,15 @@ def getchisqred(chis):
 
 # Convenience function to evaluate a model and make a reasonable plot of it if desired
 def evaluatemodel(model, params, plot=False, plotmulti=False, modelname=None, figure=None, title=None,
-                  axes=None, figurerow=None, modelnameappendparams=None, flipplot=False):
-    if plot:
-        modeldesc = None
-        if modelnameappendparams is not None:
-            modeldesc = ""
-            modeldescs = {}
-            for formatstring, param in modelnameappendparams:
-                if '=' not in formatstring:
-                    paramname = param.name
-                    value = formatstring
-                else:
-                    paramname, value = formatstring.split('=')
-                if paramname not in modeldescs:
-                    modeldescs[paramname] = []
-                modeldescs[paramname].append(value.format(param.getvalue(transformed=False)))
-
-            for paramname, values in modeldescs.items():
-                modeldesc += paramname + ':' + ','.join(values) + ';'
-            # Remove the trailing colon
-            modeldesc = modeldesc[:-1]
-    else:
-        modeldesc = None
+                  axes=None, figurerow=None, modeldesc=None, modelnameappendparams=None, flipplot=False):
     _, _, chis, _ = model.evaluate(params=params, plot=plot, plotmulti=plotmulti, modelname=modelname,
-                                   modeldesc=modeldesc, figure=figure, axes=axes, figurerow=figurerow,
-                                   flipplot=flipplot)
+                                   modeldesc=modeldesc, modelnameappendparams=modelnameappendparams,
+                                   figure=figure, axes=axes, figurerow=figurerow, flipplot=flipplot)
 
     if plot:
         if title is not None:
             plt.suptitle(title)
         plt.show(block=False)
-
     return chis
 
 

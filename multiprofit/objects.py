@@ -67,7 +67,8 @@ def magtoflux(x):
 
 class Exposure:
     """
-        A class to hold an image, sigma map, bad pixel mask and reference to a PSF model/image
+        A class to hold an image, sigma map, bad pixel mask and reference to a PSF model/image.
+        TODO: Decide whether this should be mutable and implement getters/setters if so; or use afw class
     """
     def __init__(self, band, image, maskinverse=None, sigmainverse=None, psf=None, calcinvmask=None,
                  meta=None):
@@ -236,14 +237,133 @@ class Model:
 
     @classmethod
     def _checkengine(cls, engine):
-        if engine not in Model.ENGINES:
+        if engine not in cls.ENGINES:
             raise ValueError("Unknown Model rendering engine {:s}".format(engine))
+
+    @classmethod
+    def _labelfigureaxes(cls, axes, chisqred, modelname='Model', modeldesc=None, labelimg='Image',
+                         isfirstmodel=False, islastmodel=False, flipplot=False):
+        (axes[0].set_title if flipplot else axes[0].set_ylabel)(labelimg)
+        # Check if the modelname is informative as it's redundant otherwise
+        if modelname != "Model":
+            (axes[1].set_title if flipplot else axes[1].set_ylabel)(modelname)
+        if modeldesc is not None:
+            (axes[2].set_title if flipplot else axes[2].set_ylabel)(modeldesc)
+        labelchisq = r'$\chi^{2}_{\nu}$' + '={:.3f}'.format(chisqred)
+        (axes[3].set_title if flipplot else axes[3].set_ylabel)(labelchisq)
+        axes[4].set_xlabel(r'$\chi=$(Data-Model)/$\sigma$')
+        if flipplot:
+            # TODO: What to do here?
+            if not (isfirstmodel or islastmodel):
+                for i in range(1, 5):
+                    axes[i].tick_params(labelleft=False)
+            if islastmodel:
+                for i in range(1, 5):
+                    axes[i].yaxis.tick_right()
+                    axes[i].yaxis.set_label_position('right')
+        else:
+            axes[4].yaxis.tick_right()
+            for i in range(1, 5):
+                if i != 4:
+                    axes[i].set_yticklabels([])
+                axes[i].yaxis.set_label_position('right')
+                if not islastmodel:
+                    axes[i].set_xticklabels([])
+        if isfirstmodel:
+            labels = ["Data", "Model", "sign(D-M)*log10(abs(D-M))", r'$\chi=$(Data-Model)/$\sigma$ (-5:5)',
+                      'PDF']
+            for axis, label in enumerate(labels):
+                (axes[axis].set_ylabel if flipplot or axis == 4 else axes[axis].set_title)(label)
+
+    @classmethod
+    def _plotexposurescolor(cls, images, modelimages, chis, chiimgs, chiclips, figaxes, bands=None,
+                            bandstring=None, modelname='Model', modeldesc=None, modelnameappendparams=None,
+                            isfirstmodel=True, islastmodel=True, flipplot=False):
+        if bands is None:
+            bands = []
+        if bandstring is None:
+            bandstring = ','.join(bands) if bands is not None else ''
+        if modelnameappendparams is not None:
+            if modeldesc is None:
+                modeldesc = ''
+            modeldesc += Model._formatmodelparams(modelnameappendparams, bands)
+        # TODO: verify lengths
+        axes = figaxes[1]
+        shapeimg = images[0].shape
+        for i, imagesbytype in enumerate([images, modelimages]):
+            rgb = np.zeros(shapeimg + (0,))
+            for image in imagesbytype:
+                rgb = np.append(rgb, image.reshape(shapeimg + (1,)), axis=2)
+            axes[i].imshow(np.flip(rgb, axis=2), origin="bottom")
+        (axes[0].set_title if flipplot else axes[0].set_ylabel)(bandstring)
+        rgb = np.zeros(shapeimg + (0,))
+        for image in chiimgs:
+            rgb = np.append(rgb, image.reshape(shapeimg + (1,)), axis=2)
+        # The difference map
+        axes[2].imshow(np.flip(rgb, axis=2), origin="bottom")
+        # Check if the modelname is informative as it's redundant otherwise
+        if modelname != "Model":
+            (axes[1].set_title if flipplot else axes[1].set_ylabel)(modelname)
+        if modeldesc is not None:
+            (axes[2].set_title if flipplot else axes[2].set_ylabel)(modeldesc)
+        # The chi (data-model)/error map clipped at +/- 5 sigma
+        rgb = np.zeros(shapeimg + (0,))
+        for image in chiclips:
+            rgb = np.append(rgb, image.reshape(shapeimg + (1,)), axis=2)
+        axes[3].imshow(np.flip(rgb, axis=2), origin="bottom")
+        # Residual histogram compared to a normal distribution
+        chi = np.array([])
+        for chiband in chis:
+            chi = np.append(chi, chiband)
+        nbins = np.max([100, np.int(np.round(np.sum(~np.isnan(chi))/300))])
+        sns.distplot(chi[~np.isnan(chi)], bins=nbins, ax=axes[4],
+                     hist_kws={"log": True, "histtype": "step"},
+                     kde_kws={"kernel": "tri", "gridsize": nbins/2}).set(
+            xlim=(-5, 5), ylim=(1e-4, 1)
+        )
+        # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
+        x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
+        axes[4].plot(x, spstats.norm.pdf(x))
+        chisqred = (np.sum(chi ** 2) / len(chi))
+        Model._labelfigureaxes(axes, chisqred, modelname=modelname, modeldesc=modeldesc,
+                               labelimg=bandstring, isfirstmodel=isfirstmodel, islastmodel=islastmodel,
+                               flipplot=flipplot)
+
+    # Takes an iterable of tuples of formatstring, param and returns a sensibly formatted summary string
+    # TODO: Should probably be tuples of param, formatstring
+    # TODO: Add options for the definition of 'sensibly formatted'
+    @classmethod
+    def _formatmodelparams(cls, modelparamsformat, bands=None):
+        if bands is None:
+            bands = {}
+        modeldescs = {}
+        paramdescs = {'nser': 'n', 'reff': 'r'}
+        for formatstring, param in modelparamsformat:
+            isflux = isinstance(param, FluxParameter)
+            isfluxratio = isflux and param.isfluxratio
+            if '=' not in formatstring:
+                paramname = 'f' if isfluxratio else (
+                    paramdescs[param.name] if param.name in paramdescs else param.name)
+                value = formatstring
+            else:
+                paramname, value = formatstring.split('=')
+            if paramname not in modeldescs:
+                modeldescs[paramname] = []
+            if not isfluxratio or not param.fixed and param.band in bands:
+                modeldescs[paramname].append(value.format(param.getvalue(transformed=False)))
+        # Show the flux ratio if there is only one (otherwise it's painful to work out)
+        # Show other parameters if there <= 3 of them otherwise the string is too long
+        # TODO: Make a more elegant solution for describing models
+        modeldesc = ';'.join(
+            [paramname + ':' + ','.join(values) for paramname, values in modeldescs.items()
+             if len(values) <= (1 + 2 * (paramname != 'f'))])
+        return modeldesc
 
     def evaluate(self, params=None, data=None, bands=None, engine=None, engineopts=None,
                  paramstransformed=True, getlikelihood=True, likelihoodlog=True, keeplikelihood=False,
                  likelihoodonly=False, keepimages=False, keepmodels=False, plot=False,
                  plotmulti=False, figure=None, axes=None, figurerow=None, modelname="Model", modeldesc=None,
-                 drawimage=True, scale=1, clock=False, flipplot=False):
+                 modelnameappendparams=None, drawimage=True, scale=1, clock=False, flipplot=False):
         """
             Get the likelihood and/or model images
         """
@@ -352,17 +472,17 @@ class Model:
                                 figaxes = (figure[band], axes[band][figurerow])
                             else:
                                 figaxes = (figure, axes[figurerow])
-                            istoprow = figurerow is None or figurerow == 0
-                            isbottomrow = figurerow is None or axes is None or ((figurerow + 1) == nrows)
+                            isfirstmodel = figurerow is None or figurerow == 0
+                            islastmodel = figurerow is None or axes is None or ((figurerow + 1) == nrows)
                         else:
-                            istoprow = None
-                            isbottomrow = None
+                            isfirstmodel = None
+                            islastmodel = None
 
                         likelihoodexposure, chi, chiimg, chiclip, imgclip, modelclip = \
                             self.getexposurelikelihood(
                                 exposure, image, log=likelihoodlog, figaxes=figaxes, modelname=modelname,
-                                modeldesc=modeldesc, istoprow=istoprow, isbottomrow=isbottomrow,
-                                flipplot=flipplot
+                                modeldesc=modeldesc, modelnameappendparams=modelnameappendparams,
+                                isfirstmodel=isfirstmodel, islastmodel=islastmodel, flipplot=flipplot
                             )
                 if getlikelihood or plot:
                     if clock:
@@ -385,64 +505,38 @@ class Model:
                             imgclips.append(imgclip)
                             modelclips.append(modelclip)
         # Color images! whooo
-        if plot and plotmulti:
-            if singlemodel:
-                self.plotexposurescolor(
-                    imgclips, modelclips, chis, chiimgs, chiclips, (figure, axes[figurerow]))
-            else:
-                self.plotexposurescolor(
-                    imgclips, modelclips, chis, chiimgs, chiclips,
-                    (figure['multi'], axes['multi'][figurerow]))
-            figurerow += 1
+        if plot:
+            if plotmulti:
+                if singlemodel:
+                    Model._plotexposurescolor(
+                        imgclips, modelclips, chis, chiimgs, chiclips, (figure, axes[figurerow]),
+                        bands=bands, modelname=modelname, modeldesc=modeldesc,
+                        modelnameappendparams=modelnameappendparams, isfirstmodel=isfirstmodel,
+                        islastmodel=islastmodel, flipplot=flipplot)
+                else:
+                    Model._plotexposurescolor(
+                        imgclips, modelclips, chis, chiimgs, chiclips,
+                        (figure['multi'], axes['multi'][figurerow]), bands=bands, modelname=modelname,
+                        modeldesc=modeldesc, modelnameappendparams=modelnameappendparams,
+                        isfirstmodel=isfirstmodel, islastmodel=islastmodel, flipplot=flipplot)
+                figurerow += 1
         if clock:
             print(','.join(['{}={:.2e}'.format(name, value) for name, value in times.items()]))
         return likelihood, params, chis, times
 
-    def plotexposurescolor(self, images, modelimages, chis, chiimgs, chiclips, figaxes):
-        # TODO: verify lengths
-        axes = figaxes[1]
-        shapeimg = images[0].shape
-        for i, imagesbytype in enumerate([images, modelimages]):
-            rgb = np.zeros(shapeimg + (0,))
-            for image in imagesbytype:
-                rgb = np.append(rgb, image.reshape(shapeimg + (1,)), axis=2)
-            axes[i].imshow(np.flip(rgb, axis=2), origin="bottom")
-        rgb = np.zeros(shapeimg + (0,))
-        for image in chiimgs:
-            rgb = np.append(rgb, image.reshape(shapeimg + (1,)), axis=2)
-        # The difference map
-        axes[2].imshow(np.flip(rgb, axis=2), origin="bottom")
-        # axes[2].set_title(r'$\chi^{2}_{\nu}$' + '={:.3f}'.format(chisqred))
-        # The chi (data-model)/error map clipped at +/- 5 sigma
-        rgb = np.zeros(shapeimg + (0,))
-        for image in chiclips:
-            rgb = np.append(rgb, image.reshape(shapeimg + (1,)), axis=2)
-        axes[3].imshow(np.flip(rgb, axis=2), origin="bottom")
-        # Residual histogram compared to a normal distribution
-        chi = np.array([])
-        for chiband in chis:
-            chi = np.append(chi, chiband)
-        nbins = np.max([100, np.int(np.round(np.sum(~np.isnan(chi))/300))])
-        sns.distplot(chi[~np.isnan(chi)], bins=nbins, ax=axes[4],
-                     hist_kws={"log": True, "histtype": "step"},
-                     kde_kws={"kernel": "tri", "gridsize": nbins/2}).set(
-            xlim=(-5, 5), ylim=(1e-4, 1)
-        )
-        # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
-        x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
-        axes[4].plot(x, spstats.norm.pdf(x))
-        chisqred = (np.sum(chi ** 2)/len(chi))
-        axes[4].set_title(r'$\chi^{2}_{\nu}$' + '={:.3f}'.format(chisqred))
-        for i in range(1, 5):
-            axes[i].set_yticklabels([])
-
     def getexposurelikelihood(self, exposure, modelimage, log=True, likefunc=None,
                               figaxes=None, maximg=None, minimg=None, modelname="Model",
-                              modeldesc=None, istoprow=True, isbottomrow=True, flipplot=False):
+                              modeldesc=None, modelnameappendparams=None, isfirstmodel=True,
+                              islastmodel=True, flipplot=False):
         if likefunc is None:
             likefunc = self.likefunc
         hasmask = exposure.maskinverse is not None
         if figaxes is not None:
+            if modelnameappendparams is not None:
+                if modeldesc is None:
+                    modeldesc = ""
+                modeldesc += Model._formatmodelparams(modelnameappendparams, {exposure.band})
+
             axes = figaxes[1]
             xlist = np.arange(0, modelimage.shape[1])
             ylist = np.arange(0, modelimage.shape[0])
@@ -465,12 +559,6 @@ class Model:
                 if hasmask:
                     z = exposure.maskinverse
                     axes[i].contour(x, y, z)
-            (axes[0].set_title if flipplot else axes[0].set_ylabel)('Band={}'.format(exposure.band))
-            # Check if the modelname is informative as it's redundant otherwise
-            if modelname != "Model":
-                (axes[1].set_title if flipplot else axes[1].set_ylabel)(modelname)
-            if modeldesc is not None:
-                (axes[2].set_title if flipplot else axes[2].set_ylabel)(modeldesc)
             # The (logged) difference map
             chilog = np.log10(np.clip(np.abs(chi), minimg, np.inf)/minimg)*np.sign(chi)
             chilog /= np.log10(maximg/minimg)
@@ -485,10 +573,9 @@ class Model:
             chiclip[chi > 5] = 5
             if hasmask:
                 chi = chi[exposure.maskinverse]
-                chisqred = (np.sum(chi**2) /
-                            np.sum(exposure.maskinverse))
+                chisqred = (np.sum(chi**2)/np.sum(exposure.maskinverse))
             else:
-                chisqred = np.sum(chi**2) / np.prod(chi.shape)
+                chisqred = np.sum(chi**2)/np.prod(chi.shape)
             axes[3].imshow(chiclip, cmap='RdYlBu_r', origin="bottom")
             chiclip += 5.
             chiclip /= 10.
@@ -504,22 +591,9 @@ class Model:
             # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
             x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
             axes[4].plot(x, spstats.norm.pdf(x))
-            axes[3].set_title(r'$\chi^{2}_{\nu}$' + '={:.3f}'.format(chisqred))
-            axes[4].yaxis.tick_right()
-            if flipplot:
-                # TODO: What to do here?
-                pass
-            else:
-                for i in range(1, 5):
-                    if i != 4:
-                        axes[i].set_yticklabels([])
-                    axes[i].yaxis.set_label_position("right")
-                    if not isbottomrow:
-                        axes[i].set_xticklabels([])
-            if istoprow:
-                labels = ["Data", "Model", "Residual", "Residual/\sigma"]
-                for axis, label in enumerate(labels):
-                    (axes[axis].set_ylabel if flipplot else axes[axis].set_title)(label)
+            Model._labelfigureaxes(axes, chisqred, modelname=modelname, modeldesc=modeldesc,
+                                   labelimg='Band={}'.format(exposure.band), isfirstmodel=isfirstmodel,
+                                   islastmodel=islastmodel, flipplot=flipplot)
         else:
             chilog = None
             chiclip = None
