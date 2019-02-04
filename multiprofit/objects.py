@@ -1329,6 +1329,9 @@ class PhotometricModel:
         profiles = []
         for comp in self.components:
             profiles += comp.getprofiles(bandfluxes, engine, cenx, ceny, engineopts=engineopts)
+        for flux in comp.fluxes:
+            if flux.isfluxratio and flux.getvalue(transformed=False) != 1.:
+                raise RuntimeError('Non-unity flux ratio for final component')
         return profiles
 
     def __init__(self, components, fluxes=[]):

@@ -158,6 +158,11 @@ def initmodelfrommodelfits(model, modelfits):
     modelbest = chisqreds.index(min(chisqreds))
     fluxfracs = 1./np.array(chisqreds)
     fluxfracs = fluxfracs/np.sum(fluxfracs)
+    total = 1
+    for i, frac in enumerate(fluxfracs):
+        fluxfracs[i] = frac/total
+        total -= frac
+    fluxfracs[-1] = 1.0
     print('Initializing from best model={} w/fluxfracs: {}'.format(modelfits[modelbest]['name'], fluxfracs))
     paramtreebest = modelfits[modelbest]['paramtree']
     fluxcensinit = paramtreebest[0][1][0] + paramtreebest[0][0]
