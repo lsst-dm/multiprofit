@@ -134,6 +134,21 @@ def isfluxratio(param):
     return isinstance(param, proobj.FluxParameter) and param.isfluxratio
 
 
+def ellipse_to_covar(ang, axrat, sigma):
+    ang = np.radians(ang)
+    sinang = np.sin(ang)
+    cosang = np.cos(ang)
+    majsq = sigma ** 2
+    minsq = majsq * axrat ** 2
+    sinangsq = sinang ** 2
+    cosangsq = cosang ** 2
+    sigxsq = majsq * cosangsq + minsq * sinangsq
+    sigysq = majsq * sinangsq + minsq * cosangsq
+    covxy = (majsq - minsq) * cosang * sinang
+    covar = np.matrix([[sigxsq, covxy], [covxy, sigysq]])
+    return covar
+
+
 def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransformed=False,
                     sersiclogit=True, ismultigauss=False):
     transform = transformsref["none"]
