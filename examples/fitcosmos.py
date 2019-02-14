@@ -49,7 +49,7 @@ options = {
     "galaxyfluxmults":  {"default": [1.]},
     "galaxyradii":      {"default": [5.]},
     "galaxycenoffsets": {"default": [[0., 0.], [-0.5, -0.5]]},
-    "imagesizes":  {"default": [60]},
+    "imagesize":   {"default": [60]},
     "optlibs":     {"avail": ["pygmo", "scipy"], "default": ["scipy"]},
     "psfaxrats":   {"default": [0.95]},
     "psffluxes":   {"default": [1.e4]},
@@ -338,17 +338,22 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
 # Engine is galsim; TODO: add options
 def fitgalaxy(
         exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
-        fitsbyengine=None, redo=True,
+        fitsbyengine=None, redo=True, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None
 ):
     """
 
-    :param exposurepsfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
+    :param exposurespsfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
     :param modelspecs: Model specifications as returned by getmodelspecs
     :param modellib: string; Model fitting library
     :param modellibopts: dict; Model fitting library options
     :param plot: bool; Make plots?
     :param name: string; Name of the model for plot labelling
     :param models: dict; key=model name: value=mpfobj.Model
+    :param fitsbyengine: dict; same format as return value.
+    :param redo: bool; Redo any pre-existing fits in fitsbyengine?
+    :param imgplotmaxs: dict; key=band: value=float (Maximum value when plotting images in this band)
+    :param imgplotmaxmulti: float; Maximum value of summed images when plotting multi-band.
+    :param weightsband: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB).
 
     :return: fitsbyengine: dict; key=engine: value=dict; key=modelname: value=dict;
         key='fits': value=array of fit results, key='modeltype': value =
@@ -416,9 +421,10 @@ def fitgalaxy(
             figures = {}
             axeses = {}
             for band in list(bands) + (['multi'] if len(bands) > 1 else []):
+                ncols = 5
                 # Change to landscape
-                figure, axes = plt.subplots(nrows=min([5, nrows]), ncols=max([5, nrows]))
-                if nrows > 5:
+                figure, axes = plt.subplots(nrows=min([ncols, nrows]), ncols=max([ncols, nrows]))
+                if nrows > ncols:
                     axes = np.transpose(axes)
                 # This keeps things consistent with the nrows>1 case
                 if nrows == 1:
@@ -429,11 +435,11 @@ def fitgalaxy(
             if len(bands) == 1:
                 figures = figures[band]
                 axeses = axeses[band]
-            flipplot = nrows > 5
+            plotascolumn = nrows > ncols
         else:
             figures = None
             axeses = None
-            flipplot = None
+            plotascolumn = None
         for modelidx, modelinfo in enumerate(modelspecs):
             modelname = modelinfo["name"]
             modeltype = modelinfo["model"]
@@ -470,8 +476,9 @@ def fitgalaxy(
                         plt.suptitle(title)
                     model.evaluate(
                         plot=plot, modelname=modelname, modelnameappendparams=modelnameappendparams,
-                        figure=figures, axes=axeses, figurerow=modelidx, flipplot=flipplot,
-                        plotmulti=plotmulti)
+                        figure=figures, axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
+                        plotmulti=plotmulti, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
+                        weightsband=weightsband)
                     plt.show(block=False)
             else:
                 # Parse default overrides from model spec
@@ -581,7 +588,7 @@ def fitgalaxy(
                                                       printfinal=True, printsteps=100,
                                                       plot=plot and not dosecond, plotmulti=plotmulti,
                                                       figure=figures, axes=axeses, figurerow=modelidx,
-                                                      flipplot=flipplot, modelname=modelname,
+                                                      plotascolumn=plotascolumn, modelname=modelname,
                                                       modelnameappendparams=modelnameappendparams
                                                       )
                     fits.append(fit1)
@@ -591,7 +598,7 @@ def fitgalaxy(
                                 "Nelder-Mead"
                         fit2, _ = mpfutil.fitmodel(model, modeller, printfinal=True, printsteps=100,
                                                    plot=plot, plotmulti=plotmulti, figure=figures,
-                                                   axes=axeses, figurerow=modelidx, flipplot=flipplot,
+                                                   axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
                                                    modelname=modelname,
                                                    modelnameappendparams=modelnameappendparams)
                         fits.append(fit2)
@@ -686,7 +693,7 @@ def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, v
 # PSFmodels: array of tuples (modelname, ispixelated)
 def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=True, redopsfs=False,
                     modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
-                    resetimages=False, resetfitlogs=False):
+                    resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
     if results is None:
         results = {}
     np.random.seed(idcosmosgs)
@@ -923,7 +930,8 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
         exposurespsfs = [(exposures[band], psfs[band]) for band in bands]
         fits, models = fitgalaxy(
             exposurespsfs, modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
-            fitsbyengine=fitsbyengine, redo=redo)
+            fitsbyengine=fitsbyengine, redo=redo, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
+            weightsband=weightsband)
         if resetimages:
             for band, psfsband in psfs.items():
                 if engine in psfsband:
@@ -963,6 +971,10 @@ if __name__ == '__main__':
                                                                             'to HSC seeing'},
         'hscbands':    {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
         'hst2hscmodel': {'type': str, 'default': None, 'help': 'HST model fit to use for mock HSC image'},
+        'imgplotmaxs':  {'type': float, 'nargs': '*', 'default': None,
+                         'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
+                                 'then HSC bands.'},
+        'imgplotmaxmulti': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
         'indices':     {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
         'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
         'modellib':    {'type': str,   'nargs': '?', 'default': 'scipy', 'help': 'Optimization libraries'},
@@ -973,6 +985,8 @@ if __name__ == '__main__':
 #        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
         'redo':        {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
         'redopsfs':    {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
+        'weightsband': {'type': float, 'nargs': '*', 'default': None,
+                        'help': 'Multiplicative weights for scaling images in multi-band RGB'},
         'write':       {'type': mpfutil.str2bool, 'default': True, 'help': 'Write file?'},
     }
 
@@ -1018,7 +1032,7 @@ if __name__ == '__main__':
         mpl.rcParams['image.origin'] = 'lower'
 
     rgcfits = ap.io.fits.open(os.path.join(args.catalogpath, args.catalogfile))[1].data
-    srcs = ["hst"] if args.fithst else []
+    srcs = ['hst'] if args.fithst else []
     if args.fithsc or args.fithst2hsc:
         from modelling_research import make_cutout
         import lsst.afw.geom as geom
@@ -1036,6 +1050,13 @@ if __name__ == '__main__':
         srcs += ["hsc"]
     if args.fithst2hsc:
         srcs += ["hst2hsc"]
+    bands = (['F814W'] if args.fithst else []) + (args.hscbands if (args.fithsc or args.fithst2hsc) else [])
+    for argname, values in {'imgplotmaxs': args.imgplotmaxs, 'weightsband': args.weightsband}.items():
+        if values is not None:
+            if len(bands) != len(values):
+                raise ValueError('len({}={})={} != len(bands={})={}'.format(
+                    argname, values, len(values), bands, len(bands)))
+            values = {key: value for key, value in zip(bands, values)}
 
     nfit = 0
     for index in args.indices:
@@ -1045,9 +1066,11 @@ if __name__ == '__main__':
             try:
                 fits = fitcosmosgalaxy(idnum, srcs=srcs, modelspecs=modelspecs, plot=args.plot,
                                        redo=args.redo, redopsfs=args.redopsfs, resetimages=True,
-                                       resetfitlogs=True, hst2hscmodel=args.hst2hscmodel,
-                                       hscbands=args.hscbands, modellib=args.modellib,
-                                       results=data[idnum] if idnum in data else None)
+                                       hst2hscmodel=args.hst2hscmodel, hscbands=args.hscbands,
+                                       modellib=args.modellib,
+                                       results=data[idnum] if idnum in data else None,
+                                       imgplotmaxs=args.imgplotmaxs, imgplotmaxmulti=args.imgplotmaxmulti,
+                                       weightsband=args.weightsband)
                 data[idnum] = fits
             except Exception as e:
                 print("Error fitting id={}:".format(idnum))

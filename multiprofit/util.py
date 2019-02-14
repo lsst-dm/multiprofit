@@ -334,10 +334,10 @@ def getchisqred(chis):
 
 # Convenience function to evaluate a model and make a reasonable plot of it if desired
 def evaluatemodel(model, params, plot=False, plotmulti=False, modelname=None, figure=None, title=None,
-                  axes=None, figurerow=None, modeldesc=None, modelnameappendparams=None, flipplot=False):
+                  axes=None, figurerow=None, modeldesc=None, modelnameappendparams=None, plotascolumn=False):
     _, _, chis, _ = model.evaluate(params=params, plot=plot, plotmulti=plotmulti, modelname=modelname,
                                    modeldesc=modeldesc, modelnameappendparams=modelnameappendparams,
-                                   figure=figure, axes=axes, figurerow=figurerow, flipplot=flipplot)
+                                   figure=figure, axes=axes, figurerow=figurerow, plotascolumn=plotascolumn)
 
     if plot:
         if title is not None:
