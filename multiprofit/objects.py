@@ -27,6 +27,7 @@ import matplotlib.colors as mplcol
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
+import multiprofit.utils as mpfutil
 import multiprofit.asinhstretchsigned as mpfasinh
 import numpy as np
 import pyprofit as pyp
@@ -60,14 +61,6 @@ def getgsparams(engineopts):
     else:
         gsparams = engineopts["gsparams"]
     return gsparams
-
-
-def fluxtomag(x):
-    return -2.5*np.log10(x)
-
-
-def magtoflux(x):
-    return 10**(-0.4*x)
 
 
 class Exposure:
@@ -730,7 +723,7 @@ class Model:
                                 profile = copy.copy(profile)
                                 profile["re"] = fwhm/2.0
                                 profile["axrat"] = axrat
-                                profile["mag"] += fluxtomag(fluxfrac)
+                                profile["mag"] += mpfutil.fluxtomag(fluxfrac)
                                 profile["ang"] = ang
                             else:
                                 profile = {
@@ -798,10 +791,10 @@ class Model:
                     paramsall = [x[band] for x in profilesrunning]
                     imgprofile = np.array(mpf.make_gaussian_mix_8_pixel(
                         params['cenx'], params['ceny'],
-                        magtoflux(paramsall[0]['mag']), magtoflux(paramsall[1]['mag']),
-                        magtoflux(paramsall[2]['mag']), magtoflux(paramsall[3]['mag']),
-                        magtoflux(paramsall[4]['mag']), magtoflux(paramsall[5]['mag']),
-                        magtoflux(paramsall[6]['mag']), magtoflux(paramsall[7]['mag']),
+                        mpfutil.magtoflux(paramsall[0]['mag']), mpfutil.magtoflux(paramsall[1]['mag']),
+                        mpfutil.magtoflux(paramsall[2]['mag']), mpfutil.magtoflux(paramsall[3]['mag']),
+                        mpfutil.magtoflux(paramsall[4]['mag']), mpfutil.magtoflux(paramsall[5]['mag']),
+                        mpfutil.magtoflux(paramsall[6]['mag']), mpfutil.magtoflux(paramsall[7]['mag']),
                         paramsall[0]['re'], paramsall[1]['re'], paramsall[2]['re'], paramsall[3]['re'],
                         paramsall[4]['re'], paramsall[5]['re'], paramsall[6]['re'], paramsall[7]['re'],
                         paramsall[0]['ang'], paramsall[1]['ang'], paramsall[2]['ang'],
@@ -820,7 +813,7 @@ class Model:
                 for profile in profilesrunning:
                     params = profile[band]
                     imgprofile = np.array(mpf.make_gaussian_pixel(
-                        params['cenx'], params['ceny'], magtoflux(params['mag']), params['re'],
+                        params['cenx'], params['ceny'], mpfutil.magtoflux(params['mag']), params['re'],
                         params['ang'], params['axrat'], 0, nx, 0, ny, nx, ny))
                     if image is None:
                         image = imgprofile

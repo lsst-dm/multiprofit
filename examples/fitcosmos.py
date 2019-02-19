@@ -37,8 +37,9 @@ import traceback
 
 from collections import OrderedDict
 
+import multiprofit.fitutils as mpffit
 import multiprofit.objects as mpfobj
-import multiprofit.util as mpfutil
+import multiprofit.utils as mpfutil
 
 options = {
     "algos":       {"default": {"scipy": "BFGS", "pygmo": "lbfgs"}},
@@ -84,14 +85,14 @@ def getellipseestimate(img, denoise=True):
 
 
 def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainverse=None, factorsigma=1):
-    model = mpfutil.getmodel({band: 1}, psfmodel, np.flip(psfimage.shape, axis=0),
+    model = mpffit.getmodel({band: 1}, psfmodel, np.flip(psfimage.shape, axis=0),
                              8.0 * 10 ** ((np.arange(numcomps) - numcomps / 2) / numcomps),
                              np.repeat(0.95, numcomps),
                              np.linspace(start=0, stop=180, num=numcomps + 2)[1:(numcomps + 1)],
                              engine=engine, engineopts=engineopts)
     for param in model.getparameters(fixed=False):
         param.fixed = isinstance(param, mpfobj.FluxParameter) and not param.isfluxratio
-    mpfutil.setexposure(model, band, image=psfimage, sigmainverse=sigmainverse, factorsigma=factorsigma)
+    mpffit.setexposure(model, band, image=psfimage, sigmainverse=sigmainverse, factorsigma=factorsigma)
     return model
 
 
@@ -132,21 +133,21 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
             model = psfmodelfits[engine][modelname]['modeller'].model
         if redo or 'fit' not in psfmodelfits[engine][modelname]:
             psfmodelfits[engine][modelname]['fit'], psfmodelfits[engine][modelname]['modeller'] = \
-                mpfutil.fitmodel(
+                mpffit.fitmodel(
                 model, modellib=modellib, modellibopts=modellibopts, printfinal=printfinal,
                 printsteps=printsteps, plot=plot, title=title, modelname=label,
                 figure=figaxes[0], axes=figaxes[1], figurerow=figurerow)
         elif plot:
             exposure = model.data.exposures[band][0]
-            isempty = isinstance(exposure.image, mpfutil.ImageEmpty)
+            isempty = isinstance(exposure.image, mpffit.ImageEmpty)
             if isempty:
-                mpfutil.setexposure(model, band, image=imgpsf, sigmainverse=sigmainverse)
-            mpfutil.evaluatemodel(
+                mpffit.setexposure(model, band, image=imgpsf, sigmainverse=sigmainverse)
+            mpffit.evaluatemodel(
                 model, params=psfmodelfits[engine][modelname]['fit']['paramsbest'],
                 plot=plot, title=title, modelname=label, figure=figaxes[0], axes=figaxes[1],
                 figurerow=figurerow)
             if isempty:
-                mpfutil.setexposure(model, band, image='empty')
+                mpffit.setexposure(model, band, image='empty')
 
     return psfmodelfits
 
@@ -319,7 +320,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if ismgtogauss and i == 0:
-                componentsnew = mpfutil.getmultigaussians(
+                componentsnew = mpffit.getmultigaussians(
                     model.getprofiles(bands, engine='libprofit'), paramsinherit=paramsinherit,
                     ncomponents=ncomponents)
                 componentsold = model.sources[0].modelphotometric.components
@@ -443,7 +444,7 @@ def fitgalaxy(
         for modelidx, modelinfo in enumerate(modelspecs):
             modelname = modelinfo["name"]
             modeltype = modelinfo["model"]
-            modeldefault = mpfutil.getmodel(
+            modeldefault = mpffit.getmodel(
                 fluxes, modeltype, npiximg, engine=engine, engineopts=engineopts
             )
             paramsfixeddefault[modeltype] = [param.fixed for param in
@@ -469,7 +470,7 @@ def fitgalaxy(
                         param.setvalue(value, transformed=True)
                         if (param.name == "nser" and (
                                 not param.fixed or param.getvalue(transformed=False) != 0.5)) or \
-                            param.name == "re" or (mpfutil.isfluxratio(param) and param.getvalue(
+                            param.name == "re" or (mpffit.isfluxratio(param) and param.getvalue(
                                 transformed=False) < 1):
                             modelnameappendparams += [('{:.2f}', param)]
                     if title is not None:
@@ -519,7 +520,7 @@ def fitgalaxy(
                 timesmatched = {}
                 for param in model.getparameters(fixed=True):
                     isflux = isinstance(param, mpfobj.FluxParameter)
-                    isfluxrat = mpfutil.isfluxratio(param)
+                    isfluxrat = mpffit.isfluxratio(param)
                     paramname = param.name if not isflux else (
                             'flux' + ('ratio' if isfluxrat else '') + '_' + param.band)
                     if paramname in paramflags["fixed"]:
@@ -545,7 +546,7 @@ def fitgalaxy(
                         if modellib == 'scipy':
                             factor = 1/fluxes[param.band] if isflux else 1
                             value = np.min([param.getvalue(transformed=False), valuemax])
-                            param.transform = mpfutil.getlogitlimited(0, valuemax, factor=factor)
+                            param.transform = mpffit.getlogitlimited(0, valuemax, factor=factor)
                             param.setvalue(value, transformed=False)
                         else:
                             transform = param.transform.transform
@@ -584,7 +585,7 @@ def fitgalaxy(
                         }
                         if modellib == "scipy":
                             modellibopts['options'] = {'maxfun': 1e4}
-                    fit1, modeller = mpfutil.fitmodel(
+                    fit1, modeller = mpffit.fitmodel(
                         model, modellib=modellib, modellibopts=modellibopts, printfinal=True, printsteps=100,
                         plot=plot and not dosecond, plotmulti=plotmulti, figure=figures, axes=axeses,
                         figurerow=modelidx, plotascolumn=plotascolumn, modelname=modelname,
@@ -596,7 +597,7 @@ def fitgalaxy(
                         if usemodellibdefault:
                             modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
                                 "Nelder-Mead"
-                        fit2, _ = mpfutil.fitmodel(
+                        fit2, _ = mpffit.fitmodel(
                             model, modeller, printfinal=True, printsteps=100, plot=plot, plotmulti=plotmulti,
                             figure=figures, axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
                             modelname=modelname, modelnameappendparams=modelnameappendparams,
@@ -641,7 +642,10 @@ def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, v
     # Use Sophie's code to make our own cutout for comparison to the catalog
     # TODO: Double check the origin of these images; I assume they're the rotated and rescaled v2.0 mosaics
     cutouthst = make_cutout.cutout_HST(ra, dec, width=np.ceil(sizeCutout * scalehsc), return_data=True)
-    # 0.03" scale: check cutouthst[0][0][1].header["CD1_1"] and ["CD2_2"]
+    hdr = cutouthst[0][0][1].header
+    # 0.03" scale: check hdr["CD1_1"] and hdr["CD2_2"]
+    if 'ORIENTAT' in hdr:
+        print('hdr[\'ORIENTAT\']={}'.format(hdr['ORIENTAT']))
     imghstrot = gs.Image(cutouthst[0][0][1].data, scale=0.03)
 
     def getoffsetdiff(x, returnimg=False):
@@ -830,7 +834,7 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
                                 valueset *= scalehst
                             param.setvalue(valueset, transformed=False)
                         exposuremodel = modeltouse.data.exposures[bandhst][0]
-                        exposuremodel.image = mpfutil.ImageEmpty((sizeCutout, sizeCutout))
+                        exposuremodel.image = mpffit.ImageEmpty((sizeCutout, sizeCutout))
                         # Save the GalSim model object
                         modeltouse.evaluate(keepmodels=True, getlikelihood=False, drawimage=False)
                         img = gs.Convolve(exposuremodel.meta['model'], imgpsfgs).drawImage(
@@ -937,10 +941,10 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
             for band, psfsband in psfs.items():
                 if engine in psfsband:
                     for psfmodeltype, psf in psfsband[engine].items():
-                        mpfutil.setexposure(psf['modeller'].model, band, image='empty')
+                        mpffit.setexposure(psf['modeller'].model, band, image='empty')
             for modelname, model in models.items():
                 for band in bands:
-                    mpfutil.setexposure(model, band, image='empty')
+                    mpffit.setexposure(model, band, image='empty')
             for engine, modelfitinfo in fits.items():
                 for modelname, modelfits in modelfitinfo.items():
                     if 'fits' in modelfits:
