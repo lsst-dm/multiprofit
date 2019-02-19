@@ -302,7 +302,6 @@ class Model:
             modeldesc += Model._formatmodelparams(modelnameappendparams, bands)
         # TODO: verify lengths
         axes = figaxes[1]
-        shapeimg = images[0].shape
         if not plotascolumn:
             for axis in axes[0:4]:
                 axis.xaxis.tick_top()

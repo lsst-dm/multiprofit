@@ -142,7 +142,7 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
             if isempty:
                 mpfutil.setexposure(model, band, image=imgpsf, sigmainverse=sigmainverse)
             mpfutil.evaluatemodel(
-                model, psfmodelfits[engine][modelname]['fit']['paramsbest'],
+                model, params=psfmodelfits[engine][modelname]['fit']['paramsbest'],
                 plot=plot, title=title, modelname=label, figure=figaxes[0], axes=figaxes[1],
                 figurerow=figurerow)
             if isempty:
@@ -584,23 +584,24 @@ def fitgalaxy(
                         }
                         if modellib == "scipy":
                             modellibopts['options'] = {'maxfun': 1e4}
-                    fit1, modeller = mpfutil.fitmodel(model, modellib=modellib, modellibopts=modellibopts,
-                                                      printfinal=True, printsteps=100,
-                                                      plot=plot and not dosecond, plotmulti=plotmulti,
-                                                      figure=figures, axes=axeses, figurerow=modelidx,
-                                                      plotascolumn=plotascolumn, modelname=modelname,
-                                                      modelnameappendparams=modelnameappendparams
-                                                      )
+                    fit1, modeller = mpfutil.fitmodel(
+                        model, modellib=modellib, modellibopts=modellibopts, printfinal=True, printsteps=100,
+                        plot=plot and not dosecond, plotmulti=plotmulti, figure=figures, axes=axeses,
+                        figurerow=modelidx, plotascolumn=plotascolumn, modelname=modelname,
+                        modelnameappendparams=modelnameappendparams, imgplotmaxs=imgplotmaxs,
+                        imgplotmaxmulti=imgplotmaxmulti, weightsband=weightsband,
+                    )
                     fits.append(fit1)
                     if dosecond:
                         if usemodellibdefault:
                             modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
                                 "Nelder-Mead"
-                        fit2, _ = mpfutil.fitmodel(model, modeller, printfinal=True, printsteps=100,
-                                                   plot=plot, plotmulti=plotmulti, figure=figures,
-                                                   axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
-                                                   modelname=modelname,
-                                                   modelnameappendparams=modelnameappendparams)
+                        fit2, _ = mpfutil.fitmodel(
+                            model, modeller, printfinal=True, printsteps=100, plot=plot, plotmulti=plotmulti,
+                            figure=figures, axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
+                            modelname=modelname, modelnameappendparams=modelnameappendparams,
+                            imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti, weightsband=weightsband,
+                        )
                         fits.append(fit2)
                     fitsbyengine[engine][modelname] = {"fits": fits, "modeltype": modeltype}
                 except Exception as e:

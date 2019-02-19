@@ -350,12 +350,9 @@ def getchisqred(chis):
     return chisum/chicount
 
 
-# Convenience function to evaluate a model and make a reasonable plot of it if desired
-def evaluatemodel(model, params, plot=False, plotmulti=False, modelname=None, figure=None, title=None,
-                  axes=None, figurerow=None, modeldesc=None, modelnameappendparams=None, plotascolumn=False):
-    _, _, chis, _ = model.evaluate(params=params, plot=plot, plotmulti=plotmulti, modelname=modelname,
-                                   modeldesc=modeldesc, modelnameappendparams=modelnameappendparams,
-                                   figure=figure, axes=axes, figurerow=figurerow, plotascolumn=plotascolumn)
+# Convenience function to evaluate a model and optionally plot with title, returning chi map only
+def evaluatemodel(model, plot=False, title=None, **kwargs):
+    _, _, chis, _ = model.evaluate(plot=plot, **kwargs)
 
     if plot:
         if title is not None:
@@ -375,7 +372,7 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
         print("Param names:" + ",".join(["{:11s}".format(p.name) for p in paramsall]))
         print("All params: " + ",".join(["{:+.4e}".format(p.getvalue(transformed=False)) for p in paramsall]))
     # Conveniently sets the parameters to the right values too
-    chis = evaluatemodel(model, fit["paramsbest"], plot=plot, **kwargs)
+    chis = evaluatemodel(model, plot=plot, params=fit["paramsbest"], **kwargs)
     fit["chisqred"] = getchisqred(chis)
     params = model.getparameters()
     for item in ['paramsbestall', 'paramsbestalltransformed', 'paramsallfixed']:
