@@ -696,9 +696,10 @@ def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, v
 
 
 # PSFmodels: array of tuples (modelname, ispixelated)
-def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=True, redopsfs=False,
-                    modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
-                    resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
+def fitcosmosgalaxy(
+        idcosmosgs, srcs, modelspecs, rgcfits, rgcat, ccat, results={}, plot=False, redo=True, redopsfs=False,
+        modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'], resetimages=False,
+        imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
     if results is None:
         results = {}
     np.random.seed(idcosmosgs)
@@ -958,57 +959,8 @@ def fitcosmosgalaxy(idcosmosgs, srcs, modelspecs, results={}, plot=False, redo=T
     return results
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='PyProFit HST COSMOS galaxy modelling test')
-
-    signature = inspect.signature(fitgalaxy)
-    defaults = {
-        k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty
-    }
-
-    flags = {
-        'catalogpath': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog path'},
-        'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
-        'file':        {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
-        'fithsc':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
-        'fithst':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
-        'fithst2hsc':  {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
-                                                                            'to HSC seeing'},
-        'hscbands':    {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
-        'hst2hscmodel': {'type': str, 'default': None, 'help': 'HST model fit to use for mock HSC image'},
-        'imgplotmaxs':  {'type': float, 'nargs': '*', 'default': None,
-                         'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
-                                 'then HSC bands.'},
-        'imgplotmaxmulti': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
-        'indices':     {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
-        'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
-        'modellib':    {'type': str,   'nargs': '?', 'default': 'scipy', 'help': 'Optimization libraries'},
-        'modellibopts':{'type': str,   'nargs': '?', 'default': None, 'help': 'Model fitting options'},
-        'nwrite':      {'type': int, 'default': 5, 'help': 'Number of galaxies to fit before writing file'},
-#        'engines':    {'type': str,   'nargs': '*', 'default': 'galsim', 'help': 'Model generation engines'},
-        'plot':        {'type': mpfutil.str2bool, 'default': False, 'help': 'Toggle plotting of final fits'},
-#        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
-        'redo':        {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
-        'redopsfs':    {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
-        'weightsband': {'type': float, 'nargs': '*', 'default': None,
-                        'help': 'Multiplicative weights for scaling images in multi-band RGB'},
-        'write':       {'type': mpfutil.str2bool, 'default': True, 'help': 'Write file?'},
-    }
-
-    for key, value in flags.items():
-        if key in options:
-            default = options[key]["default"]
-        else:
-            default = value['default']
-        if 'help' in value:
-            value['help'] += ' (default: ' + str(default) + ')'
-        value["default"] = default
-        parser.add_argument('-' + key, **value)
-
-    args = parser.parse_args()
-    args.catalogpath = os.path.expanduser(args.catalogpath)
+def main(args):
     modelspecs = getmodelspecs(None if args.modelspecfile is None else os.path.expanduser(args.modelspecfile))
-
     print('Loading COSMOS catalog at ' + os.path.join(args.catalogpath, args.catalogfile))
     try:
         rgcat = gs.RealGalaxyCatalog(args.catalogfile, dir=args.catalogpath)
@@ -1061,7 +1013,7 @@ if __name__ == '__main__':
             if len(bands) != len(values):
                 raise ValueError('len({}={})={} != len(bands={})={}'.format(
                     argname, values, len(values), bands, len(bands)))
-            values = {key: value for key, value in zip(bands, values)}
+            #values = {key: value for key, value in zip(bands, values)}
 
     nfit = 0
     for index in args.indices:
@@ -1069,10 +1021,10 @@ if __name__ == '__main__':
         for idnum in range(idrange[0], idrange[0 + (len(idrange) > 1)] + (len(idrange) == 1)):
             print("Fitting COSMOS galaxy with ID: {}".format(idnum))
             try:
-                fits = fitcosmosgalaxy(idnum, srcs=srcs, modelspecs=modelspecs, plot=args.plot,
-                                       redo=args.redo, redopsfs=args.redopsfs, resetimages=True,
-                                       hst2hscmodel=args.hst2hscmodel, hscbands=args.hscbands,
-                                       modellib=args.modellib,
+                fits = fitcosmosgalaxy(idnum, srcs=srcs, modelspecs=modelspecs, rgcfits=rgcfits, rgcat=rgcat,
+                                       ccat=ccat, plot=args.plot, redo=args.redo, redopsfs=args.redopsfs,
+                                       resetimages=True, hst2hscmodel=args.hst2hscmodel,
+                                       hscbands=args.hscbands, modellib=args.modellib,
                                        results=data[idnum] if idnum in data else None,
                                        imgplotmaxs=args.imgplotmaxs, imgplotmaxmulti=args.imgplotmaxmulti,
                                        weightsband=args.weightsband)
@@ -1094,3 +1046,55 @@ if __name__ == '__main__':
             pickle.dump(data, f)
     if args.plot:
         input("Press Enter to finish")
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='PyProFit HST COSMOS galaxy modelling test')
+
+    signature = inspect.signature(fitgalaxy)
+    defaults = {
+        k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty
+    }
+
+    flags = {
+        'catalogpath': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog path'},
+        'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
+        'file':        {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
+        'fithsc':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
+        'fithst':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
+        'fithst2hsc':  {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
+                                                                            'to HSC seeing'},
+        'hscbands':    {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
+        'hst2hscmodel': {'type': str, 'default': None, 'help': 'HST model fit to use for mock HSC image'},
+        'imgplotmaxs':  {'type': float, 'nargs': '*', 'default': None,
+                         'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
+                                 'then HSC bands.'},
+        'imgplotmaxmulti': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
+        'indices':     {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
+        'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
+        'modellib':    {'type': str,   'nargs': '?', 'default': 'scipy', 'help': 'Optimization libraries'},
+        'modellibopts':{'type': str,   'nargs': '?', 'default': None, 'help': 'Model fitting options'},
+        'nwrite':      {'type': int, 'default': 5, 'help': 'Number of galaxies to fit before writing file'},
+#        'engines':    {'type': str,   'nargs': '*', 'default': 'galsim', 'help': 'Model generation engines'},
+        'plot':        {'type': mpfutil.str2bool, 'default': False, 'help': 'Toggle plotting of final fits'},
+#        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
+        'redo':        {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
+        'redopsfs':    {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
+        'weightsband': {'type': float, 'nargs': '*', 'default': None,
+                        'help': 'Multiplicative weights for scaling images in multi-band RGB'},
+        'write':       {'type': mpfutil.str2bool, 'default': True, 'help': 'Write file?'},
+    }
+
+    for key, value in flags.items():
+        if key in options:
+            default = options[key]["default"]
+        else:
+            default = value['default']
+        if 'help' in value:
+            value['help'] += ' (default: ' + str(default) + ')'
+        value["default"] = default
+        parser.add_argument('-' + key, **value)
+
+    argsparsed = parser.parse_args()
+    argsparsed.catalogpath = os.path.expanduser(argsparsed.catalogpath)
+    main(argsparsed)
