@@ -1,6 +1,15 @@
 import numpy as np
 
 
+def getchisqred(chis):
+    chisum = 0
+    chicount = 0
+    for chivals in chis:
+        chisum += np.sum(chivals**2)
+        chicount += len(chivals)**2
+    return chisum/chicount
+
+
 def fluxtomag(x):
     return -2.5*np.log10(x)
 

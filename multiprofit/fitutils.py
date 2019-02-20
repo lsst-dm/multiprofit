@@ -19,11 +19,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import argparse
 import functools
 import importlib
 import matplotlib.pyplot as plt
 import multiprofit as mpf
+import multiprofit.utils as mpfutil
 import numpy as np
 from scipy import special, stats
 import timeit
@@ -309,15 +309,6 @@ def getmodel(
     return model
 
 
-def getchisqred(chis):
-    chisum = 0
-    chicount = 0
-    for chivals in chis:
-        chisum += np.sum(chivals**2)
-        chicount += len(chivals)**2
-    return chisum/chicount
-
-
 # Convenience function to evaluate a model and optionally plot with title, returning chi map only
 def evaluatemodel(model, plot=False, title=None, **kwargs):
     _, _, chis, _ = model.evaluate(plot=plot, **kwargs)
@@ -341,7 +332,7 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
         print("All params: " + ",".join(["{:+.4e}".format(p.getvalue(transformed=False)) for p in paramsall]))
     # Conveniently sets the parameters to the right values too
     chis = evaluatemodel(model, plot=plot, params=fit["paramsbest"], **kwargs)
-    fit["chisqred"] = getchisqred(chis)
+    fit["chisqred"] = mpfutil.getchisqred(chis)
     params = model.getparameters()
     for item in ['paramsbestall', 'paramsbestalltransformed', 'paramsallfixed']:
         fit[item] = []
