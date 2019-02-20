@@ -1011,12 +1011,12 @@ class Model:
         return [param.getlimits(transformed=transformed) for param in params]
 
     def getprofiles(self, bands, engine=None, engineopts=None):
-        '''
+        """
         :param bands: List of bands
         :param engine: Valid rendering engine
         :param engineopts: Dict of engine options
         :return: List of profiles
-        '''
+        """
         if engine is None:
             engine = self.engine
         if engineopts is None:
@@ -1340,8 +1340,7 @@ class PhotometricModel:
 
     # TODO: Determine how the astrometric model is supposed to interact here
     def getprofiles(self, engine, bands, cenx, ceny, time=None, engineopts=None):
-        '''
-
+        """
         :param engine: Valid rendering engine
         :param bands: List of bands
         :param cenx: X coordinate
@@ -1350,7 +1349,7 @@ class PhotometricModel:
         exposures/highly variable sources.
         :param engineopts: Dict of engine options
         :return: List of dicts by band
-        '''
+        """
         # TODO: Check if this should skip entirely instead of adding a None for non-included bands
         if bands is None:
             bands = self.fluxes.keys()
@@ -1406,7 +1405,7 @@ class AstrometricModel:
     """
 
     def getparameters(self, free=True, fixed=True, time=None):
-        return [value for value in self.params.values() if \
+        return [value for value in self.params.values() if
                 (value.fixed and fixed) or (not value.fixed and free)]
 
     def getposition(self, time=None):
@@ -1487,21 +1486,20 @@ class EllipticalProfile(Component):
             or (self.profile == "moffat" and np.isinf(self.parameters["con"].getvalue()))
 
     def getparameters(self, free=True, fixed=True):
-        return [value for value in self.fluxes if \
+        return [value for value in self.fluxes if
                 (value.fixed and fixed) or (not value.fixed and free)] + \
-            [value for value in self.parameters.values() if \
+            [value for value in self.parameters.values() if
                 (value.fixed and fixed) or (not value.fixed and free)]
 
     def getprofiles(self, bandfluxes, engine, cenx, ceny, engineopts=None):
-        '''
-
+        """
         :param bandfluxes: Dict of fluxes by band
         :param engine: Rendering engine
         :param cenx: X center in image coordinates
         :param ceny: Y center in image coordinates
         :param engineopts: Dict of engine options
         :return: Dict by band with list of profiles
-        '''
+        """
         self._checkengine(engine)
         isgaussian = self.isgaussian()
 

@@ -86,7 +86,7 @@ def getellipseestimate(img, denoise=True):
 
 def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainverse=None, factorsigma=1):
     model = mpffit.getmodel({band: 1}, psfmodel, np.flip(psfimage.shape, axis=0),
-                             8.0 * 10 ** ((np.arange(numcomps) - numcomps / 2) / numcomps),
+                             8.0*10**((np.arange(numcomps) - numcomps / 2) / numcomps),
                              np.repeat(0.95, numcomps),
                              np.linspace(start=0, stop=180, num=numcomps + 2)[1:(numcomps + 1)],
                              engine=engine, engineopts=engineopts)
