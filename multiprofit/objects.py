@@ -206,6 +206,7 @@ class PSF:
                 raise ValueError("PSF model (type={:s}) not instanceof({:s})".format(
                     type(model), type(Source)))
             self.engine = engine
+        self.usemodel = usemodel
 
 
 def getprofilegausscovar(ang, axrat, re):
@@ -440,7 +441,6 @@ class Model:
         if plot and (figaxes is None or any(x is None for x in figaxes)):
             raise RuntimeError("Plot is true but there are None figaxes: {}".format(figaxes))
         chis = []
-        chiimgs = []
         imgclips = []
         modelclips = []
         if clock:
@@ -457,7 +457,7 @@ class Model:
                             p['cenx'], p['ceny'], 10**(-0.4*p['mag']), p['re'], p['ang'], p['axrat']
                         ])
                         for p in [profile[band] for profile in profiles]])
-                    varinverse = exposure.sigmainverse ** 2
+                    varinverse = exposure.sigmainverse**2
                     varisscalar = not hasattr(varinverse, 'shape') or varinverse.shape == ()
                     # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                     if 'likeconst' not in exposure.meta:
@@ -627,7 +627,6 @@ class Model:
                                    labelimg='Band={}'.format(exposure.band), isfirstmodel=isfirstmodel,
                                    islastmodel=islastmodel, plotascolumn=plotascolumn)
         else:
-            diff = None
             if hasmask:
                 chi = (exposure.image[exposure.maskinverse] - modelimage[exposure.maskinverse]) * \
                     exposure.sigmainverse[exposure.maskinverse]
@@ -648,7 +647,7 @@ class Model:
 
         return likelihood, chi, exposure.image, modelimage
 
-    def _getexposuremodelsetup(self, exposure, engine=None, engineopts=None, clock=False, times={}):
+    def _getexposuremodelsetup(self, exposure, engine=None, engineopts=None, clock=False, times=None):
         if engine is None:
             engine = self.engine
         if engineopts is None:
@@ -659,6 +658,8 @@ class Model:
         band = exposure.band
         if clock:
             timenow = time.time()
+            if times is None:
+                times = {}
         else:
             times = None
         profiles = self.getprofiles([band], engine=engine)
@@ -758,7 +759,7 @@ class Model:
         return profiles, metamodel, times
 
     def getexposuremodel(self, exposure, profiles=None, metamodel=None, engine=None, engineopts=None,
-                         drawimage=True, scale=1, clock=False, times={}):
+                         drawimage=True, scale=1, clock=False, times=None):
         """
             Draw model image for one exposure with one PSF
 
@@ -775,6 +776,8 @@ class Model:
         if clock:
             times = metamodel['times'] if 'times' in metamodel else []
             timenow = time.time()
+            if times is None:
+                times = {}
 
         if engine == "galsim":
             gsparams = getgsparams(engineopts)
@@ -1344,9 +1347,8 @@ class PhotometricModel:
         :param engine: Valid rendering engine
         :param bands: List of bands
         :param cenx: X coordinate
-        :param ceny:
-        :param time: A time for variable sources. Should actually be a duration for very long
-        exposures/highly variable sources.
+        :param ceny: Y coordinate
+        :param time: A time for variable sources. Not implemented yet.
         :param engineopts: Dict of engine options
         :return: List of dicts by band
         """
@@ -1363,12 +1365,14 @@ class PhotometricModel:
                 raise RuntimeError('Non-unity flux ratio for final component')
         return profiles
 
-    def __init__(self, components, fluxes=[]):
+    def __init__(self, components, fluxes=None):
         for i, comp in enumerate(components):
             if not isinstance(comp, Component):
-                raise TypeError("PhotometricModel component[{:s}](type={:s}) "
+                raise TypeError("PhotometricModel component[{:d}](type={:s}) "
                                 "is not an instance of {:s}".format(
                     i, type(comp), type(Component)))
+        if fluxes is None:
+            fluxes = []
         for i, flux in enumerate(fluxes):
             if not isinstance(flux, FluxParameter):
                 raise TypeError("PhotometricModel flux[{:d}](type={:s}) is not an instance of {:s}".format(
@@ -1390,10 +1394,10 @@ class PhotometricModel:
 # TODO: Implement and use, with optional WCS attached?
 class Position:
     def __init__(self, x, y):
-        for key, value in {"x":x, "y":y}:
+        for key, value in {"x": x, "y": y}:
             if not isinstance(value, Parameter):
                 raise TypeError("Position[{:s}](type={:s}) is not an instance of {:s}".format(
-                    key, type(param), type(Parameter)))
+                    key, type(value), type(Parameter)))
         self.x = x
         self.y = y
 
@@ -3414,7 +3418,7 @@ class Transform:
             if transform is not reverse:
                 raise ValueError(
                     "One of transform (type={:s}) and reverse (type={:s}) is {:s} but "
-                    "both or neither must be".format(type(transform, type(reverse), type(None)))
+                    "both or neither must be".format(type(transform), type(reverse), type(None))
                  )
             else:
                 transform = self.null
@@ -3422,6 +3426,7 @@ class Transform:
         self.transform = transform
         self.reverse = reverse
         # TODO: Verify if forward(reverse(x)) == reverse(forward(x)) +/- error for x in ???
+
 
 class Limits:
     """

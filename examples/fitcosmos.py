@@ -41,6 +41,8 @@ import multiprofit.fitutils as mpffit
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 
+from modelling_research import make_cutout
+
 options = {
     "algos":       {"default": {"scipy": "BFGS", "pygmo": "lbfgs"}},
     "backgrounds": {"default": [1.e3]},
@@ -70,7 +72,7 @@ def getellipseestimate(img, denoise=True):
     flux = imgmeas[y, x]
     y = y - imgmeas.shape[0]/2.
     x = x - imgmeas.shape[1]/2.
-    inertia = np.zeros((2,2))
+    inertia = np.zeros((2, 2))
     inertia[0, 0] = np.sum(flux*x**2)
     inertia[0, 1] = np.sum(flux*x*y)
     inertia[1, 0] = inertia[0, 1]
@@ -551,7 +553,7 @@ def fitgalaxy(
                         else:
                             transform = param.transform.transform
                             param.limits = mpfobj.Limits(
-                                lower=transform(0), upper=transform(valuesmaxband[paramname]),
+                                lower=transform(0), upper=transform(valuemax),
                                 transformed=True)
                     # Reset non-finite free param values
                     # This occurs e.g. at the limits of a logit transformed param
@@ -697,9 +699,9 @@ def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, v
 
 # PSFmodels: array of tuples (modelname, ispixelated)
 def fitcosmosgalaxy(
-        idcosmosgs, srcs, modelspecs, rgcfits, rgcat, ccat, results={}, plot=False, redo=True, redopsfs=False,
-        modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'], resetimages=False,
-        imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
+        idcosmosgs, srcs, modelspecs, rgcfits, rgcat, ccat, butler=None, skymap=None, results={}, plot=False,
+        redo=True, redopsfs=False, modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
+        resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
     if results is None:
         results = {}
     np.random.seed(idcosmosgs)
@@ -710,7 +712,11 @@ def fitcosmosgalaxy(
     psfhst = rgcat.getPSF(idcosmosgs)
     coaddshsc = None
     if "hsc" in srcs or "hst2hsc" in srcs:
+        if butler is None or skymap is None:
+            raise ValueError('Must provide butler and skymap if fitting HSC or HST2HSC')
+        tract = skymap.getDataID()['tract']
         # Get the HSC dataRef
+        import lsst.afw.geom as geom
         spherePoint = geom.SpherePoint(radec[0], radec[1], geom.degrees)
         patch = skymap[tract].findPatch(spherePoint).getIndex()
         patch = ",".join([str(x) for x in patch])
@@ -760,6 +766,7 @@ def fitcosmosgalaxy(
 
                 useNoiseReplacer = True
                 if useNoiseReplacer:
+                    from lsst.meas.base.measurementInvestigationLib import rebuildNoiseReplacer
                     measCat = dataRefs[band].get("deepCoadd_meas")
                     noiseReplacer = rebuildNoiseReplacer(coadd, measCat)
                     print('noiseReplacer band={} seedMult={}, mean+/-std={:4f}+/-{:4f}'.format(
@@ -961,6 +968,36 @@ def fitcosmosgalaxy(
 
 def main(args):
     modelspecs = getmodelspecs(None if args.modelspecfile is None else os.path.expanduser(args.modelspecfile))
+
+    if args.file is not None:
+        args.file = os.path.expanduser(args.file)
+    if args.file is not None and os.path.isfile(args.file):
+            with open(args.file, 'rb') as f:
+                data = pickle.load(f)
+    else:
+        data = {}
+
+    if args.plot:
+        mpl.rcParams['image.origin'] = 'lower'
+
+    srcs = ['hst'] if args.fithst else []
+    if args.fithsc or args.fithst2hsc:
+        import lsst.daf.persistence as dafPersist
+
+        butler = dafPersist.Butler(args.hscrepo)
+        skymap = butler.get("deepCoadd_skyMap", dataId={"tract": 9813})
+    if args.fithsc:
+        srcs += ["hsc"]
+    if args.fithst2hsc:
+        srcs += ["hst2hsc"]
+    bands = (['F814W'] if args.fithst else []) + (args.hscbands if (args.fithsc or args.fithst2hsc) else [])
+    for argname, values in {'imgplotmaxs': args.imgplotmaxs, 'weightsband': args.weightsband}.items():
+        if values is not None:
+            if len(bands) != len(values):
+                raise ValueError('len({}={})={} != len(bands={})={}'.format(
+                    argname, values, len(values), bands, len(bands)))
+            #values = {key: value for key, value in zip(bands, values)}
+
     print('Loading COSMOS catalog at ' + os.path.join(args.catalogpath, args.catalogfile))
     try:
         rgcat = gs.RealGalaxyCatalog(args.catalogfile, dir=args.catalogpath)
@@ -976,45 +1013,7 @@ def main(args):
             args.catalogfile, args.catalogpath))
         print("Not using COSMOSCatalog")
         ccat = None
-
-    if args.file is not None:
-        args.file = os.path.expanduser(args.file)
-    if args.file is not None and os.path.isfile(args.file):
-            with open(args.file, 'rb') as f:
-                data = pickle.load(f)
-    else:
-        data = {}
-
-    if args.plot:
-        mpl.rcParams['image.origin'] = 'lower'
-
     rgcfits = ap.io.fits.open(os.path.join(args.catalogpath, args.catalogfile))[1].data
-    srcs = ['hst'] if args.fithst else []
-    if args.fithsc or args.fithst2hsc:
-        from modelling_research import make_cutout
-        import lsst.afw.geom as geom
-        import lsst.daf.persistence as dafPersist
-        from lsst.meas.base.measurementInvestigationLib import rebuildNoiseReplacer
-        from lsst.afw.table import SourceTable
-        from lsst.meas.base.measurementInvestigationLib import makeRerunCatalog
-        from lsst.meas.base import (SingleFrameMeasurementConfig,
-                                    SingleFrameMeasurementTask)
-        tract = 9813
-        butler = dafPersist.Butler('/datasets/hsc/repo/rerun/RC/w_2019_02/DM-16110/')
-        dataId = {"tract": tract}
-        skymap = butler.get("deepCoadd_skyMap", dataId=dataId)
-    if args.fithsc:
-        srcs += ["hsc"]
-    if args.fithst2hsc:
-        srcs += ["hst2hsc"]
-    bands = (['F814W'] if args.fithst else []) + (args.hscbands if (args.fithsc or args.fithst2hsc) else [])
-    for argname, values in {'imgplotmaxs': args.imgplotmaxs, 'weightsband': args.weightsband}.items():
-        if values is not None:
-            if len(bands) != len(values):
-                raise ValueError('len({}={})={} != len(bands={})={}'.format(
-                    argname, values, len(values), bands, len(bands)))
-            #values = {key: value for key, value in zip(bands, values)}
-
     nfit = 0
     for index in args.indices:
         idrange = [np.int(x) for x in index.split(",")]
@@ -1022,7 +1021,8 @@ def main(args):
             print("Fitting COSMOS galaxy with ID: {}".format(idnum))
             try:
                 fits = fitcosmosgalaxy(idnum, srcs=srcs, modelspecs=modelspecs, rgcfits=rgcfits, rgcat=rgcat,
-                                       ccat=ccat, plot=args.plot, redo=args.redo, redopsfs=args.redopsfs,
+                                       ccat=ccat, butler=butler, skymap=skymap, plot=args.plot,
+                                       redo=args.redo, redopsfs=args.redopsfs,
                                        resetimages=True, hst2hscmodel=args.hst2hscmodel,
                                        hscbands=args.hscbands, modellib=args.modellib,
                                        results=data[idnum] if idnum in data else None,
@@ -1065,6 +1065,8 @@ if __name__ == '__main__':
         'fithst2hsc':  {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
                                                                             'to HSC seeing'},
         'hscbands':    {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
+        'hscrepo':     {'type': str, 'default': '/datasets/hsc/repo/rerun/RC/w_2019_02/DM-16110/',
+                        'help': 'Path to HSC processing repository'},
         'hst2hscmodel': {'type': str, 'default': None, 'help': 'HST model fit to use for mock HSC image'},
         'imgplotmaxs':  {'type': float, 'nargs': '*', 'default': None,
                          'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '

@@ -274,7 +274,7 @@ def getmodel(
     components = []
 
     if fluxfracs is None:
-        fluxfracs = 1.0/ncomps + np.zeros(ncomps)
+        fluxfracs = np.repeat(1.0/ncomps, ncomps)
 
     compnum = 0
     for profile, nprofiles in profiles.items():
