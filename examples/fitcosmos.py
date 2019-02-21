@@ -966,7 +966,53 @@ def fitcosmosgalaxy(
     return results
 
 
-def main(args):
+def main():
+    parser = argparse.ArgumentParser(description='PyProFit HST COSMOS galaxy modelling test')
+
+    flags = {
+        'catalogpath': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog path'},
+        'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
+        'file': {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
+        'fithsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
+        'fithst': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
+        'fithst2hsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
+                                                                           'to HSC seeing'},
+        'hscbands': {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
+        'hscrepo': {'type': str, 'default': '/datasets/hsc/repo/rerun/RC/w_2019_02/DM-16110/',
+                    'help': 'Path to HSC processing repository'},
+        'hst2hscmodel': {'type': str, 'default': None, 'help': 'HST model fit to use for mock HSC image'},
+        'imgplotmaxs': {'type': float, 'nargs': '*', 'default': None,
+                        'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
+                                'then HSC bands.'},
+        'imgplotmaxmulti': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
+        'indices': {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
+        'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
+        'modellib': {'type': str, 'nargs': '?', 'default': 'scipy', 'help': 'Optimization libraries'},
+        'modellibopts': {'type': str, 'nargs': '?', 'default': None, 'help': 'Model fitting options'},
+        'nwrite': {'type': int, 'default': 5, 'help': 'Number of galaxies to fit before writing file'},
+        #        'engines':    {'type': str,   'nargs': '*', 'default': 'galsim', 'help': 'Model generation engines'},
+        'plot': {'type': mpfutil.str2bool, 'default': False, 'help': 'Toggle plotting of final fits'},
+        #        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
+        'redo': {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
+        'redopsfs': {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
+        'weightsband': {'type': float, 'nargs': '*', 'default': None,
+                        'help': 'Multiplicative weights for scaling images in multi-band RGB'},
+        'write': {'type': mpfutil.str2bool, 'default': True, 'help': 'Write file?'},
+    }
+
+    for key, value in flags.items():
+        if key in options:
+            default = options[key]["default"]
+        else:
+            default = value['default']
+        if 'help' in value:
+            value['help'] += ' (default: ' + str(default) + ')'
+        value["default"] = default
+        parser.add_argument('--' + key, **value)
+
+    args = parser.parse_args()
+    args.catalogpath = os.path.expanduser(args.catalogpath)
+
     modelspecs = getmodelspecs(None if args.modelspecfile is None else os.path.expanduser(args.modelspecfile))
 
     if args.file is not None:
@@ -986,17 +1032,21 @@ def main(args):
 
         butler = dafPersist.Butler(args.hscrepo)
         skymap = butler.get("deepCoadd_skyMap", dataId={"tract": 9813})
+    else:
+        butler = None
+        skymap = None
     if args.fithsc:
         srcs += ["hsc"]
     if args.fithst2hsc:
         srcs += ["hst2hsc"]
     bands = (['F814W'] if args.fithst else []) + (args.hscbands if (args.fithsc or args.fithst2hsc) else [])
-    for argname, values in {'imgplotmaxs': args.imgplotmaxs, 'weightsband': args.weightsband}.items():
-        if values is not None:
-            if len(bands) != len(values):
+    for nameattr in ['imgplotmaxs', 'weightsband']:
+        attr = getattr(args, nameattr)
+        if attr is not None:
+            if len(bands) != len(attr):
                 raise ValueError('len({}={})={} != len(bands={})={}'.format(
-                    argname, values, len(values), bands, len(bands)))
-            #values = {key: value for key, value in zip(bands, values)}
+                    nameattr, attr, len(attr), bands, len(bands)))
+            setattr(args, nameattr, {key: value for key, value in zip(bands, attr)})
 
     print('Loading COSMOS catalog at ' + os.path.join(args.catalogpath, args.catalogfile))
     try:
@@ -1049,54 +1099,4 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='PyProFit HST COSMOS galaxy modelling test')
-
-    signature = inspect.signature(fitgalaxy)
-    defaults = {
-        k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty
-    }
-
-    flags = {
-        'catalogpath': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog path'},
-        'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
-        'file':        {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
-        'fithsc':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
-        'fithst':      {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
-        'fithst2hsc':  {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
-                                                                            'to HSC seeing'},
-        'hscbands':    {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
-        'hscrepo':     {'type': str, 'default': '/datasets/hsc/repo/rerun/RC/w_2019_02/DM-16110/',
-                        'help': 'Path to HSC processing repository'},
-        'hst2hscmodel': {'type': str, 'default': None, 'help': 'HST model fit to use for mock HSC image'},
-        'imgplotmaxs':  {'type': float, 'nargs': '*', 'default': None,
-                         'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
-                                 'then HSC bands.'},
-        'imgplotmaxmulti': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
-        'indices':     {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
-        'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
-        'modellib':    {'type': str,   'nargs': '?', 'default': 'scipy', 'help': 'Optimization libraries'},
-        'modellibopts':{'type': str,   'nargs': '?', 'default': None, 'help': 'Model fitting options'},
-        'nwrite':      {'type': int, 'default': 5, 'help': 'Number of galaxies to fit before writing file'},
-#        'engines':    {'type': str,   'nargs': '*', 'default': 'galsim', 'help': 'Model generation engines'},
-        'plot':        {'type': mpfutil.str2bool, 'default': False, 'help': 'Toggle plotting of final fits'},
-#        'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
-        'redo':        {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
-        'redopsfs':    {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
-        'weightsband': {'type': float, 'nargs': '*', 'default': None,
-                        'help': 'Multiplicative weights for scaling images in multi-band RGB'},
-        'write':       {'type': mpfutil.str2bool, 'default': True, 'help': 'Write file?'},
-    }
-
-    for key, value in flags.items():
-        if key in options:
-            default = options[key]["default"]
-        else:
-            default = value['default']
-        if 'help' in value:
-            value['help'] += ' (default: ' + str(default) + ')'
-        value["default"] = default
-        parser.add_argument('-' + key, **value)
-
-    argsparsed = parser.parse_args()
-    argsparsed.catalogpath = os.path.expanduser(argsparsed.catalogpath)
-    main(argsparsed)
+    main()
