@@ -379,7 +379,44 @@ class Model:
                  modelnameappendparams=None, drawimage=True, scale=1, clock=False, plotascolumn=False,
                  imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
         """
-            Get the likelihood and/or model images
+        Evaluate a model, plot and/or benchmark, and optionally return the likelihood and derived images.
+
+        :param params: ndarray; optional new values for all model free parameters in the order returned by
+            getparameters. Defaults to use existing values.
+        :param data: multiprofit.data; optional override to evaluate model on a different set of data. May
+            not work as expected unless the data has exposures of the same size and in the same order as
+            the default (self.data).
+        :param bands: iterable; bandpass filters to use for evaluating the model. Defaults to use all bands
+            in data.
+        :param engine: A valid rendering engine
+        :param engineopts: dict; engine options.
+        :param paramstransformed: bool; are the values in params already transformed?
+        :param getlikelihood: bool; return the model likelihood?
+        :param likelihoodlog: bool; return the natural logarithm of the likelihood?
+        :param keeplikelihood: bool; store each exposure's likelihood in its metadata?
+        :param likelihoodonly: bool; compute only the likelihood using faster C++ code? Overrides plot.
+        :param keepimages: bool; store each exposure's model image in its metadata?
+        :param keepmodels: bool; store each exposure's model specification in its metadata?
+        :param plot: bool; plot the model and residuals for each exposure?
+        :param plotmulti: bool; plot colour images if fitting multiband? Ignored otherwise.
+        :param figure: matplotlib figure handle. If data has multiple bands, must be a dict keyed by band.
+        :param axes: iterable of matplotlib axis handles. If data has multiple bands, must be a dict keyed by
+            band.
+        :param figurerow: non-negative integer; the index of the axis handle to plot this model on.
+        :param modelname: string; a name for the model to appear in plots.
+        :param modeldesc: string; a description of the model to appear in plots.
+        :param modelnameappendparams: iterable of multiprofit.Parameter; parameters whose values should
+            appear in the plot (if possible).
+        :param drawimage: bool; draw (evaluate) the model image for each exposure? Ignored if getlikelihood
+            is True.
+        :param scale: float; Spatial scale factor for drawing images. User beware; this may not work
+            properly and should be replaced by exposure WCS soon.
+        :param clock: bool; benchmark model evaluation?
+        :param plotascolumn: bool; are the plots arranged vertically?
+        :param imgplotmaxs: dict; key band: value maximum for image/model plots.
+        :param imgplotmaxmulti: float; maximum for multiband image/model plots.
+        :param weightsband: dict; key band: weight for scaling each band in multiband plots.
+        :return:
         """
         times = {}
         if clock:
