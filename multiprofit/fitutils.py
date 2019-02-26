@@ -164,24 +164,24 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
     return param
 
 
-# TODO: Think about whether this should work with a dict of fluxfracs by band (and how)
-def getcomponents(profile, fluxfracs, values={}, istransformedvalues=False):
-    bands = list(fluxfracs.keys())
+def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxesfracs=True):
+    bands = list(fluxes.keys())
     bandref = bands[0]
     for band in bands:
-        fluxfracsband = fluxfracs[band]
-        fluxfracsband = np.array(fluxfracsband)
-        sumfluxfracsband = np.sum(fluxfracsband)
-        if any(np.logical_not(fluxfracsband > 0)) or not sumfluxfracsband < 1:
-            raise RuntimeError('fluxfracsband={} has elements not > 0 or sum {} < 1'.format(
-                fluxfracsband, sumfluxfracsband))
-        if len(fluxfracsband) == 0:
-            fluxfracsband = np.ones(1)
-        else:
-            fluxfracsband /= np.concatenate([np.array([1.0]), 1-np.cumsum(fluxfracsband[:-1])])
-            fluxfracsband = np.append(fluxfracsband, 1)
-        fluxfracs[band] = fluxfracsband
-        ncompsband = len(fluxfracs[band])
+        if isfluxesfracs:
+            fluxfracsband = fluxes[band]
+            fluxfracsband = np.array(fluxfracsband)
+            sumfluxfracsband = np.sum(fluxfracsband)
+            if any(np.logical_not(fluxfracsband > 0)) or not sumfluxfracsband < 1:
+                raise RuntimeError('fluxfracsband={} has elements not > 0 or sum {} < 1'.format(
+                    fluxfracsband, sumfluxfracsband))
+            if len(fluxfracsband) == 0:
+                fluxfracsband = np.ones(1)
+            else:
+                fluxfracsband /= np.concatenate([np.array([1.0]), 1-np.cumsum(fluxfracsband[:-1])])
+                fluxfracsband = np.append(fluxfracsband, 1)
+            fluxes[band] = fluxfracsband
+        ncompsband = len(fluxes[band])
         if band == bandref:
             ncomps = ncompsband
         elif ncompsband != ncomps:
@@ -199,12 +199,13 @@ def getcomponents(profile, fluxfracs, values={}, istransformedvalues=False):
         if 'nser' in values:
             values['nser'] = np.zeros_like(values['nser'])
 
+    transform = transformsref["logit"] if isfluxesfracs else transformsref["log10"]
     for compi in range(ncomps):
         islast = compi == (ncomps - 1)
         paramfluxescomp = [
             proobj.FluxParameter(
-                band, "flux", special.logit(fluxfracs[band][compi]), None, limits=limitsref["none"],
-                transform=transformsref["logit"], fixed=islast, isfluxratio=True)
+                band, "flux", transform.transform(fluxes[band][compi]), None, limits=limitsref["none"],
+                transform=transform, fixed=islast, isfluxratio=isfluxesfracs)
             for band in bands
         ]
         params = [getparamdefault(param, valueslice[compi], profile,
@@ -225,7 +226,8 @@ def getcomponents(profile, fluxfracs, values={}, istransformedvalues=False):
 # Convenience function to get a model with 'standard' limits and transforms
 def getmodel(
     fluxesbyband, modelstr, imagesize, sizes=None, axrats=None, angs=None, slopes=None, fluxfracs=None,
-    offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False
+    offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False,
+    convertfluxfracs=False
 ):
     bands = list(fluxesbyband.keys())
     modelstrs = modelstr.split(",")
@@ -304,6 +306,9 @@ def getmodel(
         for bandi, band in enumerate(bands)
     ]
     modelphoto = proobj.PhotometricModel(components, paramfluxes)
+    if convertfluxfracs:
+        modelphoto.convertfluxparameters(
+            usefluxfracs=False, transform=transformsref['log10'], limits=limitsref["none"])
     source = proobj.Source(modelastro, modelphoto, name)
     model = proobj.Model([source], data, engine=engine, engineopts=engineopts)
     return model
@@ -372,37 +377,25 @@ def setexposure(model, band, index=0, image=None, sigmainverse=None, psf=None, m
 # ncomponents is an array of ints specifying the number of Gaussian components in each physical component
 def getmultigaussians(profiles, paramsinherit=None, ncomponents=None, fluxfracmin=1e-4):
     bands = set()
-    if not 0 <= fluxfracmin < 1:
-        raise ValueError('Invalid fluxfracmin not 0 <= {} < 1'.format(fluxfracmin))
     for profile in profiles:
         for band in profile.keys():
             bands.add(band)
     bands = list(bands)
     bandref = bands[0]
     params = ['mag', 're', 'axrat', 'ang', 'nser']
-    fluxfracs = {}
     values = {}
-    samefluxfracs = ncomponents is None or len(ncomponents) == 1
+    fluxes = {}
     for band in bands:
+        # Keep these as lists to make the check against values[bandref] below easier (no need to call np.all)
         values[band] = {
             'size' if name == 're' else 'slope' if name == 'nser' else name:
                 [profile[band][name] for profile in profiles]
             for name in params
         }
-        fluxfracs[band] = 10 ** (-0.4 * np.array(values[band]['mag']))
-        if fluxfracmin > 0:
-            fluxfracs[band] /= np.sum(fluxfracs[band])
-            fluxfracs[band][fluxfracs[band] < fluxfracmin] = fluxfracmin
-        fluxfracs[band] /= np.sum(fluxfracs[band])
-        fluxfracs[band] = fluxfracs[band][:-1]
+        # magtoflux needs a numpy array
+        fluxes[band] = mpfutil.magtoflux(np.array(values[band]['mag']))
+        # Ensure that only band-independent parameters are compared
         del values[band]['mag']
-        if samefluxfracs:
-            isclosefluxfracs = np.isclose(fluxfracs[band], fluxfracs[bandref], rtol=0, atol=1e-12)
-            if not np.all(isclosefluxfracs):
-                raise RuntimeError(
-                    'isclosefluxfracs={} so fluxfracs[{}]={} != fluxfracs[{}]={}; '
-                    'band-dependent fluxfracs unsupported'.format(
-                        isclosefluxfracs, band, fluxfracs[band], bandref, fluxfracs[bandref]))
         if not values[band] == values[bandref]:
             raise RuntimeError('values[{}]={} != values[{}]={}; band-dependent values unsupported'.format(
                 band, values[band], bandref, values[bandref]))
@@ -411,21 +404,23 @@ def getmultigaussians(profiles, paramsinherit=None, ncomponents=None, fluxfracmi
     values = {key: np.array(value) for key, value in values[band].items()}
 
     # These are the Gaussian components
-    componentsgauss = getcomponents('gaussian', fluxfracs, values=values)
+    componentsgauss = getcomponents('gaussian', fluxes, values=values, isfluxesfracs=False)
     ncomponentsgauss = len(componentsgauss)
     if paramsinherit is not None and ncomponentsgauss > 1:
         if ncomponents is None:
-            ncomponents = np.array([ncomponentsgauss])
+            ncomponents = [ncomponentsgauss]
+        ncomponents = np.array(ncomponents)
         if np.sum(ncomponents) != ncomponentsgauss:
-            raise ValueError('Number of Gaussian components={} != total number of Gaussian sub-components '
-                             'in physical components={}; list={}'.format(
-                ncomponentsgauss, np.sum(ncomponents), ncomponents))
+            raise ValueError(
+                'Number of Gaussian components={} != total number of Gaussian sub-components in physical '
+                'components={}; list={}'.format(ncomponentsgauss, np.sum(ncomponents), ncomponents))
 
         # Inheritee has every right to be a word
         componentinit = 0
         for ncompstoadd in ncomponents:
-            paramsinheritees = {param.name: param for param in componentsgauss[componentinit].getparameters()
-                                if param.name in paramsinherit}
+            paramsinheritees = {
+                param.name: param for param in componentsgauss[componentinit].getparameters()
+                    if param.name in paramsinherit}
             for param in paramsinheritees.values():
                 param.inheritors = []
             for comp in componentsgauss[componentinit+1:componentinit+ncompstoadd]:

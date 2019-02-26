@@ -1355,6 +1355,23 @@ class Source:
 
 
 class PhotometricModel:
+    def convertfluxparameters(self, usefluxfracs, **kwargs):
+        if usefluxfracs:
+            raise RuntimeError('Converting model to use fluxfracs not supported yet')
+        else:
+            profiles = self.getprofiles('libprofit', self.fluxes.keys(), 0, 0)
+            for profilescomp, comp in zip(profiles, self.components):
+                for i, flux in enumerate(comp.fluxes):
+                    bandprofile = profilescomp[flux.band]
+                    if not flux.isfluxratio:
+                        raise RuntimeError('Tried to convert component without fluxfracs from fluxfracs')
+                    flux = FluxParameter(
+                        band=flux.band, value=0, name=flux.name, isfluxratio=False,
+                        unit=self.fluxes[flux.band].unit, **kwargs)
+                    flux.setvalue(mpfutil.magtoflux(bandprofile['mag']), transformed=False)
+                    comp.fluxes[i] = flux
+        self.fluxes = {}
+
     def getparameters(self, free=True, fixed=True, flatten=True, astrometry=None):
         paramsflux = [flux for flux in self.fluxes.values() if
                       (flux.fixed and fixed) or (not flux.fixed and free)]
@@ -1608,7 +1625,7 @@ class EllipticalProfile(Component):
                         "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                     }
                 elif engine == "libprofit":
-                    profile["mag"] = -2.5 * np.log10(flux)
+                    profile["mag"] = mpfutil.fluxtomag(flux)
                     # TODO: Review this. It might not be a great idea because Sersic != Moffat integration
                     # libprofit should be able to handle Moffats with infinite con
                     if self.profile != "sersic" and self.isgaussian():
@@ -3248,7 +3265,6 @@ class MultiGaussianApproximationProfile(Component):
                 if not 0 <= fluxratio <= 1:
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
                 flux *= bandfluxes[band]
-                # bandfluxes[band] -= flux
                 # TODO: Is subtracting as above best? Should be more accurate, but mightn't guarantee flux>=0
                 bandfluxes[band] *= (1.0-fluxratio)
             if not 0 < profile["axrat"] <= 1:
@@ -3296,7 +3312,7 @@ class MultiGaussianApproximationProfile(Component):
                     })
                 elif engine == "libprofit":
                     weightprofile["nser"] = 0.5
-                    weightprofile["mag"] = -2.5 * np.log10(weight * flux)
+                    weightprofile["mag"] = mpfutil.fluxtomag(weight*flux)
                     weightprofile["re"] = re
                 profiles[subcomp][band] = weightprofile
 

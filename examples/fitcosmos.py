@@ -154,18 +154,23 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
     return psfmodelfits
 
 
-def initmodelfrommodelfits(model, modelfits):
+def initmodelfrommodelfits(model, modelfits, fluxfracs=None):
     # TODO: Come up with a better structure for parameter
     # TODO: Move to utils as a generic init model from other model(s) method
     chisqreds = [value['chisqred'] for value in modelfits]
-    modelbest = chisqreds.index(min(chisqreds))
-    fluxfracs = 1./np.array(chisqreds)
-    fluxfracs = fluxfracs/np.sum(fluxfracs)
-    total = 1
-    for i, frac in enumerate(fluxfracs):
-        fluxfracs[i] = frac/total
-        total -= frac
-    fluxfracs[-1] = 1.0
+    if fluxfracs is None:
+        modelbest = chisqreds.index(min(chisqreds))
+        fluxfracs = 1./np.array(chisqreds)
+        fluxfracs = fluxfracs/np.sum(fluxfracs)
+    if not len(model.sources) == 1:
+        raise RuntimeError("Can't init model with multiple sources from fits")
+    hasfluxfracs = len(model.sources[0].modelphotometric.fluxes) > 0
+    if hasfluxfracs:
+        total = 1
+        for i, frac in enumerate(fluxfracs):
+            fluxfracs[i] = frac/total
+            total -= frac
+        fluxfracs[-1] = 1.0
     print('Initializing from best model={} w/fluxfracs: {}'.format(modelfits[modelbest]['name'], fluxfracs))
     paramtreebest = modelfits[modelbest]['paramtree']
     fluxcensinit = paramtreebest[0][1][0] + paramtreebest[0][0]
@@ -176,7 +181,10 @@ def initmodelfrommodelfits(model, modelfits):
         paramtree = modelfit['paramtree']
         for param, value in zip(modelfit['params'], modelfit['paramvals']):
             param.setvalue(value, transformed=False)
-        for iflux, flux in enumerate(paramtree[0][1][0]):
+        sourcefluxes = paramtree[0][1][0]
+        if (len(sourcefluxes) > 0) != hasfluxfracs:
+            raise RuntimeError('Can\'t init model with hasfluxfracs={} and opposite for model fit')
+        for iflux, flux in enumerate(sourcefluxes):
             fluxisflux = isinstance(flux, mpfobj.FluxParameter)
             if fluxisflux and not flux.isfluxratio:
                 fluxesinit.append(flux)
@@ -200,7 +208,7 @@ def initmodelfrommodelfits(model, modelfits):
         lenfluxcensexpect = 2 + nbands
         errfluxcens = len(fluxcens) != lenfluxcensexpect
         errfluxcensinit = len(fluxcensinit) != lenfluxcensexpect
-        errmsg = None if not (errfluxcens or errfluxcensinit) else\
+        errmsg = None if not (errfluxcens or errfluxcensinit) else \
             '{} len(fluxcen{})={} != {}=(2 x,y cens + nbands={})'.format(
                 name, 'init' if errfluxcensinit else '', len(fluxcens) if errfluxcens else len(fluxcensinit),
                 lenfluxcensexpect, nbands)
@@ -230,9 +238,17 @@ def initmodelfrommodelfits(model, modelfits):
                 ))
         for paramset, (paraminit, value) in zip(compset, compinit):
             if isinstance(paramset, mpfobj.FluxParameter):
-                if not paramset.isfluxratio:
-                    raise RuntimeError('Component flux parameter is not ratio')
-                paramset.setvalue(fluxfracs[idxcomp], transformed=False)
+                if hasfluxfracs:
+                    if not paramset.isfluxratio:
+                        raise RuntimeError('Component flux parameter is not ratio but should be')
+                    paramset.setvalue(fluxfracs[idxcomp], transformed=False)
+                else:
+                    if paramset.isfluxratio:
+                        raise RuntimeError('Component flux parameter is ratio but shouldn\'t be')
+                    # Note this means that the new total flux will be some weighted sum of the best fits
+                    # for each model that went into this, which may not be ideal. Oh well!
+                    paramset.setvalue(paraminit.getvalue(transformed=False)*fluxfracs[idxcomp],
+                                      transformed=False)
             else:
                 if type(paramset) != type(paraminit):
                     # TODO: finish this
@@ -341,7 +357,8 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
 # Engine is galsim; TODO: add options
 def fitgalaxy(
         exposurespsfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
-        fitsbyengine=None, redo=True, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None
+        fitsbyengine=None, redo=True, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None,
+        fitfluxfracs=False
 ):
     """
 
@@ -409,7 +426,9 @@ def fitgalaxy(
     valuesmax = {
        "re": np.sqrt(np.sum((npiximg/2.)**2)),
     }
+    valuesmin = {}
     for band in bands:
+        valuesmin["flux_" + band] = 1e-4 * fluxes[band]
         valuesmax["flux_" + band] = 10 * fluxes[band]
     models = {} if (models is None) else models
     paramsfixeddefault = {}
@@ -447,7 +466,8 @@ def fitgalaxy(
             modelname = modelinfo["name"]
             modeltype = modelinfo["model"]
             modeldefault = mpffit.getmodel(
-                fluxes, modeltype, npiximg, engine=engine, engineopts=engineopts
+                fluxes, modeltype, npiximg, engine=engine, engineopts=engineopts,
+                convertfluxfracs=not fitfluxfracs
             )
             paramsfixeddefault[modeltype] = [param.fixed for param in
                                              modeldefault.getparameters(fixed=True)]
@@ -543,17 +563,18 @@ def fitgalaxy(
                     # This way even methods that don't respect bounds will have to until the transformed
                     # value reaches +/-inf, at least
                     if paramname in valuesmax:
+                        valuemin = 0 if paramname not in valuesmin else valuesmin[paramname]
                         valuemax = valuesmax[paramname]
                         # Most scipy algos ignore limits, so we need to restrict the range manually
                         if modellib == 'scipy':
                             factor = 1/fluxes[param.band] if isflux else 1
                             value = np.min([param.getvalue(transformed=False), valuemax])
-                            param.transform = mpffit.getlogitlimited(0, valuemax, factor=factor)
+                            param.transform = mpffit.getlogitlimited(valuemin, valuemax, factor=factor)
                             param.setvalue(value, transformed=False)
                         else:
                             transform = param.transform.transform
                             param.limits = mpfobj.Limits(
-                                lower=transform(0), upper=transform(valuemax),
+                                lower=transform(valuemin), upper=transform(valuemax),
                                 transformed=True)
                     # Reset non-finite free param values
                     # This occurs e.g. at the limits of a logit transformed param
@@ -701,7 +722,7 @@ def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, v
 def fitcosmosgalaxy(
         idcosmosgs, srcs, modelspecs, rgcfits, rgcat, ccat, butler=None, skymap=None, results={}, plot=False,
         redo=True, redopsfs=False, modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
-        resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None):
+        resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None, fitfluxfracs=False):
     if results is None:
         results = {}
     np.random.seed(idcosmosgs)
@@ -944,7 +965,7 @@ def fitcosmosgalaxy(
         fits, models = fitgalaxy(
             exposurespsfs, modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
             fitsbyengine=fitsbyengine, redo=redo, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
-            weightsband=weightsband)
+            weightsband=weightsband, fitfluxfracs=fitfluxfracs)
         if resetimages:
             for band, psfsband in psfs.items():
                 if engine in psfsband:
@@ -973,6 +994,8 @@ def main():
         'catalogpath': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog path'},
         'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
         'file': {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
+        'fitfluxfracs': {'type': mpfutil.str2bool, 'default': False,
+                         'help': 'Fit component flux fractions for galaxies instead of fluxes'},
         'fithsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
         'fithst': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
         'fithst2hsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
@@ -1070,14 +1093,13 @@ def main():
         for idnum in range(idrange[0], idrange[0 + (len(idrange) > 1)] + (len(idrange) == 1)):
             print("Fitting COSMOS galaxy with ID: {}".format(idnum))
             try:
-                fits = fitcosmosgalaxy(idnum, srcs=srcs, modelspecs=modelspecs, rgcfits=rgcfits, rgcat=rgcat,
-                                       ccat=ccat, butler=butler, skymap=skymap, plot=args.plot,
-                                       redo=args.redo, redopsfs=args.redopsfs,
-                                       resetimages=True, hst2hscmodel=args.hst2hscmodel,
-                                       hscbands=args.hscbands, modellib=args.modellib,
-                                       results=data[idnum] if idnum in data else None,
-                                       imgplotmaxs=args.imgplotmaxs, imgplotmaxmulti=args.imgplotmaxmulti,
-                                       weightsband=args.weightsband)
+                fits = fitcosmosgalaxy(
+                    idnum, srcs=srcs, modelspecs=modelspecs, rgcfits=rgcfits, rgcat=rgcat, ccat=ccat,
+                    butler=butler, skymap=skymap, plot=args.plot, redo=args.redo, redopsfs=args.redopsfs,
+                    resetimages=True, hst2hscmodel=args.hst2hscmodel, hscbands=args.hscbands,
+                    modellib=args.modellib, results=data[idnum] if idnum in data else None,
+                    imgplotmaxs=args.imgplotmaxs, imgplotmaxmulti=args.imgplotmaxmulti,
+                    weightsband=args.weightsband, fitfluxfracs=args.fitfluxfracs)
                 data[idnum] = fits
             except Exception as e:
                 print("Error fitting id={}:".format(idnum))
