@@ -335,7 +335,7 @@ class Model:
         # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
         x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
         axes[4].plot(x, spstats.norm.pdf(x))
-        chisqred = (np.sum(chi ** 2) / len(chi))
+        chisqred = np.sum(chi**2)/len(chi)
         Model._labelfigureaxes(axes, chisqred, modelname=modelname, modeldesc=modeldesc,
                                labelimg=bandstring, isfirstmodel=isfirstmodel, islastmodel=islastmodel,
                                plotascolumn=plotascolumn,
@@ -916,8 +916,8 @@ class Model:
                             profile["offset"] - cenimg)
                         convolve = haspsf and not profile["pointsource"]
                     # TODO: Revise this when image scales are taken into account
-                    profiletype = ("all" if not convolve else
-                        ("big" if profilegs.original.half_light_radius > 1 else "small"))
+                    profiletype = ("all" if not convolve else (
+                        "big" if profilegs.original.half_light_radius > 1 else "small"))
                     if profilesgs[convolve][profiletype] is None:
                         profilesgs[convolve][profiletype] = profilegs
                     else:
@@ -3224,7 +3224,6 @@ class MultiGaussianApproximationProfile(Component):
             [value for value in self.parameters.values() if \
                 (value.fixed and fixed) or (not value.fixed and free)]
 
-
     def getprofiles(self, bandfluxes, engine, cenx, ceny, engineopts=None):
         self._checkengine(engine)
 
@@ -3300,7 +3299,6 @@ class MultiGaussianApproximationProfile(Component):
                     print(np.array([f(slope) for f in self.weightsplines]))
                     print(weights)
                     print(sigmas)
-                    print('wtf')
                     print(weight, sigma, slope, weightprofile)
                     raise RuntimeError('wtf2 fluxsub !>=0')
                 if engine == "galsim":

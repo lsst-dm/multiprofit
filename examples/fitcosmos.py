@@ -275,7 +275,6 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitseng
             print(modelnamecomps)
         chisqreds = [fitsengine[modelnamecomp]["fits"][-1]["chisqred"]
                      for modelnamecomp in modelnamecomps]
-        print(chisqreds)
         inittype = modelnamecomps[np.argmin(chisqreds)]
     else:
         inittype = inittype.split(';')
@@ -629,7 +628,7 @@ def fitgalaxy(
                         fits.append(fit2)
                     fitsbyengine[engine][modelname] = {"fits": fits, "modeltype": modeltype}
                 except Exception as e:
-                    print("Error fitting id={}:".format(idnum))
+                    print("Error fitting galaxy {}:".format(name))
                     print(e)
                     trace = traceback.format_exc()
                     print(trace)
@@ -1052,7 +1051,6 @@ def main():
     srcs = ['hst'] if args.fithst else []
     if args.fithsc or args.fithst2hsc:
         import lsst.daf.persistence as dafPersist
-
         butler = dafPersist.Butler(args.hscrepo)
         skymap = butler.get("deepCoadd_skyMap", dataId={"tract": 9813})
     else:
@@ -1074,16 +1072,15 @@ def main():
     print('Loading COSMOS catalog at ' + os.path.join(args.catalogpath, args.catalogfile))
     try:
         rgcat = gs.RealGalaxyCatalog(args.catalogfile, dir=args.catalogpath)
-    except Exception as e:
-        print("Failed to load RealGalaxyCatalog {} in directory {}".format(
-            args.catalogfile, args.catalogpath))
-        print("Exception:", e)
-        raise e
+    except RuntimeError as err:
+        print("Failed to load RealGalaxyCatalog {} in directory {} due to {}".format(
+            args.catalogfile, args.catalogpath, err))
+        raise err
     try:
         ccat = gs.COSMOSCatalog(args.catalogfile, dir=args.catalogpath)
-    except Exception as e:
-        print("Failed to load COSMOSCatalog {} in directory {}".format(
-            args.catalogfile, args.catalogpath))
+    except RuntimeError as err:
+        print("Failed to load COSMOSCatalog {} in directory {} due to {}".format(
+            args.catalogfile, args.catalogpath, err))
         print("Not using COSMOSCatalog")
         ccat = None
     rgcfits = ap.io.fits.open(os.path.join(args.catalogpath, args.catalogfile))[1].data

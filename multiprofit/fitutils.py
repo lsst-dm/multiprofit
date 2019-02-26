@@ -31,29 +31,29 @@ import timeit
 import multiprofit.objects as proobj
 
 
-def logstretch(x, lower, factor=1):
+def logstretch(x, lower, factor=1.0):
     return np.log10(x-lower)*factor
 
 
-def powstretch(x, lower, factor=1):
+def powstretch(x, lower, factor=1.0):
     return 10**(x*factor) + lower
 
 
-def getlogstretch(lower, factor=1):
+def getlogstretch(lower, factor=1.0):
     return proobj.Transform(
         transform=functools.partial(logstretch, lower=lower, factor=factor),
         reverse=functools.partial(powstretch, lower=lower, factor=1./factor))
 
 
-def logitlimited(x, lower, extent, factor=1):
+def logitlimited(x, lower, extent, factor=1.0):
     return special.logit((x-lower)/extent)*factor
 
 
-def expitlimited(x, lower, extent, factor=1):
+def expitlimited(x, lower, extent, factor=1.0):
     return special.expit(x*factor)*extent + lower
 
 
-def getlogitlimited(lower, upper, factor=1):
+def getlogitlimited(lower, upper, factor=1.0):
     return proobj.Transform(
         transform=functools.partial(logitlimited, lower=lower, extent=upper-lower, factor=factor),
         reverse=functools.partial(expitlimited, lower=lower, extent=upper-lower, factor=1./factor))
@@ -69,7 +69,6 @@ transformsref = {
     "logitaxrat": getlogitlimited(1e-4, 1),
     "logitsersic":  getlogitlimited(0.3, 6.2),
     "logitmultigausssersic": getlogitlimited(0.3, 6.2),
-    "logstretchmultigausssersic": getlogstretch(0.3, 6.2),
 }
 
 
@@ -223,12 +222,33 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
     return components
 
 
-# Convenience function to get a model with 'standard' limits and transforms
 def getmodel(
     fluxesbyband, modelstr, imagesize, sizes=None, axrats=None, angs=None, slopes=None, fluxfracs=None,
     offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False,
     convertfluxfracs=False
 ):
+    """
+    Convenience function to get a multiprofit.objects.model with a single source with components with
+    reasonable default parameters and transforms.
+
+    :param fluxesbyband: Dict; key=band: value=np.array of fluxes per component if fluxfracs is None else
+        source flux
+    :param modelstr: String; comma-separated list of 'component_type:number'
+    :param imagesize: Float[2]; the x- and y-size of the image
+    :param sizes: Float[ncomponents]; Linear sizes of each component
+    :param axrats: Float[ncomponents]; Axis ratios of each component
+    :param angs: Float[ncomponents]; Position angle of each component
+    :param slopes: Float[ncomponents]; Profile shape (e.g. Sersic n) of each components
+    :param fluxfracs: Float[ncomponents]; The flux fraction for each component
+    :param offsetxy: Float[2][ncomponents]; The x-y offsets relative to source center of each component
+    :param name: String; a name for the source
+    :param nexposures: Int > 0; the number of exposures in each band.
+    :param engine: String; the rendering engine to pass to the multiprofit.objects.Model.
+    :param engineopts: Dict; the rendering options to pass to the multiprofit.objects.Model.
+    :param istransformedvalues: Boolean; are the provided initial values above already transformed?
+    :param convertfluxfracs: Boolean; should the model have absolute fluxes per component instead of ratios?
+    :return:
+    """
     bands = list(fluxesbyband.keys())
     modelstrs = modelstr.split(",")
 
@@ -316,6 +336,14 @@ def getmodel(
 
 # Convenience function to evaluate a model and optionally plot with title, returning chi map only
 def evaluatemodel(model, plot=False, title=None, **kwargs):
+    """
+    Convenience function to evaluate a model and optionally at a title to the plot.
+    :param model: multiprofit.Model
+    :param plot: Boolean; generate plot?
+    :param title: String; title to add on top of the plot.
+    :param kwargs: Dict; additional arguments to pass to model.evaluate().
+    :return: Chi maps for each exposure.
+    """
     _, _, chis, _ = model.evaluate(plot=plot, **kwargs)
 
     if plot:
@@ -328,6 +356,18 @@ def evaluatemodel(model, plot=False, title=None, **kwargs):
 # Convenience function to fit a model. kwargs are passed on to evaluatemodel
 def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Nelder-Mead"}, printfinal=True,
              printsteps=100, plot=False, **kwargs):
+    """
+    Convenience function to fit a model with reasonable defaults.
+    :param model: multiprofit.Model
+    :param modeller: multiprofit.Modeller; default: new Modeller.
+    :param modellib: String; the modelling library to use if modeller is None.
+    :param modellibopts: Dict; options to pass to the modeller if modeller is None.
+    :param printfinal: Boolean; print the final parameter value?
+    :param printsteps: Integer; step interval between printing.
+    :param plot: Boolean; plot final fit?
+    :param kwargs: Dict; passed to evaluatemodel() after fitting is complete (e.g. plotting options).
+    :return: Tuple of modeller.fit and modeller.
+    """
     if modeller is None:
         modeller = proobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
     fit = modeller.fit(printfinal=printfinal, printsteps=printsteps)
@@ -373,9 +413,17 @@ def setexposure(model, band, index=0, image=None, sigmainverse=None, psf=None, m
 
 
 # TODO: Figure out multi-band operation here
-# Get Gaussian component objects from profiles that are multi-Gaussian approximations (to e.g. Sersic)
-# ncomponents is an array of ints specifying the number of Gaussian components in each physical component
-def getmultigaussians(profiles, paramsinherit=None, ncomponents=None, fluxfracmin=1e-4):
+def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
+    """
+    Get Gaussian component objects from profiles that are multi-Gaussian approximations (to e.g. Sersic)
+
+    :param profiles: Dict; key band: value: profiles as formatted by mpf.objects.model.getprofiles()
+    :param paramsinherit: List of parameter names for Gaussians to inherit the values of (e.g. axrat, ang)
+    :param ncomponents: Array of ints specifying the number of Gaussian components in each physical
+        component. Defaults to the number of Gaussians used to represent profiles, i.e. each Gaussian has
+        independent ellipse parameters.
+    :return: List of new Gaussian components
+    """
     bands = set()
     for profile in profiles:
         for band in profile.keys():
