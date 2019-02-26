@@ -213,10 +213,13 @@ def getprofilegausscovar(ang, axrat, re):
     return covar
 
 
-def sidecolorbar(axis, figure, img, vertical=True):
+def _sidecolorbar(axis, figure, img, vertical=True, showlabels=True):
     divider = make_axes_locatable(axis)
     cax = divider.append_axes('right' if vertical else 'bottom', size='5%', pad=0.05)
-    figure.colorbar(img, cax=cax, ax=axis, orientation='vertical' if vertical else 'horizontal')
+    cbar = figure.colorbar(img, cax=cax, ax=axis, orientation='vertical' if vertical else 'horizontal')
+    if not showlabels:
+        (cbar.ax.set_yticklabels if vertical else cbar.ax.set_xticklabels)([])
+    return cbar
 
 
 class Model:
@@ -285,9 +288,6 @@ class Model:
             modeldesc += Model._formatmodelparams(modelnameappendparams, bands)
         # TODO: verify lengths
         axes = figaxes[1]
-        if not plotascolumn:
-            for axis in axes[0:4]:
-                axis.xaxis.tick_top()
         imagesall = [np.copy(images), np.copy(modelimages)]
         for imagesoftype in imagesall:
             for idx, img in enumerate(imagesoftype):
@@ -604,9 +604,10 @@ class Model:
                 minimg = np.min([0, np.min(exposure.image), np.min(modelimage)])
             # The original image and model image
             norm = apvis.ImageNormalize(vmin=minimg, vmax=maximg, stretch=apvis.AsinhStretch(1e-2))
+            showlabels = islastmodel
             for i, img in enumerate([exposure.image, modelimage]):
                 imgobj = axes[i].imshow(img, cmap='gray', origin=originimg, norm=norm)
-                sidecolorbar(axes[i], figaxes[0], imgobj, vertical=plotascolumn)
+                _sidecolorbar(axes[i], figaxes[0], imgobj, vertical=plotascolumn, showlabels=showlabels)
                 if hasmask:
                     z = exposure.maskinverse
                     axes[i].contour(x, y, z)
@@ -617,7 +618,7 @@ class Model:
                 normdiff = apvis.ImageNormalize(vmin=-diffabsmax, vmax=diffabsmax,
                                                 stretch=mpfasinh.AsinhStretchSigned(0.1))
             imgdiff = axes[2].imshow(chi, cmap='gray', origin=originimg, norm=normdiff)
-            sidecolorbar(axes[2], figaxes[0], imgdiff, vertical=plotascolumn)
+            _sidecolorbar(axes[2], figaxes[0], imgdiff, vertical=plotascolumn, showlabels=showlabels)
             if hasmask:
                 axes[2].contour(x, y, z)
             # The chi (data-model)/error map
@@ -636,7 +637,7 @@ class Model:
                 normchi = apvis.ImageNormalize(vmin=-chiabsmax, vmax=chiabsmax,
                                                stretch=mpfasinh.AsinhStretchSigned(0.1))
             imgchi = axes[3].imshow(chi, cmap='RdYlBu_r', origin=originimg, norm=normchi)
-            sidecolorbar(axes[3], figaxes[0], imgchi, vertical=plotascolumn)
+            _sidecolorbar(axes[3], figaxes[0], imgchi, vertical=plotascolumn, showlabels=showlabels)
             if hasmask:
                 axes[3].contour(x, y, z, colors="green")
             # Residual histogram compared to a normal distribution
