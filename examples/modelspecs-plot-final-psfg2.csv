@@ -1,0 +1,11 @@
+name,model,fixedparams,initparams,inittype,psfmodel,psfpixel
+gausspx,mgsersic8:1,nser,nser=0.5,moments,gaussian:2,T
+mg8exppx,mgsersic8:1,nser,nser=1,gausspx,gaussian:2,T
+mg8dev2px,mgsersic8:1,nser,nser=4,mg8exppx,gaussian:2,T
+mg8serbpx,mgsersic8:1,,,best,gaussian:2,T
+mg8cmodelpx,mgsersic8:2,"cenx;ceny;nser;re;ang;axrat","nser=4,1","mg8dev2px;mg8exppx",gaussian:2,T
+mg8devexppx,mgsersic8:2,nser,"nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
+mg8serserbpx,mgsersic8:2,,"nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
+serbpx,sersic:1,,,mg8serbpx,gaussian:2,T
+mg4serserbpx,mgsersic4:2,,,mg8serserbpx,gaussian:2,T
+mg4x2px,gaussian:8,nser,ang=inherit;axrat=inherit,mg4serserbpx,gaussian:2,T
