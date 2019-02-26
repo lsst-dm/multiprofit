@@ -45,17 +45,17 @@ def getchisqred(chis):
     return chisum/chicount
 
 
-def fluxtomag(x):
-    return -2.5*np.log10(x)
+def fluxtomag(ndarray):
+    return -2.5*np.log10(ndarray)
 
 
-def magtoflux(x):
-    return 10**(-0.4*x)
+def magtoflux(ndarray):
+    return 10**(-0.4*ndarray)
 
 
-def normalize(array):
-    array /= np.sum(array)
-    return array
+def normalize(ndarray):
+    ndarray /= np.sum(ndarray)
+    return ndarray
 
 
 def str2bool(v):
