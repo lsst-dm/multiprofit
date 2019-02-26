@@ -277,7 +277,7 @@ class Model:
     def _plotexposurescolor(cls, images, modelimages, chis, figaxes, bands=None, bandstring=None,
                             maximg=None, modelname='Model', modeldesc=None, modelnameappendparams=None,
                             isfirstmodel=True, islastmodel=True, plotascolumn=False, originimg='bottom',
-                            weightsband=None, asinhscale=40, imgdiffscale=0.05, asinhscalediff=10):
+                            weightsimgs=None, asinhscale=40, imgdiffscale=0.05, asinhscalediff=10):
         if bands is None:
             bands = []
         if bandstring is None:
@@ -292,8 +292,8 @@ class Model:
         for imagesoftype in imagesall:
             for idx, img in enumerate(imagesoftype):
                 imagesoftype[idx] = np.clip(img, 0, np.Inf)
-            if weightsband is not None:
-                for img, weight in zip(imagesoftype, weightsband):
+            if weightsimgs is not None:
+                for img, weight in zip(imagesoftype, weightsimgs):
                     img *= weight
         if maximg is None:
             maximg = np.max([np.max(np.sum(imgs)) for imgs in imagesall])
@@ -469,6 +469,8 @@ class Model:
         chis = []
         imgclips = []
         modelclips = []
+        if plotmulti:
+            weightsimgs = []
         if clock:
             times["setup"] = time.time() - timenow
             timenow = time.time()
@@ -503,7 +505,8 @@ class Model:
                 else:
                     image, model, timesmodel = self.getexposuremodel(
                         exposure, profiles=profiles, metamodel=metamodel, engine=engine,
-                        engineopts=engineopts, drawimage=drawimage, scale=scale, clock=clock, times=times)
+                        engineopts=engineopts, drawimage=drawimage or getlikelihood, scale=scale,
+                        clock=clock, times=times)
                     if clock:
                         nameexposure = '_'.join([band, str(idxexposure)])
                         times['_'.join([nameexposure, 'modeltotal'])] = time.time() - timenow
@@ -554,6 +557,8 @@ class Model:
                         if plotmulti:
                             imgclips.append(imgclip)
                             modelclips.append(modelclip)
+                            weightsimgs.append(
+                                weightsband[band] if weightsband is not None and band in weightsband else 1)
         # Color images! whooo
         if plot:
             if plotmulti:
@@ -563,14 +568,14 @@ class Model:
                         bands=bands, modelname=modelname, modeldesc=modeldesc,
                         modelnameappendparams=modelnameappendparams, isfirstmodel=isfirstmodel,
                         islastmodel=islastmodel, plotascolumn=plotascolumn, maximg=imgplotmaxmulti,
-                        weightsband=weightsband)
+                        weightsimgs=weightsimgs)
                 else:
                     Model._plotexposurescolor(
                         imgclips, modelclips, chis, (figure['multi'], axes['multi'][figurerow]),
                         bands=bands, modelname=modelname, modeldesc=modeldesc,
                         modelnameappendparams=modelnameappendparams, isfirstmodel=isfirstmodel,
                         islastmodel=islastmodel, plotascolumn=plotascolumn, maximg=imgplotmaxmulti,
-                        weightsband=weightsband)
+                        weightsimgs=weightsimgs)
                 figurerow += 1
         if clock:
             print(','.join(['{}={:.2e}'.format(name, value) for name, value in times.items()]))
