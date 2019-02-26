@@ -735,7 +735,7 @@ def fitcosmosgalaxy(
     if "hsc" in srcs or "hst2hsc" in srcs:
         if butler is None or skymap is None:
             raise ValueError('Must provide butler and skymap if fitting HSC or HST2HSC')
-        tract = skymap.getDataID()['tract']
+        tract = 9813
         # Get the HSC dataRef
         import lsst.afw.geom as geom
         spherePoint = geom.SpherePoint(radec[0], radec[1], geom.degrees)
@@ -744,7 +744,7 @@ def fitcosmosgalaxy(
         # HSC-I will be the reference for matching as it's closest to F814W
         bandref = 'HSC-I'
         dataRefs = {band: butler.dataRef(
-            "deepCoadd", dataId={"tract": 9813, "patch": patch, "filter": band})
+            "deepCoadd", dataId={"tract": tract, "patch": patch, "filter": band})
             for band in set(hscbands + [bandref])}
         # Get the coadd
         coaddshsc = {key: dataRef.get("deepCoadd_calexp") for key, dataRef in dataRefs.items()}
