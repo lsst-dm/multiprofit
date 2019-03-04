@@ -99,6 +99,12 @@ def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainv
 
 
 def getmodelspecs(filename=None):
+    """
+    Read a model specification file, the formt of which is to be described.
+
+    :param filename: String; path to the model specification file.
+    :return: modelspecs; list of dicts of key specification name: value specification value.
+    """
     if filename is None:
         modelspecs = io.StringIO("\n".join([
             ",".join(["name", "model", "fixedparams", "initparams", "inittype", "psfmodel", "psfpixel"]),
@@ -259,7 +265,22 @@ def initmodelfrommodelfits(model, modelfits, fluxfracs=None):
                 paramset.setvalue(value, transformed=False)
 
 
-def initmodel(model, modeltype, inittype, models, modelinfocomps, bands, fitsengine, paramsinherit=None):
+def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, bands=None, paramsinherit=None):
+    """
+    Initialize a multiprofit.objects.Model of a given modeltype with a method inittype.
+
+    :param model: A multiprofit.objects.Model.
+    :param modeltype: String; a valid model type, as defined in TODO: define it somewhere.
+    :param inittype: String; a valid initialization type, as defined in TODO: define it somewhere.
+    :param models: Dict; key modeltype: value existing multiprofit.objects.Model.
+        TODO: review if/when this is necessary.
+    :param modelinfocomps: Model specifications to map onto individual components of the model,
+        e.g. to initialize a two-component model from two single-component fits.
+    :param bands:
+    :param fitsengine:
+    :param paramsinherit:
+    :return:
+    """
     # TODO: Refactor into function
     if inittype.startswith("best"):
         if inittype == "best":
@@ -360,6 +381,7 @@ def fitgalaxy(
         fitfluxfracs=False
 ):
     """
+    Convenience function to fit a galaxy given some exposures with PSFs.
 
     :param exposurespsfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
     :param modelspecs: Model specifications as returned by getmodelspecs
@@ -373,6 +395,7 @@ def fitgalaxy(
     :param imgplotmaxs: dict; key=band: value=float (Maximum value when plotting images in this band)
     :param imgplotmaxmulti: float; Maximum value of summed images when plotting multi-band.
     :param weightsband: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB).
+    :param fitfluxfracs: bool; fit component flux ratios instead of absolute fluxes?
 
     :return: fitsbyengine: dict; key=engine: value=dict; key=modelname: value=dict;
         key='fits': value=array of fit results, key='modeltype': value =
@@ -528,8 +551,8 @@ def fitgalaxy(
                         if param.name in initfrommoments:
                             param.setvalue(initfrommoments[param.name], transformed=False)
                 else:
-                    model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], bands,
-                                      fitsengine, paramflags['inherit'])
+                    model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], fitsengine,
+                                      bands=bands, paramsinherit=paramflags['inherit'])
 
                 # Reset parameter fixed status
                 for param, fixed in zip(model.getparameters(fixed=True), paramsfixeddefault[modeltype]):
@@ -543,7 +566,7 @@ def fitgalaxy(
                     isflux = isinstance(param, mpfobj.FluxParameter)
                     isfluxrat = mpffit.isfluxratio(param)
                     paramname = param.name if not isflux else (
-                            'flux' + ('ratio' if isfluxrat else '') + '_' + param.band)
+                        'flux' + ('ratio' if isfluxrat else '') + '_' + param.band)
                     if paramname in paramflags["fixed"]:
                         param.fixed = True
                     if paramname in paramflags["init"]:
@@ -722,6 +745,32 @@ def fitcosmosgalaxy(
         idcosmosgs, srcs, modelspecs, rgcfits, rgcat, ccat, butler=None, skymap=None, results={}, plot=False,
         redo=True, redopsfs=False, modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
         resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None, fitfluxfracs=False):
+    """
+    Fit a COSMOS galaxy using HST/HSC data.
+
+    :param idcosmosgs: ID of the COSMOS galaxy (in the GalSim catalog)
+    :param srcs: Collection of strings; data sources to fit. Allowed values: 'hst', 'hsc', 'hst2hsc'.
+    :param modelspecs: List of dicts; as in getmodelspecs().
+    :param rgcfits: A COSMOS galsim.RealGalaxyCatalog FITS structure, containing header information.
+    :param rgcat: A COSMOS galsim.RealGalaxyCatalog.
+    :param ccat: A galsim.COSMOSCatalog. #TODO: Remove; it's not really needed.
+    :param butler: lsst.daf.persistence.butler (Gen2) pointed at an HSC repo.
+    :param skymap: The appropriate HSC skymap from the butler.
+    :param results:
+    :param plot: Boolean; generate plots?
+    :param redo: Boolean; Redo any pre-existing galaxy fits in results?
+    :param redopsfs: Boolean; Redo any pre-existing PSF fits in results?
+    :param modellib: string; Model fitting library
+    :param modellibopts: dict; Model fitting library options #TODO: fix it!
+    :param hst2hscmodel: String; the model specification (as in modelspecs) to use for src=='hst2hsc'.
+    :param hscbands: Iterable of strings; list of HSC bands.
+    :param resetimages: Boolean; reset all images in data structures to EmptyImages before returning results?
+    :param imgplotmaxs: dict; key=band: value=float (Maximum value when plotting images in this band)
+    :param imgplotmaxmulti: float; Maximum value of summed images when plotting multi-band.
+    :param weightsband: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB).
+    :param fitfluxfracs: bool; fit component flux ratios instead of absolute fluxes?
+    :return: dict; key=src: value=dict of fit results, model object, etc.
+    """
     if results is None:
         results = {}
     np.random.seed(idcosmosgs)
