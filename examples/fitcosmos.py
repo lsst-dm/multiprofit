@@ -567,7 +567,7 @@ def fitgalaxy(
                         # Most scipy algos ignore limits, so we need to restrict the range manually
                         if modellib == 'scipy':
                             factor = 1/fluxes[param.band] if isflux else 1
-                            value = np.min([param.getvalue(transformed=False), valuemax])
+                            value = np.max([np.min([param.getvalue(transformed=False), valuemax]), valuemin])
                             param.transform = mpffit.getlogitlimited(valuemin, valuemax, factor=factor)
                             param.setvalue(value, transformed=False)
                         else:
