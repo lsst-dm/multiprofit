@@ -24,7 +24,6 @@ import astropy as ap
 import copy
 import csv
 import galsim as gs
-import inspect
 import io
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -38,6 +37,7 @@ import traceback
 from collections import OrderedDict
 
 import multiprofit.fitutils as mpffit
+from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 
@@ -325,13 +325,14 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
         paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
         # TODO: Find a more elegant method to do this
         inittypesplit = fitsengine[inittype]['modeltype'].split(':')
-        ismgtogauss = (modeltype in ['gaussian:' + str(order) for order in
-                       mpfobj.MultiGaussianApproximationProfile.weights['sersic']] and
-                       len(inittypesplit) == 2 and inittypesplit[0] in
-                       ['mgsersic' + str(order) for order in
-                        mpfobj.MultiGaussianApproximationProfile.weights['sersic']] and
-                       inittypesplit[1].isdecimal()
-                       )
+        ismgtogauss = (
+            len(inittypesplit) == 2
+            and modeltype in ['gaussian:' + str(order) for order in
+                              MultiGaussianApproximationProfile.weights['sersic']]
+            and inittypesplit[0] in [
+                'mgsersic' + str(order) for order in MultiGaussianApproximationProfile.weights['sersic']]
+            and inittypesplit[1].isdecimal()
+        )
         if ismgtogauss:
             ncomponents = np.repeat(np.int(inittypesplit[0].split('mgsersic')[1]), inittypesplit[1])
             modelnew = model

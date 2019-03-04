@@ -23,6 +23,7 @@ import functools
 import importlib
 import matplotlib.pyplot as plt
 import multiprofit as mpf
+from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 import numpy as np
@@ -212,7 +213,7 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
                                   ismultigauss=ismultigaussiansersic)
                   for param, valueslice in values.items()]
         if ismultigaussiansersic or issoftened:
-            components.append(mpfobj.MultiGaussianApproximationProfile(
+            components.append(MultiGaussianApproximationProfile(
                 paramfluxescomp, profile=profile, parameters=params, order=order))
         else:
             components.append(mpfobj.EllipticalProfile(
