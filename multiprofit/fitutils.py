@@ -23,12 +23,11 @@ import functools
 import importlib
 import matplotlib.pyplot as plt
 import multiprofit as mpf
+import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 import numpy as np
 from scipy import special, stats
 import timeit
-
-import multiprofit.objects as proobj
 
 
 def logstretch(x, lower, factor=1.0):
@@ -40,7 +39,7 @@ def powstretch(x, lower, factor=1.0):
 
 
 def getlogstretch(lower, factor=1.0):
-    return proobj.Transform(
+    return mpfobj.Transform(
         transform=functools.partial(logstretch, lower=lower, factor=factor),
         reverse=functools.partial(powstretch, lower=lower, factor=1./factor))
 
@@ -54,18 +53,18 @@ def expitlimited(x, lower, extent, factor=1.0):
 
 
 def getlogitlimited(lower, upper, factor=1.0):
-    return proobj.Transform(
+    return mpfobj.Transform(
         transform=functools.partial(logitlimited, lower=lower, extent=upper-lower, factor=factor),
         reverse=functools.partial(expitlimited, lower=lower, extent=upper-lower, factor=1./factor))
 
 
 transformsref = {
-    "none": proobj.Transform(),
-    "log": proobj.Transform(transform=np.log, reverse=np.exp),
-    "log10": proobj.Transform(transform=np.log10, reverse=functools.partial(np.power, 10.)),
-    "inverse": proobj.Transform(transform=functools.partial(np.divide, 1.),
+    "none": mpfobj.Transform(),
+    "log": mpfobj.Transform(transform=np.log, reverse=np.exp),
+    "log10": mpfobj.Transform(transform=np.log10, reverse=functools.partial(np.power, 10.)),
+    "inverse": mpfobj.Transform(transform=functools.partial(np.divide, 1.),
                                 reverse=functools.partial(np.divide, 1.)),
-    "logit": proobj.Transform(transform=special.logit, reverse=special.expit),
+    "logit": mpfobj.Transform(transform=special.logit, reverse=special.expit),
     "logitaxrat": getlogitlimited(1e-4, 1),
     "logitsersic":  getlogitlimited(0.3, 6.2),
     "logitmultigausssersic": getlogitlimited(0.3, 6.2),
@@ -74,12 +73,12 @@ transformsref = {
 
 # TODO: Replace with a parameter factory and/or profile factory
 limitsref = {
-    "none": proobj.Limits(),
-    "fraction": proobj.Limits(lower=0., upper=1., transformed=True),
-    "fractionlog10": proobj.Limits(upper=0., transformed=True),
-    "axratlog10": proobj.Limits(lower=-2., upper=0., transformed=True),
-    "coninverse": proobj.Limits(lower=0.1, upper=0.9090909, transformed=True),
-    "nserlog10": proobj.Limits(lower=np.log10(0.3), upper=np.log10(6.0), lowerinclusive=False,
+    "none": mpfobj.Limits(),
+    "fraction": mpfobj.Limits(lower=0., upper=1., transformed=True),
+    "fractionlog10": mpfobj.Limits(upper=0., transformed=True),
+    "axratlog10": mpfobj.Limits(lower=-2., upper=0., transformed=True),
+    "coninverse": mpfobj.Limits(lower=0.1, upper=0.9090909, transformed=True),
+    "nserlog10": mpfobj.Limits(lower=np.log10(0.3), upper=np.log10(6.0), lowerinclusive=False,
                                upperinclusive=False, transformed=True),
 }
 
@@ -101,7 +100,7 @@ def truncnormlogpdfmean(x, mean=0., scale=1., a=-np.inf, b=np.inf):
 
 
 def isfluxratio(param):
-    return isinstance(param, proobj.FluxParameter) and param.isfluxratio
+    return isinstance(param, mpfobj.FluxParameter) and param.isfluxratio
 
 
 def ellipse_to_covar(ang, axrat, sigma):
@@ -158,7 +157,7 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
     elif not isvaluetransformed:
         value = transform.transform(value)
 
-    param = proobj.Parameter(name, value, "", limits=limits,
+    param = mpfobj.Parameter(name, value, "", limits=limits,
                              transform=transform, transformed=True, fixed=fixed)
     return param
 
@@ -202,7 +201,7 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
     for compi in range(ncomps):
         islast = compi == (ncomps - 1)
         paramfluxescomp = [
-            proobj.FluxParameter(
+            mpfobj.FluxParameter(
                 band, "flux", transform.transform(fluxes[band][compi]), None, limits=limitsref["none"],
                 transform=transform, fixed=islast, isfluxratio=isfluxesfracs)
             for band in bands
@@ -213,10 +212,10 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
                                   ismultigauss=ismultigaussiansersic)
                   for param, valueslice in values.items()]
         if ismultigaussiansersic or issoftened:
-            components.append(proobj.MultiGaussianApproximationProfile(
+            components.append(mpfobj.MultiGaussianApproximationProfile(
                 paramfluxescomp, profile=profile, parameters=params, order=order))
         else:
-            components.append(proobj.EllipticalProfile(
+            components.append(mpfobj.EllipticalProfile(
                 paramfluxescomp, profile=profile, parameters=params))
 
     return components
@@ -280,19 +279,19 @@ def getmodel(
         exposures = []
         for band in bands:
             for _ in range(nexposures):
-                exposures.append(proobj.Exposure(band, image=np.zeros(shape=imagesize),
+                exposures.append(mpfobj.Exposure(band, image=np.zeros(shape=imagesize),
                                                  maskinverse=None, sigmainverse=None))
-        data = proobj.Data(exposures)
+        data = mpfobj.Data(exposures)
     else:
         data = None
 
     paramsastrometry = [
-        proobj.Parameter("cenx", cenx, "pix", proobj.Limits(lower=0., upper=imagesize[0]),
+        mpfobj.Parameter("cenx", cenx, "pix", mpfobj.Limits(lower=0., upper=imagesize[0]),
                          transform=transformsref["none"]),
-        proobj.Parameter("ceny", ceny, "pix", proobj.Limits(lower=0., upper=imagesize[1]),
+        mpfobj.Parameter("ceny", ceny, "pix", mpfobj.Limits(lower=0., upper=imagesize[1]),
                          transform=transformsref["none"]),
     ]
-    modelastro = proobj.AstrometricModel(paramsastrometry)
+    modelastro = mpfobj.AstrometricModel(paramsastrometry)
     components = []
 
     if fluxfracs is None:
@@ -319,18 +318,18 @@ def getmodel(
         components += getcomponents(profile, fluxfracscomp, values, istransformedvalues)
         compnum += nprofiles
 
-    paramfluxes = [proobj.FluxParameter(
+    paramfluxes = [mpfobj.FluxParameter(
             band, "flux", np.log10(fluxesbyband[band]), None, limits=limitsref["none"],
             transform=transformsref["log10"], transformed=True, prior=None, fixed=False,
             isfluxratio=False)
         for bandi, band in enumerate(bands)
     ]
-    modelphoto = proobj.PhotometricModel(components, paramfluxes)
+    modelphoto = mpfobj.PhotometricModel(components, paramfluxes)
     if convertfluxfracs:
         modelphoto.convertfluxparameters(
             usefluxfracs=False, transform=transformsref['log10'], limits=limitsref["none"])
-    source = proobj.Source(modelastro, modelphoto, name)
-    model = proobj.Model([source], data, engine=engine, engineopts=engineopts)
+    source = mpfobj.Source(modelastro, modelphoto, name)
+    model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts)
     return model
 
 
@@ -369,7 +368,7 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
     :return: Tuple of modeller.fit and modeller.
     """
     if modeller is None:
-        modeller = proobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
+        modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
     fit = modeller.fit(printfinal=printfinal, printsteps=printsteps)
     if printfinal:
         paramsall = model.getparameters(fixed=True)
@@ -394,7 +393,7 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
 def setexposure(model, band, index=0, image=None, sigmainverse=None, psf=None, mask=None, meta=None,
                 factorsigma=1):
     if band not in model.data.exposures:
-        model.data.exposures[band] = [proobj.Exposure(band=band, image=None)]
+        model.data.exposures[band] = [mpfobj.Exposure(band=band, image=None)]
     exposure = model.data.exposures[band][index]
     imageisempty = image is "empty"
     exposure.image = image if not imageisempty else ImageEmpty(exposure.image.shape)
@@ -468,7 +467,7 @@ def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
         for ncompstoadd in ncomponents:
             paramsinheritees = {
                 param.name: param for param in componentsgauss[componentinit].getparameters()
-                    if param.name in paramsinherit}
+                if param.name in paramsinherit}
             for param in paramsinheritees.values():
                 param.inheritors = []
             for comp in componentsgauss[componentinit+1:componentinit+ncompstoadd]:
