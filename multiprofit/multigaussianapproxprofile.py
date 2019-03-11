@@ -1630,6 +1630,7 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
                 raise ValueError("Unimplemented rendering engine {:s}".format(engine))
             profile["pointsource"] = False
             profile["resolved"] = True
+            profile["fluxparameter"] = fluxesbands[band]
 
             for subcomp, (weight, sigma) in enumerate(zip(weights, sigmas)):
                 weightprofile = copy.copy(profile)

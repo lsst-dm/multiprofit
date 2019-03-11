@@ -376,7 +376,8 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
         print("Param names:" + ",".join(["{:11s}".format(p.name) for p in paramsall]))
         print("All params: " + ",".join(["{:+.4e}".format(p.getvalue(transformed=False)) for p in paramsall]))
     # Conveniently sets the parameters to the right values too
-    chis = evaluatemodel(model, plot=plot, params=fit["paramsbest"], **kwargs)
+    # TODO: Find a better way to ensure chis are returned than setting drawimage=True
+    chis = evaluatemodel(model, plot=plot, params=fit["paramsbest"], drawimage=True, **kwargs)
     fit["chisqred"] = mpfutil.getchisqred(chis)
     params = model.getparameters()
     for item in ['paramsbestall', 'paramsbestalltransformed', 'paramsallfixed']:
@@ -510,11 +511,22 @@ def testgaussian(xdim=25, ydim=35, reffs=[2.0, 5.0], angs=np.linspace(0, 90, 7),
                 if nbenchmark > 0:
                     argsmpf = ('(' + ','.join(np.repeat('{}', 12)) + ')').format(
                         xdim/2, ydim/2, 1, reff, ang, axrat, 0, xdim, 0, ydim, xdim, ydim)
+                    functions = {
+                        'old': 'mpf.make_gaussian_pixel_sersic' + argsmpf,
+                        'new': 'mpf.make_gaussian_pixel' + argsmpf,
+                        'like': 'mpf.loglike_gaussians_pixel(data, data, '
+                                'np.array([[' +
+                                ','.join(np.repeat('{}', 6)).format(xdim/2, ydim/2, 1, reff, ang, axrat) +
+                                ']]), 0, {}, 0, {}, np.zeros(({}, {})))'.format(
+                                    xdim, ydim, ydim, xdim),
+                    }
                     timesmpf = {
                         key: np.min(timeit.repeat(
-                            'x=mpf.make_gaussian_pixel' + value + argsmpf, setup='import multiprofit as mpf',
+                            callstr,
+                            setup='import multiprofit as mpf' + (
+                                '; import numpy as np; data=np.zeros([0, 0])' if key == 'like' else ''),
                             repeat=nbenchmark, number=1))
-                        for key, value in {'old': '_sersic', 'new': ''}.items()
+                        for key, callstr in functions.items()
                     }
                     if hasgs:
                         timegs = np.min(timeit.repeat(
@@ -524,9 +536,10 @@ def testgaussian(xdim=25, ydim=35, reffs=[2.0, 5.0], angs=np.linspace(0, 90, 7),
                             ),
                             setup='import galsim as gs', repeat=nbenchmark, number=1
                         ))
-                    result += '; old/new' + ('/GalSim' if hasgs else '') + ' times=(' + ','.join(
-                        ['{:.3e}'.format(x) for x in [timesmpf['old'], timesmpf['new']] + (
-                            [timegs] if hasgs else [])]) + ')'
+                    mpffuncs = list(timesmpf.keys())
+                    times = [timesmpf[x] for x in mpffuncs] + [timegs] if hasgs else []
+                    result += ';' + '/'.join(mpffuncs) + ('/GalSim' if hasgs else '') + ' times=(' + \
+                              ','.join(['{:.3e}'.format(x) for x in times]) + ')'
                 results.append({
                     'string': result,
                     'xdim': xdim,

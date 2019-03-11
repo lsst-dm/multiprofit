@@ -51,14 +51,12 @@ PYBIND11_MODULE(_multiprofit, m)
         "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "xdim"_a, "ydim"_a
     );
 
-   
     m.def(
         "make_gaussian_pixel_sersic", &multiprofit::make_gaussian_pixel_sersic,
         "Evaluate a 2D Gaussian at the centers of pixels on a rectangular grid using the 2D Sersic PDF.",
         "xcen"_a, "ycen"_a, "l"_a, "r"_a, "ang"_a, "axrat"_a,
         "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "xdim"_a, "ydim"_a
     );
- 
 
     m.def(
         "make_gaussian_pixel_covar", &multiprofit::make_gaussian_pixel_covar,
@@ -69,20 +67,24 @@ PYBIND11_MODULE(_multiprofit, m)
     );
 
     m.def(
-        "loglike_gaussian_pixel", &multiprofit::loglike_gaussian_pixel,
-        "Evaluate the log likelihood of a 2D Gaussian mixture model at the centers of pixels on a rectangular"
-        "grid using the standard bivariate Gaussian PDF.",
-        "data"_a, "varinverse"_a, "gaussians"_a, "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a
+        "make_gaussians_pixel", &multiprofit::make_gaussians_pixel,
+        "Evaluate 2D Gaussians at the centers of pixels on a rectangular grid using the standard bivariate"
+        "Gaussian PDF.",
+        "gaussians"_a.noconvert(), "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "xdim"_a, "ydim"_a
     );
 
     m.def(
-        "make_gaussian_mix_8_pixel", &multiprofit::make_gaussian_mix_8_pixel,
-        "Evaluate eight 2D Gaussians at the centers of pixels on a rectangular grid using the 2D Sersic PDF.",
-        "xcen"_a, "ycen"_a,
-        "l1"_a, "l2"_a, "l3"_a, "l4"_a, "l5"_a, "l6"_a, "l7"_a, "l8"_a,
-        "r1"_a, "r2"_a, "r3"_a, "r4"_a, "r5"_a, "r6"_a, "r7"_a, "r8"_a,
-        "ang1"_a, "ang2"_a, "ang3"_a, "ang4"_a, "ang5"_a, "ang6"_a, "ang7"_a, "ang8"_a,
-        "q1"_a, "q2"_a, "q3"_a, "q4"_a, "q5"_a, "q6"_a, "q7"_a, "q8"_a,
-        "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "xdim"_a,  "ydim"_a
+        "add_gaussians_pixel", &multiprofit::add_gaussians_pixel,
+        "Evaluate 2D Gaussians at the centers of pixels on a rectangular grid using the standard bivariate"
+        "Gaussian PDF, adding to an existing matrix.",
+        "gaussians"_a.noconvert(), "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "output"_a.noconvert()
+    );
+
+    m.def(
+        "loglike_gaussians_pixel", &multiprofit::loglike_gaussians_pixel,
+        "Evaluate the log likelihood of a 2D Gaussian mixture model at the centers of pixels on a rectangular"
+        "grid using the standard bivariate Gaussian PDF.",
+        "data"_a.noconvert(), "varinverse"_a.noconvert(), "gaussians"_a.noconvert(),
+        "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "output"_a.noconvert()
     );
 }

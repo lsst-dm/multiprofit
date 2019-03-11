@@ -24,11 +24,14 @@
 #ifndef __MULTIPROFIT_GAUSSIAN_H_
 #include "gaussian.h"
 
-//#include <iostream>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+typedef pybind11::detail::unchecked_reference<double, 2l> MatrixUnchecked;
+typedef pybind11::detail::unchecked_mutable_reference<double, 2l> MatrixUncheckedMutable;
 
 namespace multiprofit {
 
@@ -273,8 +276,8 @@ Matrix make_gaussian(
     const double Ie=exp(1.)*LUMTOT/(RE*RE*AXRAT*M_PI*((exp(BN))/BN)*RBOX);
     const double INVRE = 1.0/RE;
 
-    Matrix mat(YDIM, XDIM);
-    //Matrix mat(std::vector<double>(XDIM*YDIM), XDIM, YDIM);
+    Matrix mat({YDIM, XDIM});
+    auto matref = mat.mutable_unchecked<2>();
     double x,y,xhi,yhi,angmod;
     const double XBIN=(XMAX-XMIN)/XDIM;
     const double YBIN=(YMAX-YMIN)/YDIM;
@@ -315,7 +318,7 @@ Matrix make_gaussian(
             */
             bottomval = rval[2];
             leftvals[j] = rval[4];
-            mat(i*YDIM + j) = rval[0]*Ie;
+            matref(j, i) = rval[0]*Ie;
             y = yhi;
             yhi += YBIN;
         }
@@ -326,6 +329,26 @@ Matrix make_gaussian(
 
     return mat;
 }
+
+inline void check_is_matrix(const Matrix * mat, std::string name = "matrix")
+{
+    if(mat == nullptr) throw std::invalid_argument("Passed null " + name + " to check_is_matrix");
+    if(mat->ndim() != 2)
+    {
+        throw std::invalid_argument("Passed " + name + " with ndim=" + std::to_string(mat->ndim()) + " !=2");
+    }
+}
+
+inline void check_is_gaussians(const Matrix & mat)
+{
+    check_is_matrix(&mat, "Gaussian parameter matrix");
+    if(mat.shape(1) != 6)
+    {
+        throw std::invalid_argument("Passed Gaussian parameter matrix with shape=[" +
+            std::to_string(mat.shape(0)) + "!=6, " + std::to_string(mat.shape(1)) + "]");
+    }
+}
+
 
 inline std::pair<std::vector<double>, std::vector<double>> gaussian_pixel_x_xx(
     const double XCEN, const double XMIN, const double XBIN, const unsigned int XDIM,
@@ -347,14 +370,16 @@ inline void gaussian_pixel(Matrix & mat, const double NORM, const double XCEN, c
     const double XMIN, const double YMIN, const double XBIN, const double YBIN,
     const double XXNORMINV, const double YYNORMINV, const double XYNORMINV)
 {
+    check_is_matrix(&mat);
     // don't ask me why these are reversed
-    const unsigned int XDIM = mat.cols();
-    const unsigned int YDIM = mat.rows();
+    const unsigned int XDIM = mat.shape(1);
+    const unsigned int YDIM = mat.shape(0);
 
     const auto YVALS = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, YYNORMINV, XYNORMINV);
     const std::vector<double> & Y = YVALS.first;
     const std::vector<double> & YY = YVALS.second;
 
+    auto matref = mat.mutable_unchecked<2>();
     double x = XMIN-XCEN+XBIN/2.;
     // TODO: Consider a version with cached xy, although it doubles memory usage
     for(unsigned int i = 0; i < XDIM; i++)
@@ -362,10 +387,7 @@ inline void gaussian_pixel(Matrix & mat, const double NORM, const double XCEN, c
         const double XSQ = x*x*XXNORMINV;
         for(unsigned int j = 0; j < YDIM; j++)
         {
-           // mat(j,i) = ... is slower, but perhaps allows for images with XDIM*YDIM > INT_MAX ?
-           // if(i == 0 && j == 0) std::cout << NORM << ";" <<  XSQ << "," << YY[j] << "," << x*Y[j] <<
-           // std::endl;
-           mat(j + i*YDIM) = NORM*exp(-(XSQ + YY[j] - x*Y[j]));
+           matref(j, i) = NORM*exp(-(XSQ + YY[j] - x*Y[j]));
         }
         x += XBIN;
     }
@@ -487,7 +509,7 @@ Matrix make_gaussian_pixel_covar(const double XCEN, const double YCEN, const dou
     const Covar COV {.sigx = SIGX, .sigy=SIGY, .rho=RHO};
     const TermsGaussPDF TERMS = terms_from_covar(L*XBIN*YBIN, COV);
 
-    Matrix mat(YDIM, XDIM);
+    Matrix mat({YDIM, XDIM});
     gaussian_pixel(mat, TERMS.norm, XCEN, YCEN, XMIN, YMIN, XBIN, YBIN, TERMS.xx, TERMS.yy, TERMS.xy);
 
     return mat;
@@ -528,7 +550,7 @@ Matrix make_gaussian_pixel_sersic(
     const double NORM = L*NORMRFAC/(M_PI*AXRAT)/R/R*XBIN*YBIN;
     const double INVAXRATSQ = 1.0/AXRAT/AXRAT;
 
-    Matrix mat(YDIM, XDIM);
+    Matrix mat({YDIM, XDIM});
     double x,y;
     const double XBINHALF=XBIN/2.;
     const double YBINHALF=YBIN/2.;
@@ -537,6 +559,7 @@ Matrix make_gaussian_pixel_sersic(
     const double INVREX = cos(ANG*M_PI/180.)*sqrt(NORMRFAC)/R;
 
     unsigned int i=0,j=0,k=0;
+    auto matref = mat.mutable_unchecked<2>();
     x = XMIN-XCEN+XBINHALF;
     for(i = 0; i < XDIM; i++)
     {
@@ -545,10 +568,8 @@ Matrix make_gaussian_pixel_sersic(
         {
            const double DISTONE = (x*INVREX + y*INVREY);
            const double DISTTWO = (x*INVREY - y*INVREX);
-           //if(i == 0 && j==0) std::cout << NORM << ";" <<  DISTONE << "," << DISTTWO << "," << INVAXRATSQ <<
-           //std::endl;
            // mat(j,i) = ... is slower, but perhaps allows for images with XDIM*YDIM > INT_MAX ?
-           mat(i*YDIM + j) = NORM*exp(-(DISTONE*DISTONE + DISTTWO*DISTTWO*INVAXRATSQ));
+           matref(j, i) = NORM*exp(-(DISTONE*DISTONE + DISTTWO*DISTTWO*INVAXRATSQ));
            y += YBIN;
         }
         x += XBIN;
@@ -557,36 +578,128 @@ Matrix make_gaussian_pixel_sersic(
     return mat;
 }
 
-double loglike_gaussian_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
-    const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX)
-{
-    // TODO: Reconsider this - Eigen is row-major by default; numpy is column-major
-    const unsigned int XDIM = DATA.cols();
-    const unsigned int YDIM = DATA.rows();
+template <bool writeoutput, bool add>
+inline void gaussians_pixel_output(MatrixUncheckedMutable & output, double value, unsigned int dim1,
+    unsigned int dim2);
 
-    // The case of constant variance per pixel
-    const int IDXVAR = 1 - (VARINVERSE.rows() == 1 && VARINVERSE.cols() == 1);
-    if(IDXVAR == 1 && (XDIM != VARINVERSE.rows() || YDIM != VARINVERSE.cols()))
+template <>
+inline void gaussians_pixel_output<false, false>(MatrixUncheckedMutable & output, double value,
+    unsigned int dim1, unsigned int dim2) {}
+
+template <>
+inline void gaussians_pixel_output<false, true>(MatrixUncheckedMutable & output, double value,
+    unsigned int dim1, unsigned int dim2) {}
+
+template <>
+inline void gaussians_pixel_output<true, false>(MatrixUncheckedMutable & output, double value,
+    unsigned int dim1, unsigned int dim2)
+{
+    output(dim1, dim2) = value;
+}
+
+template <>
+inline void gaussians_pixel_output<true, true>(MatrixUncheckedMutable & output, double value,
+    unsigned int dim1, unsigned int dim2)
+{
+    output(dim1, dim2) += value;
+}
+
+template <bool getlikelihood>
+inline void gaussians_pixel_getlikelihood(double & loglike, const double model, const MatrixUnchecked & DATA,
+    const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2, const bool VARISMAT);
+
+template <>
+inline void gaussians_pixel_getlikelihood<false>(double & loglike, const double model,
+    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
+    const bool VARISMAT) {}
+
+template <>
+inline void gaussians_pixel_getlikelihood<true>(double & loglike, const double model,
+    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
+    const bool VARISMAT)
+{
+    double diff = DATA(dim1, dim2) - model;
+    // TODO: Check what the performance penalty for using IDXVAR is and rewrite if it's worth it
+    loglike += -diff*diff*VARINVERSE(dim1*VARISMAT, dim2*VARISMAT)/2.;
+}
+
+// Compute Gaussian mixtures with the option to write output and/or evaluate the log likehood
+// TODO: Reconsider whether there's a better way to do this
+// The template arguments ensure that there is no performance penalty to any of the versions of this function.
+// However, some messy validation is required as a result.
+template <bool writeoutput, bool getlikelihood, bool add>
+double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const Matrix * const DATA, const Matrix * const VARINVERSE, Matrix * output = nullptr)
+{
+    check_is_gaussians(GAUSSIANS);
+    const size_t DATASIZE = DATA == nullptr ? 0 : DATA->size();
+    //std::cout << writeoutput << "," << getlikelihood << std::endl;
+    std::unique_ptr<Matrix> matrixnull;
+    if(writeoutput)
     {
-        throw std::runtime_error("Data matrix dimensions [" + std::to_string(XDIM) + ',' +
-            std::to_string(YDIM) + "] don't match inverse variance dimensions [" +
-            std::to_string(VARINVERSE.rows()) + ',' + std::to_string(VARINVERSE.cols()) + ']');
+        check_is_matrix(output);
+        if(output->size() == 0) throw std::runtime_error("gaussians_pixel_template can't write to empty "
+            "matrix");
+    }
+    else
+    {
+        auto nullshape = pybind11::array::ShapeContainer({0, 0});
+        matrixnull = std::make_unique<Matrix>(nullshape);
+    }
+    if(getlikelihood)
+    {
+        check_is_matrix(DATA);
+        check_is_matrix(VARINVERSE);
+        if(DATASIZE == 0 || VARINVERSE->size() == 0) throw std::runtime_error("gaussians_pixel_template "
+            "can't compute loglikelihood with empty DATA or VARINVERSE");
+    }
+    if(!writeoutput && !getlikelihood)
+    {
+        if(output->size() == 0 && DATASIZE == 0 && VARINVERSE->size() == 0) throw std::runtime_error(
+            "gaussians_pixel_template can't infer size of matrix without one of DATA or output.");
+    }
+
+    const Matrix & matcomparesize = DATASIZE ? *DATA : *output;
+    const unsigned int XDIM = matcomparesize.shape(1);
+    const unsigned int YDIM = matcomparesize.shape(0);
+    const bool VARISMAT = getlikelihood ? VARINVERSE->size() > 1 : false;
+
+    if(getlikelihood)
+    {
+        // The case of constant variance per pixel
+        if(VARISMAT == 1 && (XDIM != VARINVERSE->shape(1) || YDIM != VARINVERSE->shape(0)))
+        {
+            throw std::runtime_error("Data matrix dimensions [" + std::to_string(XDIM) + ',' +
+                std::to_string(YDIM) + "] don't match inverse variance dimensions [" +
+                std::to_string(VARINVERSE->shape(1)) + ',' + std::to_string(VARINVERSE->shape(0)) + ']');
+        }
+    }
+    if(writeoutput)
+    {
+        if(XDIM != output->shape(1) || YDIM != output->shape(0))
+        {
+            throw std::runtime_error("Data matrix dimensions [" + std::to_string(XDIM) + ',' +
+                std::to_string(YDIM) + "] don't match output matrix dimensions [" +
+                std::to_string(output->shape(1)) + ',' + std::to_string(output->shape(0)) + ']');
+        }
     }
     const double XBIN=(XMAX-XMIN)/XDIM;
     const double YBIN=(YMAX-YMIN)/YDIM;
 
-    const size_t NGAUSSIANS = GAUSSIANS.rows();
+    const size_t NGAUSSIANS = GAUSSIANS.shape(0);
     std::vector<std::vector<double>> ys;
     std::vector<std::vector<double>> yys;
     std::vector<double> xs;
     std::vector<double> normsxx;
     std::vector<double> norms;
 
+    const MatrixUnchecked GAUSSIANSREF = GAUSSIANS.unchecked<2>();
     for(size_t g = 0; g < NGAUSSIANS; ++g)
     {
-        const double XCEN = GAUSSIANS(g, 0); const double YCEN = GAUSSIANS(g, 1);
-        const double L = GAUSSIANS(g, 2), R = GAUSSIANS(g, 3);
-        const double ANG = GAUSSIANS(g, 4), AXRAT = GAUSSIANS(g, 5);
+        const double XCEN = GAUSSIANSREF(g, 0); const double YCEN = GAUSSIANSREF(g, 1);
+        const double L = GAUSSIANSREF(g, 2), R = GAUSSIANSREF(g, 3);
+        const double ANG = GAUSSIANSREF(g, 4), AXRAT = GAUSSIANSREF(g, 5);
         const Covar COV = ellipse_to_covar(reff_to_sigma_gauss(R), AXRAT, degrees_to_radians(ANG));
         const TermsGaussPDF TERMS = terms_from_covar(L*XBIN*YBIN, COV);
 
@@ -599,100 +712,84 @@ double loglike_gaussian_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
         norms.push_back(TERMS.norm);
     }
 
+    /*
+        Somewhat ugly hack here to set refs to point at Gaussians if we know they won't be used
+        I would love to replace these by unique_ptrs or something and get rid of matrixnull but I can't figure
+         out how to construct an unchecked reference even after looking at the pybind11 source.
+    */
+    MatrixUncheckedMutable outputref = writeoutput ? (*output).mutable_unchecked<2>() :
+        (*matrixnull).mutable_unchecked<2>();
+    const MatrixUnchecked DATAREF = getlikelihood ? (*DATA).unchecked<2>() : GAUSSIANSREF;
+    const MatrixUnchecked VARINVERSEREF = getlikelihood ? (*VARINVERSE).unchecked<2>() : GAUSSIANSREF;
     std::vector<double> xsqs(NGAUSSIANS);
     double loglike = 0;
+    double model = 0;
     // TODO: Consider a version with cached xy, although it doubles memory usage
     for(unsigned int i = 0; i < XDIM; i++)
     {
         for(size_t g = 0; g < NGAUSSIANS; ++g) xsqs[g] = xs[g]*xs[g]*normsxx[g];
         for(unsigned int j = 0; j < YDIM; j++)
         {
-            // TODO: Verify whether this solves the row/column-major irritation
-            const unsigned int INDEX = i*YDIM + j;
-            double model = 0;
+            model = 0;
             for(size_t g = 0; g < NGAUSSIANS; ++g)
             {
-                // mat(j,i) = ... is slower, but perhaps allows for images with XDIM*YDIM > INT_MAX ?
                 model += norms[g]*exp(-(xsqs[g] + yys[g][j] - xs[g]*ys[g][j]));
             }
-            const double DIFF = DATA(INDEX) - model;
-            // TODO: Check what the performance penalty for using IDXVAR is and rewrite if it's worth it
-            loglike += -DIFF*DIFF*VARINVERSE(IDXVAR*INDEX)/2.;
+            gaussians_pixel_output<writeoutput, add>(outputref, model, j, i);
+            gaussians_pixel_getlikelihood<getlikelihood>(loglike, model, DATAREF, VARINVERSEREF, j, i,
+                VARISMAT);
         }
         for(size_t g = 0; g < NGAUSSIANS; ++g) xs[g] += XBIN;
     }
     return loglike;
 }
 
-// TODO: Template this
-Matrix make_gaussian_mix_8_pixel(
-    const double XCEN, const double YCEN,
-    const double L1, const double L2, const double L3, const double L4,
-    const double L5, const double L6, const double L7, const double L8,
-    const double R1, const double R2, const double R3, const double R4,
-    const double R5, const double R6, const double R7, const double R8,
-    const double ANG1, const double ANG2, const double ANG3, const double ANG4,
-    const double ANG5, const double ANG6, const double ANG7, const double ANG8,
-    const double Q1, const double Q2, const double Q3, const double Q4,
-    const double Q5, const double Q6, const double Q7, const double Q8,
-    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+double loglike_gaussians_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
+    const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    Matrix & output)
+{
+    if(DATA.size() == 0)
+    {
+        if(output.size() == 0)
+        {
+            return gaussians_pixel_template<false, false, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
+                &VARINVERSE, &output);
+        }
+        else
+        {
+            return gaussians_pixel_template<true, false, true>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
+                &VARINVERSE, &output);
+        }
+    }
+    else
+    {
+        if(output.size() == 0)
+        {
+            return gaussians_pixel_template<false, true, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
+                &VARINVERSE, &output);
+        }
+        else
+        {
+            return gaussians_pixel_template<true, true, true>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
+                &VARINVERSE, &output);
+        }
+    }
+}
+
+Matrix make_gaussians_pixel(
+    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM)
 {
-    // I don't remember why this isn't just 1/(2*ln(2)) but anyway it isn't
-    const double RFAC = 0.69314718055994528622676398299518;
-    const double XBIN=(XMAX-XMIN)/XDIM;
-    const double YBIN=(YMAX-YMIN)/YDIM;
-    const double NORMFAC = RFAC/M_PI*XBIN*YBIN;
-    const double NORM[] = {
-       L1/Q1*NORMFAC/R1/R1, L2/Q2*NORMFAC/R2/R2, L3/Q3*NORMFAC/R3/R3, L4/Q4*NORMFAC/R4/R4,
-       L5/Q5*NORMFAC/R5/R5, L6/Q6*NORMFAC/R6/R6, L7/Q7*NORMFAC/R7/R7, L8/Q8*NORMFAC/R8/R8
-    };
-
-    Matrix mat(YDIM, XDIM);
-    double x,y;
-    const double XBINHALF=XBIN/2.;
-    const double YBINHALF=YBIN/2.;
-
-    const double RFAC2 = sqrt(RFAC);
-    const double INVREYS[] = {
-        sin(ANG1*M_PI/180.)*RFAC2/R1, sin(ANG2*M_PI/180.)*RFAC2/R2,
-        sin(ANG3*M_PI/180.)*RFAC2/R3, sin(ANG4*M_PI/180.)*RFAC2/R4,
-        sin(ANG5*M_PI/180.)*RFAC2/R5, sin(ANG6*M_PI/180.)*RFAC2/R6,
-        sin(ANG7*M_PI/180.)*RFAC2/R7, sin(ANG8*M_PI/180.)*RFAC2/R8,
-    };
-    const double INVREXS[] = {
-        cos(ANG1*M_PI/180.)*RFAC2/R1, cos(ANG2*M_PI/180.)*RFAC2/R2,
-        cos(ANG3*M_PI/180.)*RFAC2/R3, cos(ANG4*M_PI/180.)*RFAC2/R4,
-        cos(ANG5*M_PI/180.)*RFAC2/R5, cos(ANG6*M_PI/180.)*RFAC2/R6,
-        cos(ANG7*M_PI/180.)*RFAC2/R7, cos(ANG8*M_PI/180.)*RFAC2/R8,
-    };
-    const double INVQSQS[] = {
-        1./Q1/Q1, 1./Q2/Q2, 1./Q3/Q3, 1./Q4/Q4,
-        1./Q5/Q5, 1./Q6/Q6, 1./Q7/Q7, 1./Q8/Q8,
-    };
-
-    unsigned int i=0,j=0,k=0;
-    x = XMIN-XCEN+XBINHALF;
-    for(i = 0; i < XDIM; i++)
-    {
-        y = YMIN - YCEN + YBINHALF;
-        for(j = 0; j < YDIM; j++)
-        {
-           double flux = 0;
-           // exp(-BN*((x*INVREX + y*INVREY)^2 + (x*INVREY - y*INVREX)^2*INVAXRAT^2 -1));
-           for(k = 0; k < 8; k++)
-           {
-              const double DISTONE = (x*INVREXS[k] + y*INVREYS[k]);
-              const double DISTTWO = (x*INVREYS[k] - y*INVREXS[k]);
-              flux += NORM[k]*exp(-(DISTONE*DISTONE + DISTTWO*DISTTWO*INVQSQS[k]));
-           }
-           mat(i*YDIM + j) = flux;
-           y += YBIN;
-        }
-        x += XBIN;
-    }
-
+    Matrix mat({YDIM, XDIM});
+    gaussians_pixel_template<true, false, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &mat);
     return mat;
+}
+
+void add_gaussians_pixel(
+    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    Matrix & output)
+{
+    gaussians_pixel_template<true, false, true>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &output);
 }
 }
 #endif

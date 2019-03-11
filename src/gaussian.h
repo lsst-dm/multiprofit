@@ -24,9 +24,13 @@
 #ifndef __MULTIPROFIT_GAUSSIAN_H_
 #define __MULTIPROFIT_GAUSSIAN_H_
 
-#include <Eigen/Core>
-typedef Eigen::MatrixXd Matrix;
-typedef Eigen::Matrix<double, Eigen::Dynamic, 6> paramsgauss;
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+
+namespace py = pybind11;
+
+typedef py::array_t<double> Matrix;
+typedef py::array_t<double> paramsgauss;
 
 namespace multiprofit {
 
@@ -73,28 +77,26 @@ Matrix make_gaussian_pixel_covar(const double XCEN, const double YCEN, const dou
     const unsigned int XDIM, const unsigned int YDIM);
 
 /*
-    TODO: Describe
+    As make_gaussian_pixel but for multiple Gaussians.
+    GAUSSIANS is an ndarray with rows of Gaussian parameters in the same order as for make_gaussian_pixel:
+    [XCEN, YCEN, L, R, ANG, AXRAT]
 */
-double loglike_gaussian_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
-    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX);
+Matrix make_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
+    const double YMIN, const double YMAX, const unsigned int XDIM, const unsigned int YDIM);
 
 /*
-    As make_gaussian_pixel but for eight different Gaussians.
-
-    TODO: Template this
+    As make_gaussians_pixel but outputs to an existing matrix. Can skip output for benchmarking purposes.
 */
-Matrix make_gaussian_mix_8_pixel(
-    const double XCEN, const double YCEN,
-    const double L1, const double L2, const double L3, const double L4,
-    const double L5, const double L6, const double L7, const double L8,
-    const double RE1, const double RE2, const double RE3, const double RE4,
-    const double RE5, const double RE6, const double RE7, const double RE8,
-    const double ANG1, const double ANG2, const double ANG3, const double ANG4,
-    const double ANG5, const double ANG6, const double ANG7, const double ANG8,
-    const double Q1, const double Q2, const double Q3, const double Q4,
-    const double Q5, const double Q6, const double Q7, const double Q8,
-    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    const unsigned int XDIM, const unsigned int YDIM);
-}
+void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
+    const double YMIN, const double YMAX, Matrix & output);
 
+/*
+    Compute the log likelihood of a Gaussian mixture model given some data and an inverse variance map.
+    GAUSSIANS is as in make_gaussians_pixel()
+    output is an optional matrix to output the model to. Must be the same size as DATA if provided.
+*/
+double loglike_gaussians_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
+    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    Matrix & output);
+}
 #endif
