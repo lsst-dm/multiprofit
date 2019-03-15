@@ -21,7 +21,6 @@
 
 import argparse
 import astropy as ap
-import copy
 import csv
 import galsim as gs
 import io
@@ -40,8 +39,6 @@ import multiprofit.fitutils as mpffit
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
-
-from modelling_research import make_cutout
 
 options = {
     "algos":       {"default": {"scipy": "BFGS", "pygmo": "lbfgs"}},
@@ -452,7 +449,7 @@ def fitgalaxy(
     valuesmin = {}
     for band in bands:
         valuesmin["flux_" + band] = 1e-4 * fluxes[band]
-        valuesmax["flux_" + band] = 10 * fluxes[band]
+        valuesmax["flux_" + band] = 100 * fluxes[band]
     models = {} if (models is None) else models
     paramsfixeddefault = {}
     fitsbyengine = {} if ((models is None) or (fitsbyengine is None)) else fitsbyengine
@@ -648,6 +645,7 @@ def fitgalaxy(
                             figure=figures, axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
                             modelname=modelname, modelnameappendparams=modelnameappendparams,
                             imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti, weightsband=weightsband,
+                            dolinear=False
                         )
                         fits.append(fit2)
                     fitsbyengine[engine][modelname] = {"fits": fits, "modeltype": modeltype}
@@ -675,364 +673,398 @@ def fitgalaxy(
 # This obviously won't work well if imgsrc's PSF isn't much smaller than imgtarget's
 def imgoffsetchisq(x, args, returnimg=False):
     img = gs.Convolve(
-        gs.InterpolatedImage(args['imgsrc']*10**x[0]).rotate(args['anglehst']),
+        args['imgsrc']*10**x[0],
         args['psf']).shift(x[1], x[2]).drawImage(nx=args['nx'], ny=args['ny'], scale=args['scale'])
-    chisq = np.sum((img.array - args['imgtarget']) ** 2 / args['vartarget'])
+    chisq = np.sum((img.array - args['imgtarget'])**2/args['vartarget'])
     if returnimg:
         return img
     return chisq
 
 
 # Fit the transform for a single COSMOS F814W image to match the HSC-I band image
-def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, sizeCutout, cutouthsc, varhsc, scalehsc, plot=False):
+def fitcosmosgalaxytransform(ra, dec, imghst, imgpsfgs, cutouthsc, varhsc, scalehsc, scalehst, plot=False):
     # Use Sophie's code to make our own cutout for comparison to the catalog
-    # TODO: Double check the origin of these images; I assume they're the rotated and rescaled v2.0 mosaics
-    cutouthst = make_cutout.cutout_HST(ra, dec, width=np.ceil(sizeCutout * scalehsc), return_data=True)
-    hdr = cutouthst[0][0][1].header
-    # 0.03" scale: check hdr["CD1_1"] and hdr["CD2_2"]
-    if 'ORIENTAT' in hdr:
-        print('hdr[\'ORIENTAT\']={}'.format(hdr['ORIENTAT']))
-    imghstrot = gs.Image(cutouthst[0][0][1].data, scale=0.03)
+    # TODO: Double check the origin of these images; I assume they're the rotated and rescaled v2.0 mosaic
+    anglehst = None
+    pathhst = os.path.join(os.path.sep, 'project', 'sr525', 'hstCosmosImages')
+    corners = os.path.join(pathhst, 'tiles', 'corners.txt')
+    with open(corners, 'r') as f:
+        for line in f:
+            itemsline = line.split(',')
+            ra_min = float(itemsline[2])
+            ra_max = float(itemsline[0])
+            dec_min = float(itemsline[1])
+            dec_max = float(itemsline[3])
+            filename = os.path.join(pathhst, itemsline[4][38:])
+            if ra_min < ra < ra_max and dec_min < dec < dec_max:
+                with ap.io.fits.open(filename[:-1]) as h:
+                    anglehst = h[0].header['ORIENTAT']*gs.degrees
+                    break
+    if anglehst is None:
+        raise RuntimeError('Failed to find COSMOS-HST image orientation from corner file {}'.format(corners))
 
-    def getoffsetdiff(x, returnimg=False):
-        img = gs.InterpolatedImage(imghstrot).rotate(-x[0] * gs.radians).shift(
-            x[1], x[2]).drawImage(
-            nx=imghst.array.shape[1], ny=imghst.array.shape[0],
-            scale=imghst.scale)
-        if returnimg:
-            return img
-        return np.sum(np.abs(img.array - imghst.array))
-
-    result = spopt.minimize(getoffsetdiff, [-np.pi / 2, 0, 0], method="Nelder-Mead")
-    result2 = spopt.minimize(getoffsetdiff, result.x + [np.pi, 0, 0], method="Nelder-Mead")
-    [anglehst, xoffset, yoffset] = (result if result.fun < result2.fun else result2).x
-
-    if plot:
-        fig, ax = plt.subplots(nrows=2, ncols=2)
-        ax[0, 0].imshow(np.log10(imghstrot.array))
-        ax[0, 0].set_title("HST rotated")
-        ax[1, 0].imshow(np.log10(imghst.array))
-        ax[1, 0].set_title("COSMOS GalSim")
-        ax[0, 1].imshow(np.log10(getoffsetdiff([anglehst, xoffset, yoffset], returnimg=True).array))
-        ax[0, 1].set_title("HST re-rotated+shifted")
-
-    scalefluxhst2hsc = np.sum(cutouthsc)/np.sum(imghst.array)
+    scalefluxhst2hsc = np.sum(cutouthsc)/np.sum(imghst)
     args = {
-        "imgsrc": imghst,
+        "imgsrc": gs.InterpolatedImage(gs.Image(imghst, scale=scalehst)).rotate(anglehst),
         "imgtarget": cutouthsc,
         "vartarget": varhsc,
         "psf": imgpsfgs,
-        "nx": sizeCutout,
-        "ny": sizeCutout,
+        "nx": cutouthsc.shape[1],
+        "ny": cutouthsc.shape[0],
         "scale": scalehsc,
-        "anglehst": anglehst*gs.radians,
     }
     result = spopt.minimize(imgoffsetchisq, [np.log10(scalefluxhst2hsc), 0, 0], method="Nelder-Mead",
                             args=args)
     print("Offsetchisq fit params:", result.x)
 
     if plot:
-        ax[1, 1].imshow(np.log10(
-            gs.InterpolatedImage(imghst * 10 ** result.x[0]).rotate(anglehst * gs.radians).shift(
-                -xoffset, -yoffset).drawImage(nx=imghst.array.shape[1], ny=imghst.array.shape[0],
-                                              scale=imghst.scale).array))
-        ax[1, 1].set_title("COSMOS GalSim rotated+shifted")
+        fig, ax = plt.subplots(nrows=1, ncols=3)
+        ax[0].imshow(np.log10(imgoffsetchisq(result.x, args, returnimg=True).array))
+        ax[0].set_title("COSMOS-HST GalSim matched")
+        ax[1].imshow(np.log10(args['imgtarget']))
+        ax[1].set_title("COSMOS-HSC target")
+        ax[2].imshow(np.log10(args['imgsrc'].drawImage().array))
+        ax[2].set_title("COSMOS-HST GalSim original")
 
-    return result, anglehst, xoffset, yoffset
+    return result, anglehst
 
 
-# PSFmodels: array of tuples (modelname, ispixelated)
-def fitcosmosgalaxy(
-        idcosmosgs, srcs, modelspecs, rgcfits, rgcat, ccat, butler=None, skymap=None, results={}, plot=False,
-        redo=True, redopsfs=False, modellib="scipy", modellibopts=None, hst2hscmodel=None, hscbands=['HSC-I'],
+def gethstexposures(idcosmosgs, rgcat):
+    """
+    Get HST exposures and PSF images from the GalSim catalog cutouts.
+
+    :param idcosmosgs: Galaxy GalSim catalog ID
+    :param rgcat: A COSMOS galsim.RealGalaxyCatalog
+    :return: List of tuples; [0]: multiprofit.objects.Exposure, [1]: PSF image (galsim object)
+    """
+    band = rgcat.band[idcosmosgs]
+    exposurespsfs = [
+        (
+            mpfobj.Exposure(
+                band, np.float64(rgcat.getGalImage(idcosmosgs).array),
+                sigmainverse=np.power(np.float64(rgcat.getNoiseProperties(idcosmosgs)[2]), -0.5)),
+            rgcat.getPSF(idcosmosgs)
+        ),
+    ]
+    return exposurespsfs
+
+
+def gethscexposures(cutouts, scalehsc, bands=None, typecutout='deblended'):
+    """
+    Get HSC exposures and PSF images from the given cutouts.
+
+    :param cutouts: Dict; key=band: value=dict; key=cutout type: value=dict; key=image type: value=image
+        As returned by multiprofit.datautils.gethsc.gethsccutout
+    :param scalehsc: Float; HSC pixel scale in arcseconds (0.168)
+    :param bands: List of bands; currently strings.
+    :param typecutout: String cutout type; one of 'blended' or 'deblended'.
+        'Deblended' should contain only a single galaxy with neighbours subtracted.
+    :return: List of tuples; [0]: multiprofit.objects.Exposure, [1]: PSF image (galsim object)
+    """
+    exposurespsfs = []
+    if bands is None:
+        bands = cutouts.keys()
+    for band in bands:
+        cutoutsband = cutouts[band][typecutout]
+        exposurespsfs.append(
+            (
+                mpfobj.Exposure(band, cutoutsband['img'], sigmainverse=1.0/np.sqrt(cutoutsband['var'])),
+                gs.InterpolatedImage(gs.Image(cutoutsband['psf'], scale=scalehsc))
+            )
+        )
+    return exposurespsfs
+
+
+def gethst2hscexposures(
+        cutouts, scalehsc, radec, imghst, psfhst, scalehst, results, realgalaxy,
+        bands=None, typecutout='deblended', bandhst=None, plot=False, hst2hscmodel=None
+    ):
+    """
+    Get HST exposures and PSF image from an HSC image-based model, convolved to the HSC PSF for this galaxy.
+
+    :param cutouts: Dict; key=band: value=dict; key=cutout type: value=dict; key=image type: value=image
+        As returned by multiprofit.datautils.gethsc.gethsccutout
+    :param scalehsc: Float; HSC pixel scale in arcseconds (0.168)
+    :param radec: Iterable/tuple; [0]=right ascension, [1]=declination in degrees
+    :param imghst: ndarray; HST galaxy cutout
+    :param psfhst: ndarray; HST PSF image
+    :param scalehst: Float; HST pixel scale in arcseconds (0.03)
+    :param results: Dict; fit results for HST. Must contain keys as such: ['hst']['fits']['galsim']
+    :param realgalaxy: galsim.RealGalaxy; a pre-built RealGalaxy based on the HST image of this galaxy.
+    :param bands: List of bands; currently strings.
+    :param typecutout: String cutout type; one of 'blended' or 'deblended'.
+        'Deblended' should contain only a single galaxy with neighbours subtracted.
+    :param bandhst: HST filter (should be F814W)
+    :param plot: Boolean; plot summary figure after matching?
+    :param hst2hscmodel: String; the model specification (as in modelspecs) to use for src=='hst2hsc'.
+
+    :return: List of tuples; [0]: multiprofit.objects.Exposure, [1]: PSF image (galsim object)
+    """
+    exposurespsfs = []
+    for band in bands:
+        cutoutsband = cutouts[band][typecutout]
+        imgpsf = cutoutsband['psf']
+        imgpsfgs = gs.InterpolatedImage(gs.Image(imgpsf, scale=scalehsc))
+        ny, nx = cutoutsband['img'].shape
+
+        # The COSMOS GalSim catalog is in the original HST frame, which is rotated by
+        # 10-12 degrees from RA/Dec axes; fit for this
+        result, anglehst = fitcosmosgalaxytransform(
+            radec[0], radec[1], imghst, imgpsfgs, cutoutsband['img'],
+            cutoutsband['var'], scalehsc, scalehst, plot=plot
+        )
+        fluxscale = (10 ** result.x[0])
+        metadata = {
+            "lenhst2hsc": scalehst/scalehsc,
+            "fluxscalehst2hsc": fluxscale,
+            "anglehst2hsc": anglehst,
+        }
+
+        # Assuming that these images match, add HSC noise back in
+        if hst2hscmodel is None:
+            # TODO: Fix this as it's not working by default
+            img = imgoffsetchisq(result.x, returnimg=True, imgref=cutoutsband['img'],
+                                 psf=imgpsfgs, nx=nx, ny=ny, scale=scalehsc)
+            img = gs.Convolve(img, imgpsfgs).drawImage(nx=nx, ny=ny, scale=scalehsc)*fluxscale
+            # The PSF is now HSTPSF*HSCPSF, and "truth" is the deconvolved HST image/model
+            psf = gs.Convolve(imgpsfgs, psfhst.rotate(anglehst*gs.degrees)).drawImage(
+                nx=nx, ny=ny, scale=scalehsc
+            )
+            psf /= np.sum(psf.array)
+            psf = gs.InterpolatedImage(psf)
+        else:
+            fits = results['hst']['fits']['galsim']
+            if hst2hscmodel == 'best':
+                chisqredsmodel = {model: fit['fits'][-1]['chisqred'] for model, fit in fits.items()}
+                modeltouse = min(chisqredsmodel, key=chisqredsmodel.get)
+            else:
+                modeltouse = hst2hscmodel
+            modeltype = fits[modeltouse]['modeltype']
+            # In fact there wasn't really any need to store a model since we
+            # can reconstruct it, but let's go ahead and use the unpickled one
+            paramsbest = fits[modeltouse]['fits'][-1]['paramsbestalltransformed']
+            # Apply all of the same rotations and shifts directly to the model
+            modeltouse = results['hst']['models'][modeltype]
+            metadata["hst2hscmodel"] = modeltouse
+            imghstshape = imghst.shape
+            # I'm pretty sure that these should all be converted to arcsec units
+            # TODO: Verify above
+            for param, value in zip(modeltouse.getparameters(fixed=True), paramsbest):
+                param.setvalue(value, transformed=True)
+                valueset = param.getvalue(transformed=False)
+                if param.name == "cenx":
+                    valueset = (scalehst*(valueset - imghstshape[1]/2) + result.x[1] + nx/2)
+                elif param.name == "ceny":
+                    valueset = (scalehst*(valueset - imghstshape[0]/2) + result.x[2] + ny/2)
+                elif param.name == "ang":
+                    valueset += anglehst/gs.degrees
+                elif param.name == "re":
+                    valueset *= scalehst
+                param.setvalue(valueset, transformed=False)
+            exposuremodel = modeltouse.data.exposures[bandhst][0]
+            exposuremodel.image = mpffit.ImageEmpty((ny, nx))
+            # Save the GalSim model object
+            modeltouse.evaluate(keepmodels=True, getlikelihood=False, drawimage=False)
+            img = np.float64(gs.Convolve(exposuremodel.meta['model']['galsim'], imgpsfgs).drawImage(
+                nx=nx, ny=ny, scale=scalehsc, method='no_pixel').array)*fluxscale
+            psf = imgpsfgs
+
+        noisetoadd = np.random.normal(scale=np.sqrt(cutoutsband['var']))
+        img += noisetoadd
+
+        if plot:
+            fig2, ax2 = plt.subplots(nrows=2, ncols=3)
+            ax2[0, 0].imshow(np.log10(cutoutsband['img']))
+            ax2[0, 0].set_title("HSC {}".format(band))
+            imghst2hsc = gs.Convolve(
+                realgalaxy.rotate(anglehst * gs.radians).shift(
+                    result.x[1], result.x[2]
+                ), imgpsfgs).drawImage(
+                nx=nx, ny=ny, scale=scalehsc)
+            imghst2hsc += noisetoadd
+            imgsplot = (img.array, "my naive"), (imghst2hsc.array, "GS RealGal")
+            descpre = "HST {} - {}"
+            for imgidx, (imgit, desc) in enumerate(imgsplot):
+                ax2[1, 1 + imgidx].imshow(np.log10(imgit))
+                ax2[1, 1 + imgidx].set_title(descpre.format(bandhst, desc))
+                ax2[0, 1 + imgidx].imshow(np.log10(imgit))
+                ax2[0, 1 + imgidx].set_title((descpre + " + noise").format(
+                    bandhst, desc))
+        # TODO: Use the mask in cutoutsband['mask'] (how?)
+        exposurespsfs.append(
+            (mpfobj.Exposure(band, img, sigmainverse=1.0/np.sqrt(cutoutsband['var'])), psf)
+        )
+    return exposurespsfs
+
+
+def fitgalaxyexposures(
+        exposurespsfs, bands, modelspecs, results=None, plot=False, fitname=None,
+        redo=True, redopsfs=False, modellib="scipy", modellibopts=None,
         resetimages=False, imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None, fitfluxfracs=False):
     """
-    Fit a COSMOS galaxy using HST/HSC data.
+    Fit a set of exposures and accompanying PSF images in the given bands with the requested model
+    specifications.
 
-    :param idcosmosgs: ID of the COSMOS galaxy (in the GalSim catalog)
-    :param srcs: Collection of strings; data sources to fit. Allowed values: 'hst', 'hsc', 'hst2hsc'.
+    :param exposurespsfs: List of tuples (multiprofit.object.Exposure, nparray with PSF image)
+    :param bands: List of bands
     :param modelspecs: List of dicts; as in getmodelspecs().
-    :param rgcfits: A COSMOS galsim.RealGalaxyCatalog FITS structure, containing header information.
-    :param rgcat: A COSMOS galsim.RealGalaxyCatalog.
-    :param ccat: A galsim.COSMOSCatalog. #TODO: Remove; it's not really needed.
-    :param butler: lsst.daf.persistence.butler (Gen2) pointed at an HSC repo.
-    :param skymap: The appropriate HSC skymap from the butler.
     :param results:
     :param plot: Boolean; generate plots?
+    :param fitname: String; name of the galaxy/image to use as a title in plots
     :param redo: Boolean; Redo any pre-existing galaxy fits in results?
     :param redopsfs: Boolean; Redo any pre-existing PSF fits in results?
     :param modellib: string; Model fitting library
     :param modellibopts: dict; Model fitting library options #TODO: fix it!
-    :param hst2hscmodel: String; the model specification (as in modelspecs) to use for src=='hst2hsc'.
-    :param hscbands: Iterable of strings; list of HSC bands.
     :param resetimages: Boolean; reset all images in data structures to EmptyImages before returning results?
     :param imgplotmaxs: dict; key=band: value=float (Maximum value when plotting images in this band)
     :param imgplotmaxmulti: float; Maximum value of summed images when plotting multi-band.
     :param weightsband: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB).
     :param fitfluxfracs: bool; fit component flux ratios instead of absolute fluxes?
-    :return: dict; key=src: value=dict of fit results, model object, etc.
+    :return:
     """
     if results is None:
         results = {}
-    np.random.seed(idcosmosgs)
-    radec = rgcfits[idcosmosgs][1:3]
-    imghst = rgcat.getGalImage(idcosmosgs)
-    scalehst = rgcfits[idcosmosgs]['PIXEL_SCALE']
-    bandhst = rgcat.band[idcosmosgs]
-    psfhst = rgcat.getPSF(idcosmosgs)
-    coaddshsc = None
-    if "hsc" in srcs or "hst2hsc" in srcs:
+    metadata = {"bands": bands}
+    # Having worked out what the image, psf and variance map are, fit PSFs and images
+    psfs = results['psfs'] if 'psfs' in results else {}
+    psfmodels = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
+    engine = 'galsim'
+    engineopts = {
+        "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
+    }
+    figure, axes = (None, None)
+    psfrow = None
+    if plot:
+        npsfs = 0
+        for psfmodeltype, _ in psfmodels:
+            npsfs += psfmodeltype != "empirical"
+        npsfs *= len(bands)
+        if npsfs > 1:
+            figure, axes = plt.subplots(nrows=min([5, npsfs]), ncols=max([5, npsfs]))
+            psfrow = 0
+    for idx, (exposure, psf) in enumerate(exposurespsfs):
+        band = exposure.band
+        if idx not in psfs:
+            psfs[idx] = {engine: {}}
+        for psfmodeltype, ispsfpixelated in psfmodels:
+            psfname = psfmodeltype + ("_pixelated" if ispsfpixelated else "")
+            label = psfmodeltype + (" pix." if ispsfpixelated else "") + " PSF"
+            if psfmodeltype == "empirical":
+                # TODO: Check if this works
+                psfs[idx][engine][psfname] = {'object': mpfobj.PSF(
+                    band=band, engine=engine, image=psf.image.array)}
+            else:
+                engineopts["drawmethod"] = "no_pixel" if ispsfpixelated else None
+                refit = redopsfs or psfname not in psfs[idx][engine]
+                if refit or plot:
+                    if refit:
+                        print('Fitting PSF model {}'.format(psfname))
+                    psfs[idx] = fitpsf(
+                        psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
+                        psfmodelfits=psfs[idx], plot=plot, modelname=psfname, label=label, title=fitname,
+                        figaxes=(figure, axes), figurerow=psfrow, redo=refit)
+                    if redo or 'object' not in psfs[idx][engine][psfname]:
+                        psfs[idx][engine][psfname]['object'] = mpfobj.PSF(
+                            band=band, engine=engine,
+                            model=psfs[idx][engine][psfname]['modeller'].model.sources[0],
+                            modelpixelated=ispsfpixelated)
+                    if plot and psfrow is not None:
+                        psfrow += 1
+        exposurespsfs[idx] = (exposurespsfs[idx][0], psfs[idx])
+    if plot:
+        plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
+    fitsbyengine = None if 'fits' not in results else results['fits']
+    models = None if 'models' not in results else results['models']
+    fits, models = fitgalaxy(
+        exposurespsfs, modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
+        fitsbyengine=fitsbyengine, redo=redo, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
+        weightsband=weightsband, fitfluxfracs=fitfluxfracs)
+    if resetimages:
+        for idx, psfsengine in psfs.items():
+            if engine in psfsengine:
+                for psfmodeltype, psf in psfsengine[engine].items():
+                    mpffit.setexposure(psf['modeller'].model, exposurespsfs[idx][0].band, image='empty')
+        for modelname, model in models.items():
+            for band in bands:
+                mpffit.setexposure(model, band, image='empty')
+        for engine, modelfitinfo in fits.items():
+            for modelname, modelfits in modelfitinfo.items():
+                if 'fits' in modelfits:
+                    for fit in modelfits["fits"]:
+                        fit["fitinfo"]["log"] = None
+                        # Don't try to pickle pygmo problems for some reason I forget
+                        if hasattr(fit["result"], "problem"):
+                            fit["result"]["problem"] = None
+    results = {'fits': fits, 'models': models, 'psfs': psfs, 'metadata': metadata}
+    return results
+
+
+def fitcosmosgalaxy(
+        radec, idcosmosgs, srcs, rgcat=None, ccat=None, butler=None, skymap=None, hst2hscmodel=None,
+        hscbands=['HSC-I'], scalehst=0.03, **kwargs
+):
+    """
+    Fit a COSMOS galaxy using HST/HSC data.
+
+    :param radec: RA/dec in degrees of the galaxy.
+    :param idcosmosgs: ID of the COSMOS galaxy (in the GalSim catalog)
+    :param srcs: Collection of strings; data sources to fit. Allowed values: 'hst', 'hsc', 'hst2hsc'.
+    :param rgcat: A COSMOS galsim.RealGalaxyCatalog.
+    :param ccat: A COSMOS galsim.scene.COSMOSGalaxyCatalog.
+    :param butler: lsst.daf.persistence.butler (Gen2) pointed at an HSC repo.
+    :param skymap: The appropriate HSC skymap from the butler.
+    :param hscbands: Iterable of strings; list of HSC bands.
+    :param scalehst: Float; HST image pixel scale in arcsec
+    :param kwargs: Dict of key string argname: value arg to pass to fitgalaxyexposures
+    :return: dict; key=src: value=dict of fit results, model object, etc.
+    """
+    needhsc = "hsc" in srcs or "hst2hsc" in srcs
+    if 'hst' in srcs or needhsc:
+        exposurespsfshst = gethstexposures(idcosmosgs, rgcat)
+        imghst = exposurespsfshst[0][0].image
+    if needhsc:
         if butler is None or skymap is None:
             raise ValueError('Must provide butler and skymap if fitting HSC or HST2HSC')
-        tract = 9813
-        # Get the HSC dataRef
-        import lsst.afw.geom as geom
-        spherePoint = geom.SpherePoint(radec[0], radec[1], geom.degrees)
-        patch = skymap[tract].findPatch(spherePoint).getIndex()
-        patch = ",".join([str(x) for x in patch])
-        # HSC-I will be the reference for matching as it's closest to F814W
-        bandref = 'HSC-I'
-        dataRefs = {band: butler.dataRef(
-            "deepCoadd", dataId={"tract": tract, "patch": patch, "filter": band})
-            for band in set(hscbands + [bandref])}
-        # Get the coadd
-        coaddshsc = {key: dataRef.get("deepCoadd_calexp") for key, dataRef in dataRefs.items()}
-        scalehsc = coaddshsc[bandref].getWcs().getPixelScale().asArcseconds()
-        # Get the measurements
-        measCat = dataRefs[bandref].get("deepCoadd_meas")
-        # Get and verify match
-        distsq = ((radec[0] - np.degrees(measCat["coord_ra"])) ** 2 +
-                  (radec[1] - np.degrees(measCat["coord_dec"])) ** 2)
-        row = np.int(np.argmin(distsq))
-        idHsc = measCat["id"][row]
-        dist = np.sqrt(distsq[row]) * 3600
-        print('Source distance={:.2e}"'.format(dist))
-        # TODO: Threshold distance?
-        if dist > 1:
-            raise RuntimeError("Nearest HSC source at distance {:.3e}>1; aborting".format(dist))
-        # Determine the HSC cutout size (larger than HST due to bigger PSF)
-        sizeCutout = np.int(4 + np.ceil(np.max(imghst.array.shape) * scalehst / scalehsc))
-        sizeCutout += np.int(sizeCutout % 2)
+        import multiprofit.datautils.gethsc as gethsc
+        # Determine the approximate HSC cutout size (larger than HST due to bigger PSF)
+        # scalehsc should always be ~0.168
+        sizeCutoutHSC = np.int(4 + np.ceil(np.max(imghst.shape)*scalehst/0.168))
+        sizeCutoutHSC += np.int(sizeCutoutHSC % 2)
+        cutouts, spherePoint, scalehsc = gethsc.gethsccutout(
+            butler, skymap, hscbands, radec, sizeinpix=sizeCutoutHSC, deblend=True, bandmatch='HSC-I',
+            distmatchinasec=1.0)
 
-    # This does all of the necessary setup for each src. It should persist somehow
+    results = kwargs['results'] if 'results' in kwargs and kwargs['results'] is not None else {}
     for src in srcs:
-        srcname = src
-        bands = [rgcat.band[idcosmosgs]] if src == "hst" else hscbands
-        metadata = {"bands": bands}
-        exposures = {}
-        if src == "hst":
-            exposures[bands[0]] = mpfobj.Exposure(
-                bands[0], imghst.array,
-                sigmainverse=np.array([np.power(rgcat.getNoiseProperties(idcosmosgs)[2], -0.5)]))
-            psfimgs = {bands[0]: psfhst}
-        elif src.startswith("hsc") or src == 'hst2hsc':
-            psfimgs = {band: coaddshsc[band].getPsf() for band in hscbands}
-            for band in bands:
-                coadd = coaddshsc[band]
-                psf = psfimgs[band]
-                scalehscpsf = psf.getWcs(0).getPixelScale().asArcseconds()
-                imgpsf = psf.computeImage().array
-                imgpsfgs = gs.InterpolatedImage(gs.Image(imgpsf, scale=scalehscpsf))
+        if src == 'hst':
+            exposurespsfs = exposurespsfshst
+        elif src == 'hsc' or src == 'hst2hsc':
+            argsexposures = {
+                'cutouts': cutouts,
+                'scalehsc': scalehsc,
+                'bands': hscbands,
+            }
 
-                useNoiseReplacer = True
-                if useNoiseReplacer:
-                    from lsst.meas.base.measurementInvestigationLib import rebuildNoiseReplacer
-                    measCat = dataRefs[band].get("deepCoadd_meas")
-                    noiseReplacer = rebuildNoiseReplacer(coadd, measCat)
-                    print('noiseReplacer band={} seedMult={}, mean+/-std={:4f}+/-{:4f}'.format(
-                        band, noiseReplacer.noiseSeedMultiplier, noiseReplacer.noiseGenMean,
-                        noiseReplacer.noiseGenStd))
-                    noiseReplacer.insertSource(idHsc)
-                cutouthsc = make_cutout.make_cutout_lsst(
-                    spherePoint, coadd, size=np.floor_divide(sizeCutout, 2))
-                idshsc = cutouthsc[4]
-                var = coadd.getMaskedImage().getVariance().array[
-                      idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]]
-
-                if src == "hst2hsc":
-                    # The COSMOS GalSim catalog is in the original HST frame, which is rotated by
-                    # 10-12 degrees from RA/Dec axes; fit for this
-                    result, anglehst, offsetxhst, offsetyhst = fitcosmosgalaxytransform(
-                        radec[0], radec[1], imghst, imgpsfgs, sizeCutout, cutouthsc[0], var, scalehsc,
-                        plot=plot
-                    )
-                    fluxscale = (10 ** result.x[0])
-                    metadata["lenhst2hsc"] = scalehst/scalehsc
-                    metadata["fluxscalehst2hsc"] = fluxscale
-                    metadata["anglehst2hsc"] = anglehst
-                    metadata["offsetxhst2hsc"] = offsetxhst
-                    metadata["offsetyhst2hsc"] = offsetyhst
-
-                    realgalaxy = ccat.makeGalaxy(index=idcosmosgs, gal_type="real")
-
-                    # Assuming that these images match, add HSC noise back in
-                    if hst2hscmodel is None:
-                        # TODO: Fix this as it's not working by default
-                        img = imgoffsetchisq(result.x, returnimg=True, imgref=cutouthsc[0],
-                                             psf=imgpsfgs, nx=sizeCutout, ny=sizeCutout, scale=scalehsc)
-                        img = gs.Convolve(img, imgpsfgs).drawImage(nx=sizeCutout, ny=sizeCutout,
-                                                                   scale=scalehsc) * fluxscale
-                        # The PSF is now HSTPSF*HSCPSF, and "truth" is the deconvolved HST image/model
-                        psf = gs.Convolve(imgpsfgs, psfhst.rotate(anglehst * gs.degrees)).drawImage(
-                            nx=imgpsf.shape[1], ny=imgpsf.shape[0], scale=scalehscpsf
-                        )
-                        psf /= np.sum(psf.array)
-                        psf = gs.InterpolatedImage(psf)
-                    else:
-                        fits = results['hst']['fits']['galsim']
-                        if hst2hscmodel == 'best':
-                            chisqredsmodel = {model: fit['fits'][-1]['chisqred'] for model, fit in fits.items()}
-                            modeltouse = min(chisqredsmodel, key=chisqredsmodel.get)
-                        else:
-                            modeltouse = hst2hscmodel
-                        modeltype = fits[modeltouse]['modeltype']
-                        srcname = "_".join([src, hst2hscmodel])
-                        # In fact there wasn't really any need to store a model since we
-                        # can reconstruct it, but let's go ahead and use the unpickled one
-                        paramsbest = fits[modeltouse]['fits'][-1]['paramsbestalltransformed']
-                        # Apply all of the same rotations and shifts directly to the model
-                        modeltouse = results['hst']['models'][modeltype]
-                        metadata["hst2hscmodel"] = modeltouse
-                        scalefactor = scalehst / scalehsc
-                        imghstshape = imghst.array.shape
-                        # I'm pretty sure that these should all be converted to arcsec units
-                        # TODO: Verify above
-                        for param, value in zip(modeltouse.getparameters(fixed=True), paramsbest):
-                            param.setvalue(value, transformed=True)
-                            valueset = param.getvalue(transformed=False)
-                            if param.name == "cenx":
-                                valueset = (scalehst * (valueset - imghstshape[1] / 2) + result.x[1]
-                                            + sizeCutout / 2)
-                            elif param.name == "ceny":
-                                valueset = (scalehst * (valueset - imghstshape[0] / 2) + result.x[2]
-                                            + sizeCutout / 2)
-                            elif param.name == "ang":
-                                valueset += np.degrees(anglehst)
-                            elif param.name == "re":
-                                valueset *= scalehst
-                            param.setvalue(valueset, transformed=False)
-                        exposuremodel = modeltouse.data.exposures[bandhst][0]
-                        exposuremodel.image = mpffit.ImageEmpty((sizeCutout, sizeCutout))
-                        # Save the GalSim model object
-                        modeltouse.evaluate(keepmodels=True, getlikelihood=False, drawimage=False)
-                        img = gs.Convolve(exposuremodel.meta['model'], imgpsfgs).drawImage(
-                            nx=sizeCutout, ny=sizeCutout, scale=scalehsc).array * fluxscale
-                        psf = imgpsfgs
-
-                    noisetoadd = np.random.normal(scale=np.sqrt(var))
-                    img += noisetoadd
-
-                    if plot:
-                        fig2, ax2 = plt.subplots(nrows=2, ncols=3)
-                        ax2[0, 0].imshow(np.log10(cutouthsc[0]))
-                        ax2[0, 0].set_title("HSC {}".format(band))
-                        imghst2hsc = gs.Convolve(
-                            realgalaxy.rotate(anglehst * gs.radians).shift(
-                                result.x[1], result.x[2]
-                            ), imgpsfgs).drawImage(
-                            nx=sizeCutout, ny=sizeCutout, scale=scalehsc)
-                        imghst2hsc += noisetoadd
-                        imgsplot = (img.array, "my naive"), (imghst2hsc.array, "GS RealGal")
-                        descpre = "HST {} - {}"
-                        for imgidx, (imgit, desc) in enumerate(imgsplot):
-                            ax2[1, 1 + imgidx].imshow(np.log10(imgit))
-                            ax2[1, 1 + imgidx].set_title(descpre.format(bandhst, desc))
-                            ax2[0, 1 + imgidx].imshow(np.log10(imgit))
-                            ax2[0, 1 + imgidx].set_title((descpre + " + noise").format(
-                                bandhst, desc))
-                else:
-                    # TODO: Use the mask properly
-                    # mask = exposure.getMaskedImage().getMask()
-                    # mask = mask.array[idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]]
-                    if useNoiseReplacer:
-                        img = copy.deepcopy(coadd.getMaskedImage().getImage().getArray()[
-                                                idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]])
-                    else:
-                        footprint = measCat[row].getFootprint()
-                        # TODO: There is presumably a much better way of doing this
-                        img = copy.deepcopy(coadd.maskedImage.image) * 0
-                        footprint.getSpans().copyImage(coadd.maskedImage.image, img)
-                    psf = imgpsfgs
-                    mask = img != 0
-                exposures[band] = mpfobj.Exposure(band, img, sigmainverse=1.0/np.sqrt(var))
-                psfimgs[band] = psf
+            if src == 'hsc':
+                exposurespsfs = gethscexposures(**argsexposures)
+            elif src == 'hst2hsc':
+                argsexposures['radec'] = radec
+                argsexposures['imghst'] = imghst
+                argsexposures['psfhst'] = exposurespsfshst[0][1]
+                argsexposures['scalehst'] = scalehst
+                argsexposures['results'] = results
+                argsexposures['realgalaxy'] = ccat.makeGalaxy(index=idcosmosgs, gal_type="real")
+                argsexposures['bandhst'] = exposurespsfshst[0][0].band
+                argsexposures['hst2hscmodel'] = hst2hscmodel
+                exposurespsfs = gethst2hscexposures(**argsexposures)
+            else:
+                raise RuntimeError('Unknown HSC galaxy data source {}'.format(src))
         else:
-            raise RuntimeError('Unknown src ' + src)
-
-        # Having worked out what the image, psf and variance map are, fit PSFs and images
-        if srcname not in results:
-            results[srcname] = {}
-        psfs = results[srcname]['psfs'] if 'psfs' in results[srcname] else {}
-        psfmodels = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
-        engine = 'galsim'
-        engineopts = {
-            "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
-        }
-        fitname = "COSMOS #{}".format(idcosmosgs)
-        figure, axes = (None, None)
-        psfrow = None
-        if plot:
-            npsfs = 0
-            for psfmodeltype, _ in psfmodels:
-                npsfs += psfmodeltype != "empirical"
-            npsfs *= len(bands)
-            if npsfs > 1:
-                figure, axes = plt.subplots(nrows=min([5, npsfs]), ncols=max([5, npsfs]))
-                psfrow = 0
-        for band, psf in psfimgs.items():
-            if band not in psfs:
-                psfs[band] = {engine: {}}
-            for psfmodeltype, ispsfpixelated in psfmodels:
-                psfname = psfmodeltype + ("_pixelated" if ispsfpixelated else "")
-                label = psfmodeltype + (" pix." if ispsfpixelated else "") + " PSF"
-                if psfmodeltype == "empirical":
-                    # TODO: Check if this works
-                    psfs[band][engine][psfname] = {'object': mpfobj.PSF(
-                        band=band, engine=engine, image=psf.image.array)}
-                else:
-                    engineopts["drawmethod"] = "no_pixel" if ispsfpixelated else None
-                    refit = redopsfs or psfname not in psfs[band][engine]
-                    if refit or plot:
-                        if refit:
-                            print('Fitting PSF model {}'.format(psfname))
-                        psfs[band] = fitpsf(
-                            psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
-                            psfmodelfits=psfs[band], plot=plot, modelname=psfname, label=label, title=fitname,
-                            figaxes=(figure, axes), figurerow=psfrow, redo=refit)
-                        if redo or 'object' not in psfs[band][engine][psfname]:
-                            psfs[band][engine][psfname]['object'] = mpfobj.PSF(
-                                band=band, engine=engine,
-                                model=psfs[band][engine][psfname]['modeller'].model.sources[0],
-                                modelpixelated=ispsfpixelated)
-                        if plot and psfrow is not None:
-                            psfrow += 1
-        if plot:
-            plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
-        fitsbyengine = None if 'fits' not in results[srcname] else results[srcname]['fits']
-        models = None if 'models' not in results[srcname] else results[srcname]['models']
-        exposurespsfs = [(exposures[band], psfs[band]) for band in bands]
-        fits, models = fitgalaxy(
-            exposurespsfs, modelspecs=modelspecs, name=fitname, modellib=modellib, plot=plot, models=models,
-            fitsbyengine=fitsbyengine, redo=redo, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
-            weightsband=weightsband, fitfluxfracs=fitfluxfracs)
-        if resetimages:
-            for band, psfsband in psfs.items():
-                if engine in psfsband:
-                    for psfmodeltype, psf in psfsband[engine].items():
-                        mpffit.setexposure(psf['modeller'].model, band, image='empty')
-            for modelname, model in models.items():
-                for band in bands:
-                    mpffit.setexposure(model, band, image='empty')
-            for engine, modelfitinfo in fits.items():
-                for modelname, modelfits in modelfitinfo.items():
-                    if 'fits' in modelfits:
-                        for fit in modelfits["fits"]:
-                            fit["fitinfo"]["log"] = None
-                            # Don't try to pickle pygmo problems for some reason I forget
-                            if hasattr(fit["result"], "problem"):
-                                fit["result"]["problem"] = None
-        results[srcname] = {'fits': fits, 'models': models, 'psfs': psfs, 'metadata': metadata}
-
+            raise RuntimeError('Unknown galaxy data source {}'.format(src))
+        bands = [rgcat.band[idcosmosgs]] if src == "hst" else hscbands
+        fitname = 'COSMOS #{}'.format(idcosmosgs)
+        kwargs['results'] = results[src] if src in results else None
+        results[src] = fitgalaxyexposures(exposurespsfs, bands, fitname=fitname, **kwargs)
     return results
 
 
@@ -1126,12 +1158,14 @@ def main():
         print("Failed to load RealGalaxyCatalog {} in directory {} due to {}".format(
             args.catalogfile, args.catalogpath, err))
         raise err
-    try:
-        ccat = gs.COSMOSCatalog(args.catalogfile, dir=args.catalogpath)
-    except RuntimeError as err:
-        print("Failed to load COSMOSCatalog {} in directory {} due to {}".format(
-            args.catalogfile, args.catalogpath, err))
-        print("Not using COSMOSCatalog")
+    if 'hst2hsc' in srcs:
+        try:
+            ccat = gs.COSMOSCatalog(args.catalogfile, dir=args.catalogpath)
+        except RuntimeError as err:
+            print("Failed to load COSMOSCatalog {} in directory {} due to {}".format(
+                args.catalogfile, args.catalogpath, err))
+            raise err
+    else:
         ccat = None
     rgcfits = ap.io.fits.open(os.path.join(args.catalogpath, args.catalogfile))[1].data
     nfit = 0
@@ -1140,10 +1174,14 @@ def main():
         for idnum in range(idrange[0], idrange[0 + (len(idrange) > 1)] + (len(idrange) == 1)):
             print("Fitting COSMOS galaxy with ID: {}".format(idnum))
             try:
+                np.random.seed(idnum)
+                radec = rgcfits[idnum][1:3]
+                scalehst = rgcfits[idnum]['PIXEL_SCALE']
                 fits = fitcosmosgalaxy(
-                    idnum, srcs=srcs, modelspecs=modelspecs, rgcfits=rgcfits, rgcat=rgcat, ccat=ccat,
-                    butler=butler, skymap=skymap, plot=args.plot, redo=args.redo, redopsfs=args.redopsfs,
-                    resetimages=True, hst2hscmodel=args.hst2hscmodel, hscbands=args.hscbands,
+                    radec=radec, idcosmosgs=idnum, srcs=srcs, modelspecs=modelspecs, rgcat=rgcat, ccat=ccat,
+                    butler=butler, skymap=skymap, plot=args.plot,
+                    redo=args.redo, redopsfs=args.redopsfs, resetimages=True,
+                    hst2hscmodel=args.hst2hscmodel, hscbands=args.hscbands, scalehst=scalehst,
                     modellib=args.modellib, results=data[idnum] if idnum in data else None,
                     imgplotmaxs=args.imgplotmaxs, imgplotmaxmulti=args.imgplotmaxmulti,
                     weightsband=args.weightsband, fitfluxfracs=args.fitfluxfracs)

@@ -355,7 +355,7 @@ def evaluatemodel(model, plot=False, title=None, **kwargs):
 
 # Convenience function to fit a model. kwargs are passed on to evaluatemodel
 def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Nelder-Mead"}, printfinal=True,
-             printsteps=100, plot=False, **kwargs):
+             printsteps=100, plot=False, dolinear=True, **kwargs):
     """
     Convenience function to fit a model with reasonable defaults.
     :param model: multiprofit.Model
@@ -370,7 +370,7 @@ def fitmodel(model, modeller=None, modellib="scipy", modellibopts={'algo': "Neld
     """
     if modeller is None:
         modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
-    fit = modeller.fit(printfinal=printfinal, printsteps=printsteps)
+    fit = modeller.fit(printfinal=printfinal, printsteps=printsteps, dolinear=dolinear)
     if printfinal:
         paramsall = model.getparameters(fixed=True)
         print("Param names:" + ",".join(["{:11s}".format(p.name) for p in paramsall]))

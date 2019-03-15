@@ -413,7 +413,10 @@ class Model:
         :param weightsband: dict; key band: weight for scaling each band in multiband plots.
         :param dolinearfitprep: bool; do prep work to fit a linear model?
         :param comparelikelihoods: bool; compare likelihoods from C++ vs Python (if both exist)
-        :return:
+        :return: likelihood: float; the (log) likelihood
+            params: ndarray of floats; parameter values
+            chis: list of residual images for each fit exposure, where chi = (data-model)/sigma
+            times: Dict of floats, with time in
         """
         times = {}
         if clock:
@@ -863,7 +866,8 @@ class Model:
                 if profilestodraw:
                     image = mpf.make_gaussians_pixel(
                         gaussianprofilestomatrix([profile[band] for profile in profilestodraw]),
-                        0, exposure.image.shape[1], 0, exposure.image.shape[0])
+                        0, exposure.image.shape[1], 0, exposure.image.shape[0],
+                        exposure.image.shape[1], exposure.image.shape[0])
                     if dolinearfitprep:
                         exposure.meta['modelimagefixed'] = np.copy(image)
                 # Ensure identical order until all dicts are ordered
@@ -978,7 +982,7 @@ class Model:
                             profile["shear"]).shift(
                             profile["offset"] - cenimg)
                     # TODO: Revise this when image scales are taken into account
-                    dolinearprofile = dolinearfitprep and profile["fluxparameter"].fixed
+                    dolinearprofile = dolinearfitprep and not profile["fluxparameter"].fixed
                     sizebinname = "linearfitprep" if dolinearprofile else (
                         "big" if profilegs.original.half_light_radius > 1 else "small")
                     convolve = haspsf and not profile["pointsource"]
@@ -1003,9 +1007,9 @@ class Model:
                             else:
                                 profilespsf += profilegs
                 else:
-                    if any([x['convolve'] for x in profilesgs]):
-                        raise RuntimeError("Model (band={}) has profiles to convolve but no PSF".format(
-                            exposure.band))
+                    if any([value[True] for key, value in profilesgs.items()]):
+                        raise RuntimeError("Model (band={}) has profiles to convolve but no PSF, "
+                                           "profiles are: {}".format(exposure.band, profilesgs))
                 # TODO: test this, and make sure that it works in all cases, not just gauss. mix
                 # Has a PSF and it's a pixelated analytic model, so all sources must use no_pixel
                 if metamodel['psfispixelated']:
@@ -1022,8 +1026,8 @@ class Model:
                 if clock:
                     times['modelsetup'] = time.time() - timenow
                     timenow = time.time()
-                for convolve, profilesoftype in profilesgs.items():
-                    for profiletype, profilesgsbin in profilesoftype.items():
+                for profiletype, profilesoftype in profilesgs.items():
+                    for convolve, profilesgsbin in profilesoftype.items():
                         if profilesgsbin:
                             # Pixel convolution is included with PSF images so no_pixel should be used
                             # TODO: Implement oversampled convolution here (or use libprofit?)
@@ -1066,7 +1070,7 @@ class Model:
                                     if dolinearfitprep:
                                         if linearprofile:
                                             exposure.meta['modelimagesparamsfree'].append(
-                                                (profiledraw, fluxparameter))
+                                                (np.copy(imagegs), fluxparameter))
                                         else:
                                             if exposure.meta['modelimagefixed'] is None:
                                                 exposure.meta['modelimagefixed'] = np.copy(imagegs)
@@ -1260,8 +1264,7 @@ class Modeller:
                 self.fitinfo["printsteps"] is not None):
             stepnum = len(self.fitinfo["log"])
             if stepnum % self.fitinfo["printsteps"] == 0:
-                print(stepnum, rv, loginfo)
-                sys.stdout.flush()
+                print(stepnum, rv, loginfo, flush=True)
         return rv
 
     def fit(self, paramsinit=None, printfinal=True, timing=None, maxwalltime=np.Inf, printsteps=None,
@@ -1270,29 +1273,40 @@ class Modeller:
         self.fitinfo["log"] = []
         self.fitinfo["printsteps"] = printsteps
 
-        if paramsinit is None:
-            paramsinit = [param.getvalue(transformed=True) for param in self.model.getparameters(fixed=False)]
-            paramsinit = np.array(paramsinit)
-
         paramsfree = self.model.getparameters(fixed=False)
+        if paramsinit is None:
+            paramsinit = np.array([param.getvalue(transformed=True) for param in paramsfree])
+
         paramnames = [param.name for param in paramsfree]
-        dolinear = dolinear and all([isinstance(param, FluxParameter) for param in paramsfree])
+        isfreeflux = [isinstance(param, FluxParameter) for param in paramsfree]
+        isanyfluxfree = any(isfreeflux)
+        # Is this a linear problem? True iff all free params are fluxes
+        islinear = all(isfreeflux)
+        # Do a linear fit at all? No if all fluxes are fixed
+        dolinear = dolinear and isanyfluxfree
+        # TODO: The mechanism here is TBD
         dolinearonly = dolinear and dolinearonly
 
+        likelihood = self.evaluate(paramsinit, dolinearfitprep=dolinear, comparelikelihoods=True)
         print("Param names:\n", paramnames)
         print("Initial parameters:\n", paramsinit)
-        print("Evaluating initial parameters:\n", self.evaluate(
-            paramsinit, dolinearfitprep=dolinear, comparelikelihoods=True))
+        print("Evaluating initial parameters:\n", likelihood)
         sys.stdout.flush()
 
         if dolinear:
+            # If this isn't a linear problem, fix all free non-flux parameters and do a linear fit first
+            if not islinear:
+                for param in paramsfree:
+                    if not isinstance(param, FluxParameter):
+                        param.fixed = True
             print("Beginning linear fit")
             tinit = time.time()
-            params = None
             datasizes = []
             # TODO: This should be an input argument
             bands = np.sort(list(self.model.data.exposures.keys()))
+            nparams = 0
             for band in bands:
+                params = None
                 for exposure in self.model.data.exposures[band]:
                     datasizes.append(np.sum(exposure.maskinverse)
                                      if exposure.maskinverse is not None else
@@ -1301,9 +1315,9 @@ class Modeller:
                     if params is None:
                         params = paramsexposure
                     elif params != paramsexposure:
-                        raise RuntimeError('Got different linear fit params in two exposures: {} vs {}'.format(
-                            params, paramsexposure))
-            nparams = len(params)
+                        raise RuntimeError('Got different linear fit params '
+                                           'in two exposures: {} vs {}'.format(params, paramsexposure))
+                nparams += len(params)
             datasize = np.sum(datasizes)
             # Matrix of vectors for each variable component
             x = np.zeros([datasize, nparams])
@@ -1323,17 +1337,40 @@ class Modeller:
                         (img - imgfixed if maskinv is None else img[maskinv] - imgfixed[maskinv]).flat
                     idxbegin = idxend
                     i += 1
-            fluxratios = np.linalg.lstsq(x, y, rcond=None)[0]
-            negatives = np.where(fluxratios < 0)[0]
-            if negatives:
-                warnings.warn(RuntimeWarning('Negative flux ratio found in linear fit: {}'.format(
-                    fluxratios)))
-            # TODO: Try using scipy.optimize.lsq_linear with bounds?
-            for fluxratio, param in zip(fluxratios, params):
-                param.setvalue(param.getvalue(transformed=False)*np.max([1e-2, fluxratio]), transformed=False)
+            likelihood = likelihood[0]
+            fluxratiosprint = None
+            for rcond in [None, 1e-2, 0.1, 1, np.Inf]:
+                valuesinit = [param.getvalue(transformed=False) for param in params]
+                if rcond == np.Inf:
+                    fluxratios = spopt.lsq_linear(x, y, bounds=(0, np.Inf)).x
+                else:
+                    fluxratios = np.linalg.lstsq(x, y, rcond=rcond)[0]
+                for fluxratio, param, valueinit in zip(fluxratios, params, valuesinit):
+                    ratio = np.max([1e-4, fluxratio])
+                    # TODO: See if there is a better alternative to setting values outside of the transform range
+                    # Perhaps leave an option to change the transform to log10?
+                    for frac in np.linspace(1, 0, 10+1):
+                        param.setvalue(valueinit*(frac*ratio + 1-frac), transformed=False)
+                        if np.isfinite(param.getvalue(transformed=False)):
+                            break
+                likelihoodnew = self.evaluate(returnlponly=True, likelihoodonly=True)
+                if likelihoodnew > likelihood:
+                    fluxratiosprint = fluxratios
+                    likelihood = likelihoodnew
+                else:
+                    for valueinit, param in zip(valuesinit, params):
+                        param.setvalue(valueinit, transformed=False)
             print("Elapsed time: {:.1f}".format(time.time() - tinit))
-            print("Final likelihood: {}".format(self.evaluate(returnlponly=True, likelihoodonly=True)))
-            print("Linear flux ratios: {}".format(fluxratios))
+            if fluxratiosprint is None:
+                print("Linear fit failed to improve on initial parameters")
+            else:
+                paramsinit = np.array([param.getvalue(transformed=True) for param in paramsfree])
+                print("Final likelihood: {}".format(self.evaluate(returnlponly=True, likelihoodonly=True)))
+                print("New initial parameters:\n", paramsinit)
+                print("Linear flux ratios: {}".format(fluxratiosprint))
+            if not islinear:
+                for param in paramsfree:
+                    param.fixed = False
 
         timerun = 0.0
         if not dolinearonly:
@@ -1548,6 +1585,12 @@ class PhotometricModel:
                 params += paramscomp
             else:
                 params.append(paramscomp)
+        modifiers = ([param for param in self.modifiers if
+                      (param.fixed and fixed) or (not param.fixed and free)])
+        if flatten:
+            params += modifiers
+        else:
+            params.append(modifiers)
         return params
 
     # TODO: Determine how the astrometric model is supposed to interact here
@@ -1872,17 +1915,18 @@ class PointSourceProfile(Component):
     # TODO: default PSF could be unit image?
     def getprofiles(self, bandfluxes, engine, cenx, ceny, psf=None):
         """
+        Get engine-dependent representations of profiles to be rendered.
 
-        :param bandfluxes:
-        :param engine:
-        :param cenx:
-        :param ceny:
-        :param psf: A PSF (required, despite the default).
-        :return:
+        :param bandfluxes: Dict of fluxes by band
+        :param engine: Rendering engine
+        :param cenx: X center in image coordinates
+        :param ceny: Y center in image coordinates
+        :param psf: A PSF (required, despite the default)
+        :return: List of engine-dependent profiles
         """
         self._checkengine(engine)
         if not isinstance(psf, PSF):
-            raise TypeError("")
+            raise TypeError("psf type {} must be a {}".format(type(psf), PSF))
 
         fluxesbands = {flux.band: flux for flux in self.fluxes}
         for band in bandfluxes.keys():
