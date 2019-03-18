@@ -195,14 +195,15 @@ def initmodelfrommodelfits(model, modelfits, fluxfracs=None):
                 raise RuntimeError(
                     "paramtree[0][1][0][{}] (type={}) isFluxParameter={} and/or isfluxratio".format(
                         iflux, type(flux), fluxisflux))
-        for comp in paramtree[0][1][1:len(paramtree[0][1])]:
+        for comp in paramtree[0][1][1:-1]:
             compsinit.append([(param, param.getvalue(transformed=False)) for param in comp])
     params = model.getparameters(fixed=True, flatten=False)
     # Assume one source
     paramssrc = params[0]
     fluxcomps = paramssrc[1]
     fluxcens = fluxcomps[0] + paramssrc[0]
-    comps = [comp for comp in fluxcomps[1:len(fluxcomps)]]
+    # The first list is fluxes
+    comps = [comp for comp in fluxcomps[1:-1]]
     # Check if fluxcens all length three with a total flux parameter and two centers named cenx and ceny
     # TODO: More informative errors; check fluxesinit
     bands = set([flux.band for flux in fluxesinit])
@@ -357,7 +358,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
             # The second time through, uh, ...? TODO Remember what happens
             if ismgtogauss and i == 0:
                 componentsnew = mpffit.getmultigaussians(
-                    model.getprofiles(bands, engine='libprofit'), paramsinherit=paramsinherit,
+                    model.getprofiles(bands=bands, engine='libprofit'), paramsinherit=paramsinherit,
                     ncomponents=ncomponents)
                 componentsold = model.sources[0].modelphotometric.components
                 for modeli in [model, modelnew]:

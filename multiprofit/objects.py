@@ -1617,7 +1617,7 @@ class PhotometricModel:
                 raise RuntimeError('Non-unity flux ratio for final component')
         return profiles
 
-    def __init__(self, components, fluxes=None):
+    def __init__(self, components, fluxes=None, modifiers=None):
         for i, comp in enumerate(components):
             if not isinstance(comp, Component):
                 raise TypeError("PhotometricModel component[{:d}](type={:s}) "
@@ -1641,6 +1641,7 @@ class PhotometricModel:
                              "components: {} not all in {}".format(bandsfluxes, bandscomps[0]))
         self.components = components
         self.fluxes = {flux.band: flux for flux in fluxes}
+        self.modifiers = [] if modifiers is None else modifiers
 
 
 # TODO: Implement and use, with optional WCS attached?
@@ -1775,8 +1776,15 @@ class EllipticalProfile(Component):
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
                 flux *= bandfluxes[band]
                 bandfluxes[band] *= (1.0-fluxratio)
-            profile = {param.name: param.getvalue(transformed=False) for param in
-                       self.parameters.values()}
+            profile = {}
+            for param in self.parameters.values():
+                value = param.getvalue(transformed=False)
+                if param.name == "re":
+                    for modifier in param.modifiers:
+                        if modifier.name == "rscale":
+                            value *= modifier.getvalue(transformed=False)
+                profile[param.name] = value
+
             if not 0 < profile["axrat"] <= 1:
                 if profile["axrat"] > 1:
                     profile["axrat"] = 1
@@ -1786,6 +1794,7 @@ class EllipticalProfile(Component):
                     raise ValueError("axrat {} ! >0 and <=1".format(profile["axrat"]))
 
             cens = {"cenx": cenx, "ceny": ceny}
+
             # Does this profile have a non-zero size?
             # TODO: Review cutoff - it can't be zero for galsim or it will request huge FFTs
             resolved = not (
@@ -2047,7 +2056,7 @@ class Parameter:
             param.value = self.value
 
     def __init__(self, name, value, unit="", limits=None, transform=Transform(), transformed=True, prior=None,
-                 fixed=False):
+                 fixed=False, inheritors=None, modifiers=None):
         if prior is not None and not isinstance(prior, Prior):
             raise TypeError("prior (type={:s}) is not an instance of {:s}".format(type(prior), type(Prior)))
         if limits is None:
@@ -2065,7 +2074,9 @@ class Parameter:
         self.transformed = transformed
         self.prior = prior
         # List of parameters that should inherit values from this one
-        self.inheritors = []
+        self.inheritors = [] if inheritors is None else inheritors
+        # List of parameters that can modify this parameter's value - user decides what to do with them
+        self.modifiers = [] if modifiers is None else modifiers
 
 
 class FluxParameter(Parameter):
