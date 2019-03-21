@@ -1360,7 +1360,7 @@ class Modeller:
                 else:
                     for valueinit, param in zip(valuesinit, params):
                         param.setvalue(valueinit, transformed=False)
-            print("Elapsed time: {:.1f}".format(time.time() - tinit))
+            print("Model '{}' linear fit elapsed time: {:.1f}".format(self.model.name, time.time() - tinit))
             if fluxratiosprint is None:
                 print("Linear fit failed to improve on initial parameters")
             else:
@@ -1440,7 +1440,8 @@ class Modeller:
                 raise RuntimeError("Unknown optimization library " + self.modellib)
 
             if printfinal:
-                print("Elapsed time: {:.1f}".format(timerun))
+                print(
+                    "Model '{}' nonlinear fit elapsed time: {:.1f}".format(self.model.name, timerun))
                 print("Final likelihood: {}".format(self.evaluate(paramsbest)))
                 print("Parameter names:        " + ",".join(["{:11s}".format(i) for i in paramnames]))
                 print("Transformed parameters: " + ",".join(["{:+1.4e}".format(i) for i in paramsbest]))

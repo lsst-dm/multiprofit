@@ -136,6 +136,7 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
             psfmodelfits[engine][modelname] = {}
         else:
             model = psfmodelfits[engine][modelname]['modeller'].model
+        model.name = '.'.join(['PSF', band, modelname])
         if redo or 'fit' not in psfmodelfits[engine][modelname]:
             psfmodelfits[engine][modelname]['fit'], psfmodelfits[engine][modelname]['modeller'] = \
                 mpffit.fitmodel(
@@ -634,7 +635,9 @@ def fitgalaxy(
                 if not all(np.isfinite(paramvals)):
                     raise RuntimeError('Not all params finite for model {}:'.format(modelname), paramvals)
 
-                print("Fitting model {:s} of type {:s} using engine {:s}".format(modelname, modeltype, engine))
+                print("Fitting model {:s} of type {:s} using engine {:s}".format(
+                    modelname, modeltype, engine))
+                model.name = modelname
                 sys.stdout.flush()
                 model.evaluate()
                 try:
@@ -977,7 +980,7 @@ def fitgalaxyexposures(
                 refit = redopsfs or psfname not in psfs[idx][engine]
                 if refit or plot:
                     if refit:
-                        print('Fitting PSF model {}'.format(psfname))
+                        print('Fitting PSF band={} model={}'.format(psfname, band))
                     psfs[idx] = fitpsf(
                         psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
                         psfmodelfits=psfs[idx], plot=plot, modelname=psfname, label=label, title=fitname,
