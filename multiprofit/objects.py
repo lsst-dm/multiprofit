@@ -329,7 +329,7 @@ class Model:
         # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
         x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
         axes[4].plot(x, spstats.norm.pdf(x))
-        chisqred = np.sum(chi**2)/len(chi)
+        chisqred = np.sum(chi*chi)/len(chi)
         Model._labelfigureaxes(axes, chisqred, modelname=modelname, modeldesc=modeldesc,
                                labelimg=bandstring, isfirstmodel=isfirstmodel, islastmodel=islastmodel,
                                plotascolumn=plotascolumn,

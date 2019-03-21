@@ -62,8 +62,8 @@ def getchisqred(chis):
     chisum = 0
     chicount = 0
     for chivals in chis:
-        chisum += np.sum(chivals**2)
-        chicount += len(chivals)
+        chisum += np.sum(chivals*chivals)
+        chicount += chivals.size
     return chisum/chicount
 
 
