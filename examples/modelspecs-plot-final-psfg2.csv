@@ -7,5 +7,9 @@ mg8cmodelpx,mgsersic8:2,"cenx;ceny;nser;re;ang;axrat","nser=4,1","mg8dev2px;mg8e
 mg8devexppx,mgsersic8:2,nser,"nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
 mg8serserbpx,mgsersic8:2,,"nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
 serbpx,sersic:1,,,mg8serbpx,gaussian:2,T
-mg4serserbpx,mgsersic4:2,,,mg8serserbpx,gaussian:2,T
-mg4x2px,gaussian:8,nser,ang=inherit;axrat=inherit,mg4serserbpx,gaussian:2,T
+serb,sersic:1,,,mg8serbpx,gaussian:2,F
+mg4wserpx,gaussian:4+rscale:1,cenx;ceny;nser;re;rscale;axrat;ang,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
+mg4wrsserpx,gaussian:4+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
+mg4aserbpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4wrsserpx,gaussian:2,T
+mg4x2rpx,gaussian:8+rscale:2,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serserbpx,gaussian:2,T
+mg4x2bpx,gaussian:8+rscale:2,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4x2rpx,gaussian:2,T

@@ -151,6 +151,8 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
             name = "re"
     elif param == "axrat":
         transform = transformsref["logitaxrat"]
+    elif param == "rscale":
+        transform = transformsref['log10']
 
     if value is None:
         # TODO: Improve this (at least check limits)
@@ -255,7 +257,9 @@ def getmodel(
     profiles = {}
     ncomps = 0
     for modeldesc in modelstrs:
-        profile, ncompsprof = modeldesc.split(":")
+        # TODO: What should be done about modifiers?
+        profilemodifiers = modeldesc.split("+")
+        profile, ncompsprof = profilemodifiers[0].split(":")
         ncompsprof = np.int(ncompsprof)
         profiles[profile] = ncompsprof
         ncomps += ncompsprof
@@ -414,7 +418,7 @@ def setexposure(model, band, index=0, image=None, sigmainverse=None, psf=None, m
 
 
 # TODO: Figure out multi-band operation here
-def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
+def getmultigaussians(profiles, paramsinherit=None, paramsmodify=None, ncomponents=None, source=None):
     """
     Get Gaussian component objects from profiles that are multi-Gaussian approximations (to e.g. Sersic)
 
@@ -455,7 +459,11 @@ def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
     # These are the Gaussian components
     componentsgauss = getcomponents('gaussian', fluxes, values=values, isfluxesfracs=False)
     ncomponentsgauss = len(componentsgauss)
-    if paramsinherit is not None and ncomponentsgauss > 1:
+    if (paramsinherit is not None or paramsmodify is not None) and ncomponentsgauss > 1:
+        if paramsinherit is None:
+            paramsinherit = []
+        if paramsmodify is None:
+            paramsmodify = []
         if ncomponents is None:
             ncomponents = [ncomponentsgauss]
         ncomponents = np.array(ncomponents)
@@ -466,18 +474,46 @@ def getmultigaussians(profiles, paramsinherit=None, ncomponents=None):
 
         # Inheritee has every right to be a word
         componentinit = 0
-        for ncompstoadd in ncomponents:
+        paramsmodifycomps = {}
+        if paramsmodify is not None:
+            modifiers = source.modelphotometric.modifiers
+            ncomponentsold = len(ncomponents)
+            for nameofparam in paramsmodify:
+                modifiersoftype = [modifier for modifier in modifiers if modifier.name == nameofparam]
+                nmodifiers = len(modifiersoftype)
+                if nmodifiers == 0:
+                    if nameofparam == 'rscale':
+                        paramsmodifycomps[nameofparam] = [
+                            getparamdefault(nameofparam, value=1, isvaluetransformed=False, fixed=False)
+                            for _ in range(ncomponentsold)
+                        ]
+                        for param in paramsmodifycomps[nameofparam]:
+                            source.modelphotometric.modifiers.append(param)
+                elif nmodifiers == ncomponentsold:
+                    paramsmodifycomps[nameofparam] = modifiersoftype
+                    if nameofparam == 'rscale':
+                        for modifier in modifiersoftype:
+                            modifier.setvalue(1, transformed=False)
+                else:
+                    raise RuntimeError('Expected to find {} modifiers of type {} but found {}'.format(
+                        ncomponentsold, nameofparam, nmodifiers
+                    ))
+        for idxcomp, ncompstoadd in enumerate(ncomponents):
             paramsinheritees = {
                 param.name: param for param in componentsgauss[componentinit].getparameters()
                 if param.name in paramsinherit}
             for param in paramsinheritees.values():
                 param.inheritors = []
-            for comp in componentsgauss[componentinit+1:componentinit+ncompstoadd]:
+            paramsmodifycomp = [paramoftype[idxcomp] for paramoftype in paramsmodifycomps.values()]
+            for compoffset in range(ncompstoadd):
+                comp = componentsgauss[componentinit+compoffset]
                 for param in comp.getparameters():
-                    if param.name in paramsinherit:
+                    if compoffset > 0 and param.name in paramsinherit:
                         # This param will map onto the first component's param
                         param.fixed = True
                         paramsinheritees[param.name].inheritors.append(param)
+                    if param.name == 're':
+                        param.modifiers += paramsmodifycomp
             componentinit += ncompstoadd
 
     return componentsgauss

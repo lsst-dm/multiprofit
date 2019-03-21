@@ -263,7 +263,8 @@ def initmodelfrommodelfits(model, modelfits, fluxfracs=None):
                 paramset.setvalue(value, transformed=False)
 
 
-def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, bands=None, paramsinherit=None):
+def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, bands=None,
+              paramsinherit=None, paramsmodify=None):
     """
     Initialize a multiprofit.objects.Model of a given modeltype with a method inittype.
 
@@ -322,28 +323,36 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
     if inittype and 'fits' in fitsengine[inittype]:
         paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
         # TODO: Find a more elegant method to do this
-        inittypesplit = fitsengine[inittype]['modeltype'].split(':')
+        inittypemod = fitsengine[inittype]['modeltype'].split('+')
+        inittypesplit = inittypemod[0].split(':')
+        modeltypebase = modeltype.split('+')[0]
         ismgtogauss = (
             len(inittypesplit) == 2
-            and modeltype in ['gaussian:' + str(order) for order in
-                              MultiGaussianApproximationProfile.weights['sersic']]
+            and modeltypebase in ['gaussian:' + str(order) for order in
+                                  MultiGaussianApproximationProfile.weights['sersic']]
             and inittypesplit[0] in [
                 'mgsersic' + str(order) for order in MultiGaussianApproximationProfile.weights['sersic']]
             and inittypesplit[1].isdecimal()
         )
         if ismgtogauss:
             ncomponents = np.repeat(np.int(inittypesplit[0].split('mgsersic')[1]), inittypesplit[1])
+            nsources = len(model.sources)
             modelnew = model
             model = models[fitsengine[inittype]['modeltype']]
+            componentsnew = []
         print('Initializing from best model=' + inittype +
               ' (MGA to {} GMM)'.format(ncomponents) if ismgtogauss else '')
+        # For mgtogauss, first we turn the mgsersic model into a true GMM
+        # Then we take the old model and get the parameters that don't depend on components (mostly source
+        # centers) and set those as appropriate
         for i in range(1+ismgtogauss):
+            paramsall = model.getparameters(fixed=True, modifiers=not ismgtogauss)
             if ismgtogauss:
                 print('Paramvalsinit:', paramvalsinit)
-            paramsall = model.getparameters(fixed=True)
+                print('Paramnames: ', [x.name for x in paramsall])
             if len(paramvalsinit) != len(paramsall):
-                raise RuntimeError('len(paramvalsinit)={} != len(params)={}'.format(
-                    len(paramvalsinit), len(paramsall)))
+                raise RuntimeError('len(paramvalsinit)={} != len(params)={}, paramsall={}'.format(
+                    len(paramvalsinit), len(paramsall), [x.name for x in paramsall]))
             for param, value in zip(paramsall, paramvalsinit):
                 # The logic here is that we can't start off an MG Sersic at n=0.5 since it's just one Gauss.
                 # It's possible that a Gaussian mixture is better than an n<0.5 fit, so start it close to 0.55
@@ -357,18 +366,21 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if ismgtogauss and i == 0:
-                componentsnew = mpffit.getmultigaussians(
-                    model.getprofiles(bands=bands, engine='libprofit'), paramsinherit=paramsinherit,
-                    ncomponents=ncomponents)
-                componentsold = model.sources[0].modelphotometric.components
-                for modeli in [model, modelnew]:
-                    modeli.sources[0].modelphotometric.components = []
-                paramvalsinit = [param.getvalue(transformed=False)
-                                 for param in model.getparameters(fixed=True)]
-                model.sources[0].modelphotometric.components = componentsold
+                for idxsrc in range(nsources):
+                    componentsnew.append(mpffit.getmultigaussians(
+                        model.sources[idxsrc].getprofiles(bands=bands, engine='libprofit'),
+                        paramsinherit=paramsinherit, paramsmodify=paramsmodify, ncomponents=ncomponents,
+                        source=modelnew.sources[idxsrc]))
+                    componentsold = model.sources[idxsrc].modelphotometric.components
+                    for modeli in [model, modelnew]:
+                        modeli.sources[idxsrc].modelphotometric.components = []
+                    paramvalsinit = [param.getvalue(transformed=False)
+                                     for param in model.getparameters(fixed=True)]
+                    model.sources[idxsrc].modelphotometric.components = componentsold
                 model = modelnew
         if ismgtogauss:
-            model.sources[0].modelphotometric.components = componentsnew
+            for idxsrc in range(len(componentsnew)):
+                model.sources[idxsrc].modelphotometric.components = componentsnew[idxsrc]
 
     return model
 
@@ -526,7 +538,8 @@ def fitgalaxy(
                     plt.show(block=False)
             else:
                 # Parse default overrides from model spec
-                paramflags = {'inherit': []}
+                paramflagkeys = ['inherit', 'modify']
+                paramflags = {key: [] for key in paramflagkeys}
                 for flag in ['fixed', 'init']:
                     paramflags[flag] = {}
                     values = modelinfo[flag + 'params']
@@ -537,8 +550,8 @@ def fitgalaxy(
                             elif flag == "init":
                                 value = flagvalue.split("=")
                                 # TODO: improve input handling here or just revamp the whole system later
-                                if value[1] == 'inherit':
-                                    paramflags['inherit'].append(value[0])
+                                if value[1] in paramflagkeys:
+                                    paramflags[value[1]].append(value[0])
                                 else:
                                     valuesplit = [np.float(x) for x in value[1].split(',')]
                                     paramflags[flag][value[0]] = valuesplit
@@ -551,10 +564,12 @@ def fitgalaxy(
                             param.setvalue(initfrommoments[param.name], transformed=False)
                 else:
                     model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], fitsengine,
-                                      bands=bands, paramsinherit=paramflags['inherit'])
+                                      bands=bands, paramsinherit=paramflags['inherit'],
+                                      paramsmodify=paramflags['modify'])
 
                 # Reset parameter fixed status
-                for param, fixed in zip(model.getparameters(fixed=True), paramsfixeddefault[modeltype]):
+                for param, fixed in zip(model.getparameters(fixed=True, modifiers=False),
+                                        paramsfixeddefault[modeltype]):
                     if param.name not in paramflags['inherit']:
                         param.fixed = fixed
                 # For printing parameter values when plotting
@@ -568,6 +583,9 @@ def fitgalaxy(
                         'flux' + ('ratio' if isfluxrat else '') + '_' + param.band)
                     if paramname in paramflags["fixed"]:
                         param.fixed = True
+                    # TODO: Figure out a better way to reset modifiers to be free
+                    elif paramname == 'rscale':
+                        param.fixed = False
                     if paramname in paramflags["init"]:
                         if paramname not in timesmatched:
                             timesmatched[paramname] = 0

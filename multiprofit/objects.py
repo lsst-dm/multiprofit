@@ -1125,10 +1125,10 @@ class Model:
             profiles += src.getprofiles(**kwargs)
         return profiles
 
-    def getparameters(self, free=True, fixed=True, flatten=True):
+    def getparameters(self, free=True, fixed=True, flatten=True, modifiers=True):
         params = []
         for src in self.sources:
-            paramssrc = src.getparameters(free=free, fixed=fixed, flatten=flatten)
+            paramssrc = src.getparameters(free=free, fixed=fixed, flatten=flatten, modifiers=modifiers)
             if flatten:
                 params += paramssrc
             else:
@@ -1481,11 +1481,12 @@ class Source:
         if engine not in Model.ENGINES:
             raise ValueError("Unknown {:s} rendering engine {:s}".format(type(cls), engine))
 
-    def getparameters(self, free=None, fixed=None, flatten=True, time=None):
+    def getparameters(self, free=None, fixed=None, flatten=True, modifiers=True, time=None):
         astrometry = self.modelastrometric.getposition(time)
         paramobjects = [
             self.modelastrometric.getparameters(free, fixed, time),
-            self.modelphotometric.getparameters(free, fixed, flatten=flatten, astrometry=astrometry)
+            self.modelphotometric.getparameters(free, fixed, flatten=flatten, modifiers=modifiers,
+                astrometry=astrometry)
         ]
         params = []
         for paramobject in paramobjects:
@@ -1537,7 +1538,7 @@ class PhotometricModel:
                     if flux.band in self.fluxes:
                         self.fluxes[flux.band].append(flux)
                     else:
-                        self.fluxes[flux.band] = np.array([value])
+                        self.fluxes[flux.band] = np.array([flux])
                 else:
                     flux = FluxParameter(
                         band=flux.band, value=0, name=flux.name, isfluxratio=False,
@@ -1575,7 +1576,7 @@ class PhotometricModel:
         else:
             self.fluxes = {}
 
-    def getparameters(self, free=True, fixed=True, flatten=True, astrometry=None):
+    def getparameters(self, free=True, fixed=True, flatten=True, modifiers=True, astrometry=None):
         paramsflux = [flux for flux in self.fluxes.values() if
                       (flux.fixed and fixed) or (not flux.fixed and free)]
         params = paramsflux if flatten else [paramsflux]
@@ -1585,12 +1586,13 @@ class PhotometricModel:
                 params += paramscomp
             else:
                 params.append(paramscomp)
-        modifiers = ([param for param in self.modifiers if
-                      (param.fixed and fixed) or (not param.fixed and free)])
-        if flatten:
-            params += modifiers
-        else:
-            params.append(modifiers)
+        if modifiers:
+            modifiers = ([param for param in self.modifiers if
+                          (param.fixed and fixed) or (not param.fixed and free)])
+            if flatten:
+                params += modifiers
+            else:
+                params.append(modifiers)
         return params
 
     # TODO: Determine how the astrometric model is supposed to interact here
