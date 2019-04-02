@@ -90,6 +90,29 @@ def magtoflux(ndarray):
     return 10**(-0.4*ndarray)
 
 
+# Fairly standard moment of inertia estimate of ellipse orientation and size
+# TODO: compare with galsim's convenient calculateHLR/FWHM
+# TODO: replace with the stack's method (in meas_?)
+def estimateellipse(img, denoise=True):
+    imgmeas = absconservetotal(np.copy(img)) if denoise else img
+    y, x = np.nonzero(imgmeas)
+    flux = imgmeas[y, x]
+    y = y - imgmeas.shape[0]/2.
+    x = x - imgmeas.shape[1]/2.
+    inertia = np.zeros((2, 2))
+    inertia[0, 0] = np.sum(flux*x**2)
+    inertia[0, 1] = np.sum(flux*x*y)
+    inertia[1, 0] = inertia[0, 1]
+    inertia[1, 1] = np.sum(flux*y**2)
+    evals, evecs = np.linalg.eig(inertia)
+    idxevalmax = np.argmax(evals)
+    axrat = evals[1-idxevalmax]/evals[idxevalmax]
+    ang = np.degrees(np.arctan2(evecs[1, idxevalmax], evecs[0, idxevalmax])) - 90
+    if ang < 0:
+        ang += 360
+    return axrat, ang, np.sqrt(evals[idxevalmax]/np.sum(flux))
+
+
 def normalize(ndarray):
     ndarray /= np.sum(ndarray)
     return ndarray

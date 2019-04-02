@@ -7,7 +7,7 @@ mg8serbpx,mgsersic8:1,,,best,gaussian:2,T
 mg8serbedpx,mgsersic8:1,,,best:mg8exppx;mg8dev2px,gaussian:2,T
 mg8cmodelpx,mgsersic8:2,"cenx;ceny;nser;re;ang;axrat","nser=4,1","mg8dev2px;mg8exppx",gaussian:2,T
 mg8devexppx,mgsersic8:2,nser,"nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
-mg8devexptpx,mgsersic8:2,"cenx;ceny;flux_F814W;nser","nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
+mg8devexptpx,mgsersic8:2,"cenx;ceny;flux;nser","nser=4,1",mg8dev2px;mg8exppx,gaussian:2,T
 mg8devexp2px,mgsersic8:2,nser,"nser=4,1",mg8devexptpx,gaussian:2,T
 mg8devexpcpx,mgsersic8:2,nser,"nser=4,1",mg8cmodelpx,gaussian:2,T
 mg8serserbpx,mgsersic8:2,,,best,gaussian:2,T
@@ -18,7 +18,7 @@ mg4serbpx,mgsersic4:1,,,best,gaussian:2,T
 mg4serbedpx,mgsersic4:1,,,best:mg4exppx;mg4dev2px,gaussian:2,T
 mg4cmodelpx,mgsersic4:2,"cenx;ceny;nser;re;ang;axrat","nser=4,1","mg4dev2px;mg4exppx",gaussian:2,T
 mg4devexppx,mgsersic4:2,nser,"nser=4,1",mg4dev2px;mg4exppx,gaussian:2,T
-mg4devexptpx,mgsersic4:2,"cenx;ceny;flux_F814W;nser","nser=4,1",mg4dev2px;mg4exppx,gaussian:2,T
+mg4devexptpx,mgsersic4:2,"cenx;ceny;flux;nser","nser=4,1",mg4dev2px;mg4exppx,gaussian:2,T
 mg4devexp2px,mgsersic4:2,nser,"nser=4,1",mg4devexptpx,gaussian:2,T
 mg4devexpcpx,mgsersic4:2,nser,"nser=4,1",mg4cmodelpx,gaussian:2,T
 mg4serserbpx,mgsersic4:2,,,best,gaussian:2,T
@@ -37,11 +37,11 @@ mg4wrdevpx,gaussian:4+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,m
 mg4adevpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify;rscale=1,mg4dev2px,gaussian:2,T
 mg4adevbpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4wrdevpx,gaussian:2,T
 mg4wserpx,gaussian:4+rscale:1,cenx;ceny;nser;re;rscale;axrat;ang,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
-mg4wrsserpx,gaussian:4+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
+mg4wrserpx,gaussian:4+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
 mg4aserpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify;rscale=1,mg4serbpx,gaussian:2,T
 mg4aserbpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4wrsserpx,gaussian:2,T
 mg8wserpx,gaussian:8+rscale:1,cenx;ceny;nser;re;rscale;axrat;ang,ang=inherit;axrat=inherit;rscale=modify,mg8serbpx,gaussian:2,T
-mg8wrsserpx,gaussian:8+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg8serbpx,gaussian:2,T
+mg8wrserpx,gaussian:8+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg8serbpx,gaussian:2,T
 mg8aserpx,gaussian:8+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify;rscale=1,mg8serbpx,gaussian:2,T
 mg8aserbpx,gaussian:8+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg8wrsserpx,gaussian:2,T
 mg4x2rpx,gaussian:8+rscale:2,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serserbpx,gaussian:2,T

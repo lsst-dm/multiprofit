@@ -1287,10 +1287,11 @@ class Modeller:
         # TODO: The mechanism here is TBD
         dolinearonly = dolinear and dolinearonly
 
+        timestart = time.time()
         likelihood = self.evaluate(paramsinit, dolinearfitprep=dolinear, comparelikelihoods=True)
-        print("Param names:\n", paramnames)
-        print("Initial parameters:\n", paramsinit)
-        print("Evaluating initial parameters:\n", likelihood)
+        print("Param names   :".format(paramnames))
+        print("Initial params: {}".format(paramsinit))
+        print("Initial likelihood in t={:.3e}: {}".format(time.time() - timestart, likelihood))
         sys.stdout.flush()
 
         if dolinear:
@@ -1339,34 +1340,45 @@ class Modeller:
                     i += 1
             likelihood = likelihood[0]
             fluxratiosprint = None
-            for rcond in [None, 1e-2, 0.1, 1, np.Inf]:
-                valuesinit = [param.getvalue(transformed=False) for param in params]
-                if rcond == np.Inf:
-                    fluxratios = spopt.lsq_linear(x, y, bounds=(0, np.Inf)).x
-                else:
-                    fluxratios = np.linalg.lstsq(x, y, rcond=rcond)[0]
-                for fluxratio, param, valueinit in zip(fluxratios, params, valuesinit):
-                    ratio = np.max([1e-4, fluxratio])
-                    # TODO: See if there is a better alternative to setting values outside of the transform range
-                    # Perhaps leave an option to change the transform to log10?
-                    for frac in np.linspace(1, 0, 10+1):
-                        param.setvalue(valueinit*(frac*ratio + 1-frac), transformed=False)
-                        if np.isfinite(param.getvalue(transformed=False)):
-                            break
-                likelihoodnew = self.evaluate(returnlponly=True, likelihoodonly=True)
-                if likelihoodnew > likelihood:
-                    fluxratiosprint = fluxratios
-                    likelihood = likelihoodnew
-                else:
-                    for valueinit, param in zip(valuesinit, params):
-                        param.setvalue(valueinit, transformed=False)
+            fitmethods = {
+                'scipy.optimize.nnls': [None],
+                'scipy.optimize.lsq_linear': ['bvls'],
+                'numpy.linalg.lstsq': [None, 1e-2, 0.1, 1],
+            }
+            for method, fitparams in fitmethods.items():
+                for fitparam in fitparams:
+                    valuesinit = [param.getvalue(transformed=False) for param in params]
+                    if method == 'scipy.optimize.nnls':
+                        fluxratios = spopt.nnls(x, y)[0]
+                    elif method == 'scipy.optimize.lsq_linear':
+                        fluxratios = spopt.lsq_linear(x, y, bounds=(0, np.Inf), method=fitparam).x
+                    elif method == 'numpy.linalg.lstsq':
+                        fluxratios = np.linalg.lstsq(x, y, rcond=fitparam)[0]
+                    else:
+                        raise ValueError('Unknown linear fit method ' + method)
+                    for fluxratio, param, valueinit in zip(fluxratios, params, valuesinit):
+                        ratio = np.max([1e-3, fluxratio])
+                        # TODO: See if there is a better alternative to setting values outside of the transform range
+                        # Perhaps leave an option to change the transform to log10?
+                        for frac in np.linspace(1, 0, 10+1):
+                            param.setvalue(valueinit*(frac*ratio + 1-frac), transformed=False)
+                            if np.isfinite(param.getvalue(transformed=False)):
+                                break
+                    likelihoodnew = self.evaluate(returnlponly=True, likelihoodonly=True)
+                    if likelihoodnew > likelihood:
+                        fluxratiosprint = fluxratios
+                        methodbest = method
+                        likelihood = likelihoodnew
+                    else:
+                        for valueinit, param in zip(valuesinit, params):
+                            param.setvalue(valueinit, transformed=False)
             print("Model '{}' linear fit elapsed time: {:.1f}".format(self.model.name, time.time() - tinit))
             if fluxratiosprint is None:
                 print("Linear fit failed to improve on initial parameters")
             else:
                 paramsinit = np.array([param.getvalue(transformed=True) for param in paramsfree])
                 print("Final likelihood: {}".format(self.evaluate(returnlponly=True, likelihoodonly=True)))
-                print("New initial parameters:\n", paramsinit)
+                print("New initial parameters from method {}:\n".format(methodbest), paramsinit)
                 print("Linear flux ratios: {}".format(fluxratiosprint))
             if not islinear:
                 for param in paramsfree:
