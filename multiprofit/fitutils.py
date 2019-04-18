@@ -783,7 +783,10 @@ def fitgalaxyexposures(
             npsfs += psfmodeltype != "empirical"
         npsfs *= len(bands)
         if npsfs > 1:
-            figure, axes = plt.subplots(nrows=min([5, npsfs]), ncols=max([5, npsfs]))
+            ncols = 5
+            figure, axes = plt.subplots(nrows=min([ncols, npsfs]), ncols=max([ncols, npsfs]))
+            if npsfs > ncols:
+                axes = np.transpose(axes)
             psfrow = 0
     for idx, (exposure, psf) in enumerate(exposurespsfs):
         band = exposure.band
@@ -996,10 +999,10 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
         TODO: review if/when this is necessary.
     :param modelinfocomps: Model specifications to map onto individual components of the model,
         e.g. to initialize a two-component model from two single-component fits.
-    :param bands:
-    :param fitsengine:
-    :param paramsinherit:
-    :param paramsmodify: 
+    :param fitsengine: Dict; key=engine: value=dict with fit results.
+    :param bands: String[]; a list of bands to pass to getprofiles when calling getmultigaussians.
+    :param paramsinherit: Inherited params object to pass to getmultigaussians.
+    :param paramsmodify: Modified params object to pass to getmultigaussians.
     :return: A multiprofit.objects.Model initialized as requested; it may be the original model or a new one.
     """
     # TODO: Refactor into function
@@ -1040,9 +1043,11 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
             inittype = inittype[0]
             if inittype not in fitsengine:
                 # TODO: Fail or fall back here?
-                raise RuntimeError("Model {} can't find reference {} "
+                raise RuntimeError("Model={} can't find reference={} "
                                    "to initialize from".format(modeltype, inittype))
-    if inittype and 'fits' in fitsengine[inittype]:
+    hasinitfit = inittype and 'fits' in fitsengine[inittype]
+    print('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, hasinitfit))
+    if hasinitfit:
         paramvalsinit = fitsengine[inittype]["fits"][-1]["paramsbestall"]
         # TODO: Find a more elegant method to do this
         inittypemod = fitsengine[inittype]['modeltype'].split('+')
@@ -1063,7 +1068,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
             model = models[fitsengine[inittype]['modeltype']]
             componentsnew = []
         print('Initializing from best model=' + inittype +
-              ' (MGA to {} GMM)'.format(ncomponents) if ismgtogauss else '')
+              (' (MGA to {} GMM)'.format(ncomponents) if ismgtogauss else ''))
         # For mgtogauss, first we turn the mgsersic model into a true GMM
         # Then we take the old model and get the parameters that don't depend on components (mostly source
         # centers) and set those as appropriate
@@ -1233,7 +1238,7 @@ def getmultigaussians(profiles, paramsinherit=None, paramsmodify=None, ncomponen
 
 
 # Example usage:
-# test = mpfutil.testgaussian(nbenchmark=1000)
+# test = testgaussian(nbenchmark=1000)
 # for x in test:
 #   print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
 def testgaussian(xdim=25, ydim=35, reffs=[2.0, 5.0], angs=np.linspace(0, 90, 7),
