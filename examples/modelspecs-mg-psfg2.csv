@@ -39,11 +39,11 @@ mg4adevbpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modi
 mg4wserpx,gaussian:4+rscale:1,cenx;ceny;nser;re;rscale;axrat;ang,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
 mg4wrserpx,gaussian:4+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serbpx,gaussian:2,T
 mg4aserpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify;rscale=1,mg4serbpx,gaussian:2,T
-mg4aserbpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4wrsserpx,gaussian:2,T
+mg4aserbpx,gaussian:4+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4wrserpx,gaussian:2,T
 mg8wserpx,gaussian:8+rscale:1,cenx;ceny;nser;re;rscale;axrat;ang,ang=inherit;axrat=inherit;rscale=modify,mg8serbpx,gaussian:2,T
 mg8wrserpx,gaussian:8+rscale:1,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg8serbpx,gaussian:2,T
 mg8aserpx,gaussian:8+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify;rscale=1,mg8serbpx,gaussian:2,T
-mg8aserbpx,gaussian:8+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg8wrsserpx,gaussian:2,T
+mg8aserbpx,gaussian:8+rscale:1,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg8wrserpx,gaussian:2,T
 mg4x2rpx,gaussian:8+rscale:2,nser;re,ang=inherit;axrat=inherit;rscale=modify,mg4serserbpx,gaussian:2,T
 mg4x2px,gaussian:8+rscale:2,nser;rscale,ang=inherit;axrat=inherit;rscale=modify;rscale=1,mg4serserbpx,gaussian:2,T
 mg4x2bpx,gaussian:8+rscale:2,nser;rscale,ang=inherit;axrat=inherit;rscale=modify,mg4x2rpx,gaussian:2,T
