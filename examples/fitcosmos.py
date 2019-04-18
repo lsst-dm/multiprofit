@@ -299,8 +299,30 @@ def fitcosmosgalaxy(
     results = kwargs['results'] if 'results' in kwargs and kwargs['results'] is not None else {}
     for src in srcs:
         metadatas = None
+        tofit = True
         if src == 'hst':
             exposurespsfs = exposurespsfshst
+            flux = rgcat.stamp_flux[idcosmosgs]
+            tofit = flux > 0
+            if tofit:
+                flux = np.log10(flux)
+                size = np.log10(np.sqrt(imghst.shape[0]*imghst.shape[1]))
+                # Shrink the cutout if it's way too big for its flux
+                # This is based on outliers in the flux-size relation in the COSMOS 25.2 rgcat
+                if (size > 2.33) & (size > (1.75 + 0.5*flux)):
+                    print('Exposure with log flux={} & log size={} ({}x{}) too big; cropping to 30%'.format(
+                        flux, size, imghst.shape[0], imghst.shape[1]))
+                    for exposurepsf in exposurespsfs:
+                        shape = exposurepsf[0].image.shape
+                        exposurepsf[0].image = exposurepsf[0].image[
+                                                   int(np.floor(shape[0]*0.35)):int(np.floor(shape[0]*0.65)),
+                                                   int(np.floor(shape[1]*0.35)):int(np.floor(shape[1]*0.65))
+                                               ]
+                    imghst = exposurespsfshst[0][0].image
+            if not tofit:
+                results[src]['error'] = 'Skipping {} fit for {} with unreasonable flux={} size={}'.format(
+                    src, idcosmosgs, flux, size
+                )
         elif src == 'hsc' or src == 'hst2hsc':
             argsexposures = {
                 'cutouts': cutouts,
@@ -324,22 +346,23 @@ def fitcosmosgalaxy(
                 raise RuntimeError('Unknown HSC galaxy data source {}'.format(src))
         else:
             raise RuntimeError('Unknown galaxy data source {}'.format(src))
-        bands = [rgcat.band[idcosmosgs]] if src == "hst" else hscbands
-        fitname = 'COSMOS #{}'.format(idcosmosgs)
-        kwargs['results'] = results[src] if src in results else None
-        redo = {}
-        for suffix in ['', 'psfs']:
-            key = 'redo' + suffix
-            if key in kwargs:
-                redo[suffix] = kwargs[key]
-                del kwargs[key]
-        results[src] = mpffit.fitgalaxyexposures(
-            exposurespsfs, bands, redo=redo[''], redopsfs=redo['psfs'], fitname=fitname, **kwargs)
-        if metadatas is not None:
-            if 'metadata' not in results[src]:
-                results[src]['metadata'] = metadatas
-            else:
-                results[src]['metadata'].update(metadatas)
+        if tofit:
+            bands = [rgcat.band[idcosmosgs]] if src == "hst" else hscbands
+            fitname = 'COSMOS #{}'.format(idcosmosgs)
+            kwargs['results'] = results[src] if src in results else None
+            redo = {}
+            for suffix in ['', 'psfs']:
+                key = 'redo' + suffix
+                if key in kwargs:
+                    redo[suffix] = kwargs[key]
+                    del kwargs[key]
+            results[src] = mpffit.fitgalaxyexposures(
+                exposurespsfs, bands, redo=redo[''], redopsfs=redo['psfs'], fitname=fitname, **kwargs)
+            if metadatas is not None:
+                if 'metadata' not in results[src]:
+                    results[src]['metadata'] = metadatas
+                else:
+                    results[src]['metadata'].update(metadatas)
     return results
 
 
