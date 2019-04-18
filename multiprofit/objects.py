@@ -271,7 +271,7 @@ class Model:
     def _plotexposurescolor(cls, images, modelimages, chis, figaxes, bands=None, bandstring=None,
                             maximg=None, modelname='Model', modeldesc=None, modelnameappendparams=None,
                             isfirstmodel=True, islastmodel=True, plotascolumn=False, originimg='bottom',
-                            weightsimgs=None, asinhscale=40, imgdiffscale=0.05, asinhscalediff=10):
+                            weightsimgs=None, asinhscale=16, imgdiffscale=0.05):
         if bands is None:
             bands = []
         if bandstring is None:
@@ -292,22 +292,15 @@ class Model:
         if maximg is None:
             maximg = np.max([np.max(np.sum(imgs)) for imgs in imagesall])
         for i, imagesoftype in enumerate(imagesall):
-            # One could use astropy.visualization.make_lupton_rgb instead but I can't quite figure out
-            # how to get it to scale consistently
-            hsv = mplcol.rgb_to_hsv(np.stack(imagesoftype, axis=2))
-            # Rescale the values in the HSV image to the desired max.
-            hsv[:, :, 2] *= np.max(np.sum(imagesoftype, axis=2))/maximg/np.max(hsv[:, :, 2])
-            # Apply the asinh scaling
-            hsv[:, :, 2] = np.arcsinh(np.clip(hsv[:, :, 2], 0, 1)*asinhscale)/np.arcsinh(asinhscale)
-            axes[i].imshow(mplcol.hsv_to_rgb(hsv), origin=originimg)
+            rgb = apvis.make_lupton_rgb(imagesoftype[0], imagesoftype[1], imagesoftype[2],
+                                        stretch=maximg/asinhscale, Q=asinhscale)
+            axes[i].imshow(rgb, origin=originimg)
         (axes[0].set_title if plotascolumn else axes[0].set_ylabel)(bandstring)
-        # TODO: Verify if this is strictly correct - it should produce a diff. image with zero at 50% gray
+        # TODO: Verify if the image limits are working as intended
         imgsdiff = [data-model for data, model in zip(imagesall[0], imagesall[1])]
-        rgb = 0.5*(1 + np.clip(np.stack(imgsdiff, axis=2)/(maximg*imgdiffscale), -1, 1))
-        hsv = mplcol.rgb_to_hsv(rgb)
-        hsv[:, :, 2] = 0.5 + np.arcsinh(2*(np.clip(hsv[:, :, 2], 0, 1) - 0.5)*asinhscalediff)/np.arcsinh(
-            asinhscalediff)/2
-        axes[2].imshow(mplcol.hsv_to_rgb(hsv), origin=originimg)
+        rgb = apvis.make_lupton_rgb(imgsdiff[0], imgsdiff[1], imgsdiff[2], minimum=-maximg*imgdiffscale,
+                                    stretch=imgdiffscale*maximg/asinhscale, Q=asinhscale)
+        axes[2].imshow(rgb, origin=originimg)
         # Check if the modelname is informative as it's redundant otherwise
         if modelname != "Model":
             (axes[1].set_title if plotascolumn else axes[1].set_ylabel)(modelname)
