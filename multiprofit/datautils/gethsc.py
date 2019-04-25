@@ -74,7 +74,7 @@ def gethsccutout(butler, skymap, bands, radec, tract=9813, sizeinpix=60,
         cutouts[band]['blended']['var'] = np.copy(coadd.getMaskedImage().getVariance().array[
                                             idshsc[3]: idshsc[2], idshsc[1]: idshsc[0]])
 
-        if deblend :
+        if deblend:
             measCat = dataRef.get("deepCoadd_meas")
             noiseReplacer = rebuildNoiseReplacer(coadd, measCat)
             noiseReplacer.insertSource(idmatch)
@@ -89,12 +89,15 @@ def gethsccutout(butler, skymap, bands, radec, tract=9813, sizeinpix=60,
             for imgtype in imgs:
                 cutouts[band][blend][imgtype] = np.float64(cutouts[band][blend][imgtype])
 
+        if bandmatch is not None:
+            cutouts[band]['blended']['id'] = idmatch
         cutouts[band]['blended']['coordpix'] = idshsc
         if keepwcs:
             cutouts[band]['blended']['WCS'] = coadd.getWcs()
             cutouts[band]['blended']['bbox'] = coadd.getBBox()
 
-    radecsnearby = (measCat["coord_ra"][rowsnearby], measCat["coord_dec"][rowsnearby])
+    radecsnearby = None if bandmatch is None else (measCat["coord_ra"][rowsnearby], measCat["coord_dec"][
+        rowsnearby])
     return cutouts, spherePoint, scalepixel, radecsnearby
 
 
