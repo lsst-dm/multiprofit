@@ -1298,39 +1298,47 @@ class Modeller:
             datasizes = []
             # TODO: This should be an input argument
             bands = np.sort(list(self.model.data.exposures.keys()))
-            nparams = 0
+            params = []
             for band in bands:
-                params = None
+                paramsband = None
                 for exposure in self.model.data.exposures[band]:
                     datasizes.append(np.sum(exposure.maskinverse)
                                      if exposure.maskinverse is not None else
                                      exposure.image.size)
                     paramsexposure = [x[1] for x in exposure.meta['modelimagesparamsfree']]
-                    if params is None:
-                        params = paramsexposure
-                    elif params != paramsexposure:
+                    if paramsband is None:
+                        paramsband = paramsexposure
+                    elif paramsband != paramsexposure:
                         raise RuntimeError('Got different linear fit params '
-                                           'in two exposures: {} vs {}'.format(params, paramsexposure))
-                nparams += len(params)
+                                           'in two exposures: {} vs {}'.format(paramsband, paramsexposure))
+                if paramsband is not None:
+                    params += paramsband
+            nparams = len(params)
             datasize = np.sum(datasizes)
             # Matrix of vectors for each variable component
             x = np.zeros([datasize, nparams])
             y = np.zeros(datasize)
             idxbegin = 0
-            i = 0
+            idxexp = 0
+            idxparam = 0
             for band in bands:
-                for exposure in self.model.data.exposures[band]:
-                    idxend = idxbegin+datasizes[i]
+                exposures = self.model.data.exposures[band]
+                for exposure in exposures:
+                    idxend = idxbegin+datasizes[idxexp]
                     maskinv = exposure.maskinverse
-                    for idxexp, (imgfree, _) in enumerate(exposure.meta['modelimagesparamsfree']):
-                        x[idxbegin:idxend, idxexp] = (imgfree if maskinv is None else imgfree[maskinv]).flat
+                    for idxfree, (imgfree, _) in enumerate(exposure.meta['modelimagesparamsfree']):
+                        x[idxbegin:idxend, idxparam + idxfree] = (
+                            imgfree if maskinv is None else imgfree[maskinv]).flat
                     img = exposure.image
                     imgfixed = exposure.meta['modelimagefixed']
-                    y[idxbegin:idxend] = (img if maskinv is None else img[maskinv]).flat \
-                        if imgfixed is None else \
-                        (img - imgfixed if maskinv is None else img[maskinv] - imgfixed[maskinv]).flat
+                    y[idxbegin:idxend] = (
+                        (img if maskinv is None else img[maskinv]) if imgfixed is None else
+                        (img - imgfixed if maskinv is None else img[maskinv] - imgfixed[maskinv])
+                    ).flat
                     idxbegin = idxend
-                    i += 1
+                    idxexp += 1
+                if exposures:
+                    idxparam += idxfree + 1
             likelihood = likelihood[0]
             fluxratiosprint = None
             fitmethods = {
