@@ -33,6 +33,7 @@ import multiprofit.utils as mpfutil
 import numpy as np
 from scipy import special, stats
 import sys
+import time
 import timeit
 import traceback
 
@@ -541,7 +542,8 @@ def fitgalaxy(
                 # This keeps things consistent with the nrows>1 case
                 if nrows == 1:
                     axes = np.array([axes])
-                plt.suptitle(title + " {} model".format(engine))
+                if title is not None:
+                    plt.suptitle(title + " {} model".format(engine))
                 figures[band] = figure
                 axeses[band] = axes
             if len(bands) == 1:
@@ -614,15 +616,16 @@ def fitgalaxy(
                                     paramflags[flag][value[0]] = valuesplit
                 # Initialize model from estimate of moments (size/ellipticity) or from another fit
                 inittype = modelinfo['inittype']
+                guesstype = None
                 if inittype == 'moments':
                     print('Initializing from moments')
                     for param in model.getparameters(fixed=False):
                         if param.name in initfrommoments:
                             param.setvalue(initfrommoments[param.name], transformed=False)
                 else:
-                    model = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx], fitsengine,
-                                      bands=bands, paramsinherit=paramflags['inherit'],
-                                      paramsmodify=paramflags['modify'])
+                    model, guesstype = initmodel(model, modeltype, inittype, models, modelspecs[0:modelidx],
+                                                 fitsengine, bands=bands, paramsinherit=paramflags['inherit'],
+                                                 paramsmodify=paramflags['modify'])
 
                 # Reset parameter fixed status
                 for param, fixed in zip(model.getparameters(fixed=True, modifiers=False),
@@ -695,7 +698,8 @@ def fitgalaxy(
                     modelname, modeltype, engine))
                 model.name = modelname
                 sys.stdout.flush()
-                model.evaluate()
+                if guesstype is not None:
+                    initmodelbyguessing(model, guesstype, bands, nguesses=11)
                 try:
                     fits = []
                     dosecond = len(model.sources[0].modelphotometric.components) > 1 or not usemodellibdefault
@@ -801,7 +805,7 @@ def fitgalaxyexposures(
                     band=band, engine=engine, image=psf.image.array)}
             else:
                 engineopts["drawmethod"] = "no_pixel" if ispsfpixelated else None
-                refit = redopsfs or psfname not in psfs[idx][engine]
+                refit = redopsfs or (psfname not in psfs[idx][engine])
                 if refit or plot:
                     if refit:
                         print('Fitting PSF band={} model={}'.format(band, psfname))
@@ -987,6 +991,77 @@ def initmodelfrommodelfits(model, modelfits, fluxfracs=None):
                 paramset.setvalue(value, transformed=False)
 
 
+coeffsinitguess = {
+
+    'gauss2exp': ([-7.6464e+02, 2.5384e+02, -3.2337e+01, 2.8144e+00, -4.0001e-02], (0.005, 0.12)),
+    'gauss2dev': ([-1.0557e+01, 1.6120e+01, -9.8877e+00, 4.0207e+00, -2.1059e-01], (0.05, 0.45)),
+    'exp2dev': ([2.0504e+01, -1.3940e+01, 9.2510e-01, 2.2551e+00, -6.9540e-02], (0.02, 0.38)),
+}
+
+
+def initmodelbyguessing(model, guesstype, bands, nguesses=5):
+    if nguesses > 0:
+        tinit = time.time()
+        dosersic = guesstype == 'gauss2ser'
+        guesstypeinit = guesstype
+        guesstypes = ['gauss2exp', 'gauss2dev'] if guesstype == 'gauss2ser' else [guesstype]
+        likeinit = None
+        valuesbest = None
+        for guesstype in guesstypes:
+            if guesstype in coeffsinitguess:
+                if likeinit is None:
+                    likeinit = model.evaluate()[0]
+                    likebest = likeinit
+                params = model.getparameters(fixed=False)
+                paramsinit = {name: [] for name in ['re', 'nser'] + ['flux_' + band for band in bands]}
+                for param in params:
+                    init = None
+                    issersic = dosersic and param.name == 'nser'
+                    if isinstance(param, mpfobj.FluxParameter):
+                        init = paramsinit['flux_' + param.band]
+                    elif param.name == 're' or issersic:
+                        init = paramsinit[param.name]
+                    if init is not None:
+                        init.append((param, param.getvalue(transformed=False)))
+                    if issersic:
+                        # TODO: This will change everything to exp/dev which is not really intended
+                        # TODO: Decide if this should work for multiple components
+                        param.setvalue(1. if guesstype == 'gauss2exp' else 4., transformed=False)
+                nparamsinit = len(paramsinit['re'])
+                # TODO: Ensure that fluxes and sizes come from the same component - this check is insufficient
+                for band in bands:
+                    if nparamsinit != len(paramsinit['flux_' + band]):
+                        raise RuntimeError('len(flux_{})={} != len(re)={}'.format(
+                            len(paramsinit['flux_' + band], nparamsinit)))
+                coeffs, xrange = coeffsinitguess[guesstype]
+                xvalues = np.linspace(xrange[0], xrange[1], nguesses)
+                yvalues = np.polyval(coeffs, xvalues)
+                # For every pair of fluxes & sizes, take a guess
+                for idxparam in range(nparamsinit):
+                    paramfluxes = [paramsinit['flux_' + band][idxparam] for band in bands]
+                    paramre = paramsinit['re'][idxparam]
+                    paramstoset = paramfluxes + [paramre]
+                    if dosersic:
+                        paramstoset += [paramsinit['nser'][idxparam]]
+                    for x, y in zip(xvalues, yvalues):
+                        for (param, value), ratiolog in \
+                                [(paramflux, x) for paramflux in paramfluxes] + [(paramre, y)]:
+                            param.setvalue(value*10**ratiolog, transformed=False)
+                        like = model.evaluate()[0]
+                        if like > likebest:
+                            likebest = like
+                            valuesbest = {p[0]: p[0].getvalue(transformed=True) for p in paramstoset}
+                if dosersic:
+                    for paramlist in paramsinit.values():
+                        for param, value in paramlist:
+                            param.setvalue(value, transformed=False)
+        if valuesbest:
+            for param, value in valuesbest.items():
+                param.setvalue(value, transformed=True)
+        print("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
+            model.name, guesstypeinit, time.time() - tinit, likeinit, likebest))
+
+
 def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, bands=None,
               paramsinherit=None, paramsmodify=None):
     """
@@ -1006,6 +1081,11 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
     :return: A multiprofit.objects.Model initialized as requested; it may be the original model or a new one.
     """
     # TODO: Refactor into function
+    guesstype = None
+    if inittype.startswith("guess"):
+        guesstype = inittype.split(':')
+        inittype = guesstype[1]
+        guesstype = guesstype[0].split("guess")[1]
     if inittype.startswith("best"):
         if inittype == "best":
             modelnamecomps = []
@@ -1108,8 +1188,7 @@ def initmodel(model, modeltype, inittype, models, modelinfocomps, fitsengine, ba
         if ismgtogauss:
             for idxsrc in range(len(componentsnew)):
                 model.sources[idxsrc].modelphotometric.components = componentsnew[idxsrc]
-
-    return model
+    return model, guesstype
 
 
 # Convenience function to set an exposure object with optional defaults for the sigma (variance) map
