@@ -424,7 +424,7 @@ def fitpsf(modeltype, imgpsf, engines, band, psfmodelfits=None, sigmainverse=Non
                 fitmodel(
                 model, modellib=modellib, modellibopts=modellibopts, printfinal=printfinal,
                 printsteps=printsteps, plot=plot, title=title, modelname=label,
-                figure=figaxes[0], axes=figaxes[1], figurerow=figurerow)
+                figure=figaxes[0], axes=figaxes[1], figurerow=figurerow, dolinear=False)
         elif plot:
             exposure = model.data.exposures[band][0]
             isempty = isinstance(exposure.image, ImageEmpty)
