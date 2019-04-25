@@ -1,2 +1,2 @@
 name,model,fixedparams,initparams,inittype,psfmodel,psfpixel
-gausspx,mgsersic8:1,nser,nser=0.5,moments,gaussian:3,T
+gausspx,mgsersic8:1,nser,nser=0.5,moments,gaussian:2,T
