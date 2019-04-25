@@ -23,7 +23,6 @@ from abc import ABCMeta, abstractmethod
 import astropy.visualization as apvis
 import copy
 import galsim as gs
-import matplotlib.colors as mplcol
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
@@ -36,7 +35,6 @@ import scipy.optimize as spopt
 import seaborn as sns
 import sys
 import time
-import warnings
 
 
 # TODO: Implement WCS
@@ -361,7 +359,7 @@ class Model:
 
     def evaluate(self, params=None, data=None, bands=None, engine=None, engineopts=None,
                  paramstransformed=True, getlikelihood=True, likelihoodlog=True, keeplikelihood=False,
-                 likelihoodonly=False, keepimages=False, keepmodels=False, plot=False,
+                 keepimages=False, keepmodels=False, plot=False,
                  plotmulti=False, figure=None, axes=None, figurerow=None, modelname="Model", modeldesc=None,
                  modelnameappendparams=None, drawimage=False, scale=1, clock=False, plotascolumn=False,
                  imgplotmaxs=None, imgplotmaxmulti=None, weightsband=None, dolinearfitprep=False,
@@ -382,7 +380,6 @@ class Model:
         :param getlikelihood: bool; return the model likelihood?
         :param likelihoodlog: bool; return the natural logarithm of the likelihood?
         :param keeplikelihood: bool; store each exposure's likelihood in its metadata?
-        :param likelihoodonly: bool; compute only the likelihood using faster C++ code? Overrides plot.
         :param keepimages: bool; store each exposure's model image in its metadata?
         :param keepmodels: bool; store each exposure's model specification in its metadata?
         :param plot: bool; plot the model and residuals for each exposure?
@@ -1177,7 +1174,7 @@ class Model:
 
 class ModellerPygmoUDP:
     def fitness(self, x):
-        return [-self.modeller.evaluate(x, returnlponly=True, timing=self.timing, likelihoodonly=True)]
+        return [-self.modeller.evaluate(x, returnlponly=True, timing=self.timing)]
 
     def get_bounds(self):
         return self.boundslower, self.boundsupper
@@ -1218,8 +1215,8 @@ class Modeller:
         store info that they don't track (mainly per-iteration info, including parameter values,
         running time, separate priors and likelihoods rather than just the objective, etc.).
     """
-    def evaluate(self, paramsfree=None, timing=False, returnlponly=False, likelihoodonly=False,
-                 returnlog=True, plot=False, dolinearfitprep=False, comparelikelihoods=False):
+    def evaluate(self, paramsfree=None, timing=False, returnlponly=False, returnlog=True, plot=False,
+                 dolinearfitprep=False, comparelikelihoods=False):
 
         if timing:
             tinit = time.time()
@@ -1228,8 +1225,7 @@ class Modeller:
         # TODO: Clarify that setting drawimage = True forces evaluation of likelihoods with both C++/Python
         #  (if possible)
         likelihood = self.model.getlikelihood(
-            paramsfree, plot=plot, likelihoodonly=likelihoodonly, dolinearfitprep=dolinearfitprep,
-            comparelikelihoods=comparelikelihoods)
+            paramsfree, plot=plot, dolinearfitprep=dolinearfitprep, comparelikelihoods=comparelikelihoods)
         # return LL, LP, etc.
         if returnlponly:
             rv = likelihood + prior
@@ -1366,7 +1362,7 @@ class Modeller:
                             param.setvalue(valueinit*(frac*ratio + 1-frac), transformed=False)
                             if np.isfinite(param.getvalue(transformed=False)):
                                 break
-                    likelihoodnew = self.evaluate(returnlponly=True, likelihoodonly=True)
+                    likelihoodnew = self.evaluate(returnlponly=True)
                     if likelihoodnew > likelihood:
                         fluxratiosprint = fluxratios
                         methodbest = method
@@ -1379,7 +1375,7 @@ class Modeller:
                 print("Linear fit failed to improve on initial parameters")
             else:
                 paramsinit = np.array([param.getvalue(transformed=True) for param in paramsfree])
-                print("Final likelihood: {}".format(self.evaluate(returnlponly=True, likelihoodonly=True)))
+                print("Final likelihood: {}".format(self.evaluate(returnlponly=True)))
                 print("New initial parameters from method {}:\n".format(methodbest), paramsinit)
                 print("Linear flux ratios: {}".format(fluxratiosprint))
             if not islinear:
@@ -1392,7 +1388,7 @@ class Modeller:
             algo = self.modellibopts["algo"]
             if self.modellib == "scipy":
                 def neg_like_model(paramsi, modeller):
-                    return -modeller.evaluate(paramsi, timing=timing, returnlponly=True, likelihoodonly=True)
+                    return -modeller.evaluate(paramsi, timing=timing, returnlponly=True)
 
                 tinit = time.time()
                 result = spopt.minimize(neg_like_model, paramsinit, method=algo, bounds=np.array(limits),
