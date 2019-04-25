@@ -1335,8 +1335,9 @@ class Modeller:
             fluxratiosprint = None
             fitmethods = {
                 'scipy.optimize.nnls': [None],
-                'scipy.optimize.lsq_linear': ['bvls'],
-                'numpy.linalg.lstsq': [None, 1e-2, 0.1, 1],
+                # TODO: Confirm that nnls really performs best
+                #'scipy.optimize.lsq_linear': ['bvls'],
+                #'numpy.linalg.lstsq': [None, 1e-2, 0.1, 1],
             }
             for method, fitparams in fitmethods.items():
                 for fitparam in fitparams:
@@ -1351,7 +1352,7 @@ class Modeller:
                         raise ValueError('Unknown linear fit method ' + method)
                     for fluxratio, param, valueinit in zip(fluxratios, params, valuesinit):
                         ratio = np.max([1e-3, fluxratio])
-                        # TODO: See if there is a better alternative to setting values outside of the transform range
+                        # TODO: See if there is a better alternative to setting values outside transform range
                         # Perhaps leave an option to change the transform to log10?
                         for frac in np.linspace(1, 0, 10+1):
                             param.setvalue(valueinit*(frac*ratio + 1-frac), transformed=False)
