@@ -808,7 +808,8 @@ def fitgalaxyexposures(
                 refit = redopsfs or (psfname not in psfs[idx][engine])
                 if refit or plot:
                     if refit:
-                        print('Fitting PSF band={} model={}'.format(band, psfname))
+                        print('Fitting PSF band={} model={} (not in {})'.format(
+                            band, psfname, psfs[idx][engine]))
                     psfs[idx] = fitpsf(
                         psfmodeltype, psf.image.array, {engine: engineopts}, band=band,
                         psfmodelfits=psfs[idx], plot=plot, modelname=psfname, label=label, title=fitname,
@@ -992,7 +993,6 @@ def initmodelfrommodelfits(model, modelfits, fluxfracs=None):
 
 
 coeffsinitguess = {
-
     'gauss2exp': ([-7.6464e+02, 2.5384e+02, -3.2337e+01, 2.8144e+00, -4.0001e-02], (0.005, 0.12)),
     'gauss2dev': ([-1.0557e+01, 1.6120e+01, -9.8877e+00, 4.0207e+00, -2.1059e-01], (0.05, 0.45)),
     'exp2dev': ([2.0504e+01, -1.3940e+01, 9.2510e-01, 2.2551e+00, -6.9540e-02], (0.02, 0.38)),
