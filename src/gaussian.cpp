@@ -25,6 +25,7 @@
 #include "gaussian.h"
 
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -34,6 +35,8 @@ typedef pybind11::detail::unchecked_reference<double, 2l> MatrixUnchecked;
 typedef pybind11::detail::unchecked_mutable_reference<double, 2l> MatrixUncheckedMutable;
 
 namespace multiprofit {
+
+const double inf = std::numeric_limits<double>::infinity();
 
 /*
   Note: This causes build errors on Solaris due to "ambiguous and overloaded" pow calls.
@@ -345,25 +348,26 @@ inline void check_is_gaussians(const Matrix & mat)
     if(mat.shape(1) != 6)
     {
         throw std::invalid_argument("Passed Gaussian parameter matrix with shape=[" +
-            std::to_string(mat.shape(0)) + "!=6, " + std::to_string(mat.shape(1)) + "]");
+            std::to_string(mat.shape(0)) + ", " + std::to_string(mat.shape(1)) + "!=6]");
     }
 }
 
 
-inline std::pair<std::vector<double>, std::vector<double>> gaussian_pixel_x_xx(
-    const double XCEN, const double XMIN, const double XBIN, const unsigned int XDIM,
+inline std::pair<std::pair<std::vector<double>, std::vector<double>>, std::vector<double>>
+gaussian_pixel_x_xx(const double XCEN, const double XMIN, const double XBIN, const unsigned int XDIM,
     const double XXNORMINV, const double XYNORMINV)
 {
     const double XINIT = XMIN - XCEN + XBIN/2.;
     std::vector<double> x(XDIM);
     std::vector<double> xx(XDIM);
+    std::vector<double> xnorm(XDIM);
     for(unsigned int i = 0; i < XDIM; i++)
     {
         x[i] = XINIT + i*XBIN;
         xx[i] = x[i]*x[i]*XXNORMINV;
-        x[i] *= XYNORMINV;
+        xnorm[i] = x[i]*XYNORMINV;
     }
-    return {x, xx};
+    return {{x, xnorm}, xx};
 }
 
 inline void gaussian_pixel(Matrix & mat, const double NORM, const double XCEN, const double YCEN,
@@ -376,7 +380,7 @@ inline void gaussian_pixel(Matrix & mat, const double NORM, const double XCEN, c
     const unsigned int YDIM = mat.shape(0);
 
     const auto YVALS = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, YYNORMINV, XYNORMINV);
-    const std::vector<double> & Y = YVALS.first;
+    const std::vector<double> & YN = YVALS.first.second;
     const std::vector<double> & YY = YVALS.second;
 
     auto matref = mat.mutable_unchecked<2>();
@@ -387,7 +391,7 @@ inline void gaussian_pixel(Matrix & mat, const double NORM, const double XCEN, c
         const double XSQ = x*x*XXNORMINV;
         for(unsigned int j = 0; j < YDIM; j++)
         {
-           matref(j, i) = NORM*exp(-(XSQ + YY[j] - x*Y[j]));
+           matref(j, i) = NORM*exp(-(XSQ + YY[j] - x*YN[j]));
         }
         x += XBIN;
     }
@@ -440,6 +444,7 @@ inline double reff_to_sigma_gauss(double reff)
 {
     return reff/1.1774100225154746635070068805362097918987;
 }
+
 inline double degrees_to_radians(double degrees)
 {
     return degrees*M_PI/180.;
@@ -578,17 +583,12 @@ Matrix make_gaussian_pixel_sersic(
     return mat;
 }
 
+const size_t NGAUSSPARAMS = 6;
+typedef std::array<double, NGAUSSPARAMS> GaussParams;
+
 template <bool writeoutput, bool add>
 inline void gaussians_pixel_output(MatrixUncheckedMutable & output, double value, unsigned int dim1,
-    unsigned int dim2);
-
-template <>
-inline void gaussians_pixel_output<false, false>(MatrixUncheckedMutable & output, double value,
-    unsigned int dim1, unsigned int dim2) {}
-
-template <>
-inline void gaussians_pixel_output<false, true>(MatrixUncheckedMutable & output, double value,
-    unsigned int dim1, unsigned int dim2) {}
+    unsigned int dim2) {};
 
 template <>
 inline void gaussians_pixel_output<true, false>(MatrixUncheckedMutable & output, double value,
@@ -604,37 +604,116 @@ inline void gaussians_pixel_output<true, true>(MatrixUncheckedMutable & output, 
     output(dim1, dim2) += value;
 }
 
-template <bool getlikelihood>
+template <bool getlikelihood, bool dograd>
 inline void gaussians_pixel_getlikelihood(double & loglike, const double model, const MatrixUnchecked & DATA,
-    const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2, const bool VARISMAT);
+    const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2, const bool VARISMAT) {};
 
 template <>
-inline void gaussians_pixel_getlikelihood<false>(double & loglike, const double model,
-    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
-    const bool VARISMAT) {}
-
-template <>
-inline void gaussians_pixel_getlikelihood<true>(double & loglike, const double model,
+inline void gaussians_pixel_getlikelihood<true, false>(double & loglike, const double model,
     const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
     const bool VARISMAT)
 {
     double diff = DATA(dim1, dim2) - model;
     // TODO: Check what the performance penalty for using IDXVAR is and rewrite if it's worth it
-    loglike += -diff*diff*VARINVERSE(dim1*VARISMAT, dim2*VARISMAT)/2.;
+    loglike -= (diff*(diff*VARINVERSE(dim1*VARISMAT, dim2*VARISMAT)))/2.;
+}
+
+// Computes dmodel/dx for x in [cenx, ceny, flux, sigma_x, sigma_y, rho]
+template <bool dograd>
+inline void gaussians_pixel_getmodelgrad(GaussParams & output, const double m,
+    const double xsnorm, const double ysnorm,const double xs, const double ys, const double normsyy,
+    const double xsnormxy, const double linv, const double sigxinv, const double sigyinv, const double xy,
+    const double xxs, const double yys, const double rhodivonemrhosq, const double normsxydivrho) {};
+
+template <>
+inline void gaussians_pixel_getmodelgrad<true>(GaussParams & output, const double m,
+    const double xsnorm, const double ysnorm, const double xs, const double ys, const double normsyy,
+    const double xsnormxy, const double linv, const double sigxinv, const double sigyinv, const double xy,
+    const double xxs, const double yys, const double rhodivonemrhosq, const double normsxydivrho)
+{
+/*
+    m = L*XBIN*YBIN/(2.*M_PI*COV.sigx*COV.sigy)/sqrt(1-COV.rho*COV.rho) * exp(-(
+        + xs[g]^2/COV.sigx^2/(2*(1-COV.rho*COV.rho))
+        + ys[g][j]^2/COV.sigy^2/(2*(1-COV.rho*COV.rho))
+        - COV.rho*xs[g]*ys[g][j]/(1-COV.rho*COV.rho)/COV.sigx/COV.sigy
+    ))
+
+        rho -> r; X/YBIN -> B_1/2, sigx/y -> s_1/2, X/YCEN -> c_1,2
+
+    m = L*B_1*B_2/(2*pi*s_1*s_2)/sqrt(1-r^2)*exp(-(
+        + (X-C_1)^2/s_1^2/2/(1-r^2)
+        + (Y-C_2)^2/s_2^2/2/(1-r^2)
+        - r*(X-C_1)*(Y-C_2)/(1-r^2)/s_1/s_2
+    ))
+
+    dm/dL = m/L
+    dm/dXCEN = (2*xs[g]*normsxx[g] - ys[g][j])*m
+    dm/ds_[12] = -m/s + m*(2/s*[xy]sqs[g] - xy/s) = m/s*(2*[xy]sqs[g] - (1+xy))
+    dm/dr = -m*(r/(1-r^2) + 4*r*(1-r^2)*(xsqs[g] + yys[g][j]) - (1/r + 2*r/(1+r)*xs[g]*ys[g][j])
+
+*/
+    output[0] = m*(2*xsnorm - ysnorm);
+    // TODO: The ys*normsyy term could also be cached
+    output[1] = m*(2*ys*normsyy - xsnormxy);
+    output[2] = m*linv;
+    // factors for reff=2 ang=45: 2.848, ang=30:3.28, reff=4 ang=30: -12.4 ang=45: -13.255??
+    double onepxy = 1. + xy;
+    // TODO: Determine why this doesn't seem to return the right answer
+    // It seems to work for rho=0, so the xy term is the likely suspect
+    output[3] = m*sigxinv*(2*xxs - onepxy);
+    output[4] = m*sigyinv*(2*yys - onepxy);
+    // The last term could be reduced to xy/rho for rho > 0
+    output[5] = m*(rhodivonemrhosq*(1 - 2*(xxs + yys - xy)) + xs*ys*normsxydivrho);
+}
+
+// Computes and stores LL along with dll/dx for all components
+template <bool getlikelihood, bool dograd>
+inline void gaussians_pixel_getlikegrad(MatrixUncheckedMutable & output, const size_t ngauss,
+    const std::vector<GaussParams> & gradmodels, double & loglike, const double model,
+    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
+    const bool VARISMAT) {};
+
+template <>
+inline void gaussians_pixel_getlikegrad<true, true>(MatrixUncheckedMutable & output, const size_t ngauss,
+    const std::vector<GaussParams> & gradmodels, double & loglike, const double model,
+    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
+    const bool VARISMAT)
+{
+    double diff = DATA(dim1, dim2) - model;
+    double diffvar = diff*VARINVERSE(dim1*VARISMAT, dim2*VARISMAT);
+    /*
+     * Derivation:
+     *
+        ll = sum(-(data-model)^2*varinv/2)
+        dll/dx = --2*dmodel/dx*(data-model)*varinv/2
+        dmodelsum/dx = d(.. + model[g])/dx = dmodel[g]/dx
+        dll/dx = dmodel[g]/dx*diffvar
+    */
+    loglike -= diff*diffvar/2.;
+    for(size_t g = 0; g < ngauss; ++g)
+    {
+        const GaussParams & grads = gradmodels[g];
+        output(g, 0) += grads[0]*diffvar;
+        output(g, 1) += grads[1]*diffvar;
+        output(g, 2) += grads[2]*diffvar;
+        output(g, 3) += grads[3]*diffvar;
+        output(g, 4) += grads[4]*diffvar;
+        output(g, 5) += grads[5]*diffvar;
+    }
 }
 
 // Compute Gaussian mixtures with the option to write output and/or evaluate the log likehood
 // TODO: Reconsider whether there's a better way to do this
 // The template arguments ensure that there is no performance penalty to any of the versions of this function.
 // However, some messy validation is required as a result.
-template <bool writeoutput, bool getlikelihood, bool add>
+template <bool writeoutput, bool getlikelihood, bool add, bool dograd>
 double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    const Matrix * const DATA, const Matrix * const VARINVERSE, Matrix * output = nullptr)
+    const Matrix * const DATA, const Matrix * const VARINVERSE, Matrix * output = nullptr,
+    Matrix * grads = nullptr)
 {
     check_is_gaussians(GAUSSIANS);
     const size_t DATASIZE = DATA == nullptr ? 0 : DATA->size();
-    //std::cout << writeoutput << "," << getlikelihood << std::endl;
     std::unique_ptr<Matrix> matrixnull;
     if(writeoutput)
     {
@@ -642,10 +721,18 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
         if(output->size() == 0) throw std::runtime_error("gaussians_pixel_template can't write to empty "
             "matrix");
     }
-    else
+    if(!writeoutput or !dograd) matrixnull = std::make_unique<Matrix>(
+        pybind11::array::ShapeContainer({0, 0}));
+    const size_t NGAUSSIANS = GAUSSIANS.shape(0);
+    if(dograd)
     {
-        auto nullshape = pybind11::array::ShapeContainer({0, 0});
-        matrixnull = std::make_unique<Matrix>(nullshape);
+        check_is_matrix(grads);
+        check_is_gaussians(*grads);
+        if(grads->shape(0) != NGAUSSIANS)
+        {
+            throw std::runtime_error("Gradient output matrix has " + std::to_string(grads->shape(0)) +
+                "rows != #gaussians=" + std::to_string(NGAUSSIANS));
+        }
     }
     if(getlikelihood)
     {
@@ -687,12 +774,24 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
     const double XBIN=(XMAX-XMIN)/XDIM;
     const double YBIN=(YMAX-YMIN)/YDIM;
 
-    const size_t NGAUSSIANS = GAUSSIANS.shape(0);
-    std::vector<std::vector<double>> ys;
+    std::vector<std::vector<double>> ysnorm;
     std::vector<std::vector<double>> yys;
-    std::vector<double> xs;
-    std::vector<double> normsxx;
-    std::vector<double> norms;
+    // TODO: Give these variables more compelling names
+    std::vector<double> xs(NGAUSSIANS);
+    std::vector<double> normsxx(NGAUSSIANS);
+    std::vector<double> norms(NGAUSSIANS);
+    // These are to store pre-computed values for gradients and are unused otherwise
+    // TODO: Move these into a simple class/struct
+    const size_t ngaussgrad = NGAUSSIANS*dograd;
+    std::vector<std::vector<double>> ys;
+    std::vector<double> linv(ngaussgrad);
+    std::vector<double> normsxy(ngaussgrad);
+    std::vector<double> normsyy(ngaussgrad);
+    std::vector<double> rhodivonemrhosq(ngaussgrad);
+    std::vector<double> sigxinv(ngaussgrad);
+    std::vector<double> sigyinv(ngaussgrad);
+    std::vector<double> normsxydivrho(ngaussgrad);
+    std::vector<GaussParams> gradmodels(ngaussgrad, GaussParams());
 
     const MatrixUnchecked GAUSSIANSREF = GAUSSIANS.unchecked<2>();
     for(size_t g = 0; g < NGAUSSIANS; ++g)
@@ -705,11 +804,22 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
 
         auto yvals = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, TERMS.yy, TERMS.xy);
 
-        ys.push_back(yvals.first);
+        ysnorm.push_back(yvals.first.second);
         yys.push_back(yvals.second);
-        xs.push_back(XMIN-XCEN+XBIN/2.);
-        normsxx.push_back(TERMS.xx);
-        norms.push_back(TERMS.norm);
+        xs[g] = XMIN-XCEN+XBIN/2.;
+        normsxx[g] = TERMS.xx;
+        norms[g] = TERMS.norm;
+        if(dograd)
+        {
+            ys.push_back(yvals.first.first);
+            linv[g] = 1/GAUSSIANSREF(g, 2);
+            normsxy[g] = TERMS.xy;
+            normsyy[g] = TERMS.yy;
+            rhodivonemrhosq[g] = COV.rho/(1. - COV.rho*COV.rho);
+            sigxinv[g] = 1/COV.sigx;
+            sigyinv[g] = 1/COV.sigy;
+            normsxydivrho[g] = 1./(1. - COV.rho*COV.rho)/COV.sigx/COV.sigy;
+        }
     }
 
     /*
@@ -719,25 +829,41 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
     */
     MatrixUncheckedMutable outputref = writeoutput ? (*output).mutable_unchecked<2>() :
         (*matrixnull).mutable_unchecked<2>();
+    MatrixUncheckedMutable outputgradref = dograd ? (*grads).mutable_unchecked<2>() :
+        (*matrixnull).mutable_unchecked<2>();
     const MatrixUnchecked DATAREF = getlikelihood ? (*DATA).unchecked<2>() : GAUSSIANSREF;
     const MatrixUnchecked VARINVERSEREF = getlikelihood ? (*VARINVERSE).unchecked<2>() : GAUSSIANSREF;
+    std::vector<double> xsnorm(NGAUSSIANS);
     std::vector<double> xsqs(NGAUSSIANS);
+    std::vector<double> xsnormxy(ngaussgrad);
     double loglike = 0;
     double model = 0;
     // TODO: Consider a version with cached xy, although it doubles memory usage
     for(unsigned int i = 0; i < XDIM; i++)
     {
-        for(size_t g = 0; g < NGAUSSIANS; ++g) xsqs[g] = xs[g]*xs[g]*normsxx[g];
+        for(size_t g = 0; g < NGAUSSIANS; ++g)
+        {
+            xsnorm[g] = xs[g]*normsxx[g];
+            xsqs[g] = xsnorm[g]*xs[g];
+            if(dograd) xsnormxy[g] = xs[g]*normsxy[g];
+        }
         for(unsigned int j = 0; j < YDIM; j++)
         {
             model = 0;
             for(size_t g = 0; g < NGAUSSIANS; ++g)
             {
-                model += norms[g]*exp(-(xsqs[g] + yys[g][j] - xs[g]*ys[g][j]));
+                double xy = xs[g]*ysnorm[g][j];
+                double value = norms[g]*exp(-(xsqs[g] + yys[g][j] - xy));
+                model += value;
+                gaussians_pixel_getmodelgrad<dograd>(gradmodels[g], value, xsnorm[g], ysnorm[g][j], xs[g],
+                    ys[g][j], normsyy[g], xsnormxy[g], linv[g], sigxinv[g], sigyinv[g], xy, xsqs[g],
+                    yys[g][j], rhodivonemrhosq[g], normsxydivrho[g]);
             }
             gaussians_pixel_output<writeoutput, add>(outputref, model, j, i);
-            gaussians_pixel_getlikelihood<getlikelihood>(loglike, model, DATAREF, VARINVERSEREF, j, i,
+            gaussians_pixel_getlikelihood<getlikelihood, dograd>(loglike, model, DATAREF, VARINVERSEREF, j, i,
                 VARISMAT);
+            gaussians_pixel_getlikegrad<getlikelihood, dograd>(outputgradref, NGAUSSIANS, gradmodels,
+                loglike, model, DATAREF, VARINVERSEREF, j, i, VARISMAT);
         }
         for(size_t g = 0; g < NGAUSSIANS; ++g) xs[g] += XBIN;
     }
@@ -746,32 +872,41 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
 
 double loglike_gaussians_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
     const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    Matrix & output)
+    Matrix & output, Matrix & grad)
 {
+    const bool dograd = grad.size() > 0;
     if(DATA.size() == 0)
     {
         if(output.size() == 0)
         {
-            return gaussians_pixel_template<false, false, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
-                &VARINVERSE, &output);
+            if(dograd) return gaussians_pixel_template<false, false, false, true>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
+            else return gaussians_pixel_template<false, false, false, false>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
         }
         else
         {
-            return gaussians_pixel_template<true, false, true>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
-                &VARINVERSE, &output);
+            if(dograd) return gaussians_pixel_template<true, false, true, true>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
+            else return gaussians_pixel_template<true, false, true, false>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
         }
     }
     else
     {
         if(output.size() == 0)
         {
-            return gaussians_pixel_template<false, true, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
-                &VARINVERSE, &output);
+            if(dograd) return gaussians_pixel_template<false, true, false, true>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
+            else return gaussians_pixel_template<false, true, false, false>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
         }
         else
         {
-            return gaussians_pixel_template<true, true, true>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA,
-                &VARINVERSE, &output);
+            if(dograd) return gaussians_pixel_template<true, true, true, true>(GAUSSIANS, XMIN, XMAX,
+                YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad);
+            else return gaussians_pixel_template<true, true, true, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX,
+                &DATA, &VARINVERSE, &output, &grad);
         }
     }
 }
@@ -781,7 +916,8 @@ Matrix make_gaussians_pixel(
     const unsigned int XDIM, const unsigned int YDIM)
 {
     Matrix mat({YDIM, XDIM});
-    gaussians_pixel_template<true, false, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &mat);
+    gaussians_pixel_template<true, false, false, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr,
+        &mat);
     return mat;
 }
 
@@ -789,7 +925,8 @@ void add_gaussians_pixel(
     const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     Matrix & output)
 {
-    gaussians_pixel_template<true, false, true>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &output);
+    gaussians_pixel_template<true, false, true, false>(GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr,
+        &output);
 }
 }
 #endif

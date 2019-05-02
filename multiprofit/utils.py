@@ -67,21 +67,6 @@ def getchisqred(chis):
     return chisum/chicount
 
 
-def ellipsetocovar(ang, axrat, re):
-    ang = np.radians(ang)
-    sinang = np.sin(ang)
-    cosang = np.cos(ang)
-    majsq = (2.*re)**2
-    minsq = majsq*axrat**2
-    sinangsq = sinang**2
-    cosangsq = cosang**2
-    sigxsq = majsq*cosangsq + minsq*sinangsq
-    sigysq = majsq*sinangsq + minsq*cosangsq
-    covxy = (majsq-minsq)*cosang*sinang
-    covar = np.matrix([[sigxsq, covxy], [covxy, sigysq]])
-    return covar
-
-
 def fluxtomag(ndarray):
     return -2.5*np.log10(ndarray)
 

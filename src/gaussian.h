@@ -97,6 +97,6 @@ void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const 
 */
 double loglike_gaussians_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
     const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    Matrix & output);
+    Matrix & output, Matrix & grad);
 }
 #endif

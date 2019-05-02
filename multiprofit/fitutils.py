@@ -23,10 +23,8 @@ from collections import OrderedDict
 import csv
 import functools
 import galsim as gs
-import importlib
 import io
 import matplotlib.pyplot as plt
-import multiprofit as mpf
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
@@ -34,7 +32,6 @@ import numpy as np
 from scipy import special, stats
 import sys
 import time
-import timeit
 import traceback
 
 
@@ -360,7 +357,7 @@ def evaluatemodel(model, plot=False, title=None, **kwargs):
     if plot:
         if title is not None:
             plt.suptitle(title)
-        plt.show(block=False)
+        #plt.show(block=False)
     return chis
 
 
@@ -594,7 +591,7 @@ def fitgalaxy(
                         figure=figures, axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
                         plotmulti=plotmulti, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
                         weightsband=weightsband)
-                    plt.show(block=False)
+                    #plt.show(block=False)
             else:
                 # Parse default overrides from model spec
                 paramflagkeys = ['inherit', 'modify']
@@ -1315,71 +1312,3 @@ def getmultigaussians(profiles, paramsinherit=None, paramsmodify=None, ncomponen
 
     return componentsgauss
 
-
-# Example usage:
-# test = testgaussian(nbenchmark=1000)
-# for x in test:
-#   print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
-def testgaussian(xdim=25, ydim=35, reffs=[2.0, 5.0], angs=np.linspace(0, 90, 7),
-                 axrats=[0.01, 0.1, 0.2, 0.5, 1], nbenchmark=0):
-    results = []
-    hasgs = importlib.util.find_spec('galsim') is not None
-    if hasgs:
-        import galsim as gs
-    for reff in reffs:
-        for ang in angs:
-            for axrat in axrats:
-                gaussmpfold = mpf.make_gaussian_pixel_sersic(xdim/2, ydim/2, 1, reff, ang, axrat,
-                                                             0, xdim, 0, ydim, xdim, ydim)
-                gaussmpf = mpf.make_gaussian_pixel(xdim/2, ydim/2, 1, reff, ang, axrat,
-                                                   0, xdim, 0, ydim, xdim, ydim)
-                oldtonew = np.sum(np.abs(gaussmpf-gaussmpfold))
-                result = 'Old/new residual=({:.3e})'.format(oldtonew)
-                if hasgs:
-                    gaussgs = gs.Gaussian(flux=1, half_light_radius=reff*np.sqrt(axrat)).shear(
-                        q=axrat, beta=ang*gs.degrees).drawImage(
-                        nx=xdim, ny=ydim, scale=1, method='no_pixel').array
-                    gstonew = np.sum(np.abs(gaussmpf-gaussgs))
-                    result += '; GalSim/new residual=({:.3e})'.format(gstonew)
-                if nbenchmark > 0:
-                    argsmpf = ('(' + ','.join(np.repeat('{}', 12)) + ')').format(
-                        xdim/2, ydim/2, 1, reff, ang, axrat, 0, xdim, 0, ydim, xdim, ydim)
-                    functions = {
-                        'old': 'mpf.make_gaussian_pixel_sersic' + argsmpf,
-                        'new': 'mpf.make_gaussian_pixel' + argsmpf,
-                        'like': 'mpf.loglike_gaussians_pixel(data, data, '
-                                'np.array([[' +
-                                ','.join(np.repeat('{}', 6)).format(xdim/2, ydim/2, 1, reff, ang, axrat) +
-                                ']]), 0, {}, 0, {}, np.zeros(({}, {})))'.format(
-                                    xdim, ydim, ydim, xdim),
-                    }
-                    timesmpf = {
-                        key: np.min(timeit.repeat(
-                            callstr,
-                            setup='import multiprofit as mpf' + (
-                                '; import numpy as np; data=np.zeros([0, 0])' if key == 'like' else ''),
-                            repeat=nbenchmark, number=1))
-                        for key, callstr in functions.items()
-                    }
-                    if hasgs:
-                        timegs = np.min(timeit.repeat(
-                            'x=gs.Gaussian(flux=1, half_light_radius={}).shear(q={}, beta={}*gs.degrees)'
-                            '.drawImage(nx={}, ny={}, scale=1, method="no_pixel").array'.format(
-                                reff*np.sqrt(axrat), axrat, ang, xdim, ydim
-                            ),
-                            setup='import galsim as gs', repeat=nbenchmark, number=1
-                        ))
-                    mpffuncs = list(timesmpf.keys())
-                    times = [timesmpf[x] for x in mpffuncs] + [timegs] if hasgs else []
-                    result += ';' + '/'.join(mpffuncs) + ('/GalSim' if hasgs else '') + ' times=(' + \
-                              ','.join(['{:.3e}'.format(x) for x in times]) + ')'
-                results.append({
-                    'string': result,
-                    'xdim': xdim,
-                    'ydim': ydim,
-                    'reff': reff,
-                    'axrat': axrat,
-                    'ang': ang,
-                })
-
-    return results

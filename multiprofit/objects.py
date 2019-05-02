@@ -26,6 +26,7 @@ import galsim as gs
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
+import multiprofit.gaussutils as mpfgauss
 import multiprofit.utils as mpfutil
 import multiprofit.asinhstretchsigned as mpfasinh
 import numpy as np
@@ -702,12 +703,14 @@ class Model:
             # This turns each resolved profile into N_PSF_components Gaussians
             if anygaussian and haspsf:
                 # Note that libprofit uses the irritating GALFIT convention, so reverse that
-                varsgauss = ["ang", "axrat", "re"]
+                varsgauss = ["re", "axrat", "ang"]
+                # Ellipse transformation functions expect a sigma argument, not re
+                varmap = {var: var if var != 're' else 'sigma' for var in varsgauss}
                 covarprofilessrc = [
                     (
-                        mpfutil.ellipsetocovar(**{var: profile[band][var] + 90*(var == "ang")
-                                                  for var in varsgauss})
-                            if profile[band]["nser"] == 0.5 else None,
+                        mpfgauss.ellipsetocovar(**{varmap[var]: profile[band][var] + 90*(var == "ang")
+                                                   for var in varsgauss})
+                        if profile[band]["nser"] == 0.5 else None,
                         profile[band]
                     )
                     for profile in self.getprofiles(bands=[band], engine="libprofit")
@@ -719,31 +722,31 @@ class Model:
                 for idxpsf, profilepsf in enumerate(exposure.psf.model.getprofiles(
                         bands=[band], engine="libprofit")):
                     fluxfrac = 10**(-0.4*profilepsf[band]["mag"])
-                    covarpsf = mpfutil.ellipsetocovar(
-                        **{var: profilepsf[band][var] + 90*(var == "ang") for var in varsgauss}
+                    covarpsf = mpfgauss.ellipsetocovar(
+                        **{varmap[var]: profilepsf[band][var] + 90*(var == "ang") for var in varsgauss}
                     )
                     for idxsrc, (covarsrc, profile) in enumerate(covarprofilessrc):
                         if covarsrc is not None:
                             if clock:
                                 timeeig = time.time()
-                            eigenvals, eigenvecs = np.linalg.eigh(covarpsf + covarsrc)
+                            reff, axrat, ang = mpfgauss.covartoellipse(
+                                covarpsf[0, 0] + covarsrc[0, 0],
+                                covarpsf[1, 1] + covarsrc[1, 1],
+                                covarpsf[0, 1] + covarsrc[0, 1],
+                            )
                             if clock:
                                 times['modelallgausseig'] += time.time() - timeeig
-                            indexmaj = np.argmax(eigenvals)
-                            fwhm = np.sqrt(eigenvals[indexmaj])
-                            axrat = np.sqrt(eigenvals[1-indexmaj])/fwhm
-                            ang = np.degrees(np.arctan2(eigenvecs[1, indexmaj], eigenvecs[0, indexmaj]))
                             if engine == "libprofit":
                                 # Needed because each PSF component will loop over the same profile object
                                 profile = copy.copy(profile)
-                                profile["re"] = fwhm/2.0
+                                profile["re"] = reff
                                 profile["axrat"] = axrat
                                 profile["mag"] += mpfutil.fluxtomag(fluxfrac)
                                 profile["ang"] = ang
                             else:
                                 profile = {
                                     "profile": gs.Gaussian(flux=10**(-0.4*profile["mag"])*fluxfrac,
-                                                           fwhm=fwhm*np.sqrt(axrat), gsparams=gsparams),
+                                                           fwhm=2*reff*np.sqrt(axrat), gsparams=gsparams),
                                     "shear": gs.Shear(q=axrat, beta=ang*gs.degrees),
                                     "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                                 }
@@ -849,7 +852,7 @@ class Model:
                 likelihood = exposure.meta['likeconst'] + mpf.loglike_gaussians_pixel(
                     data=exposure.image, varinverse=varinverse, gaussians=profilemat,
                     xmin=0, xmax=exposure.image.shape[1], ymin=0, ymax=exposure.image.shape[0],
-                    output=image if drawimage else np.zeros([0, 0]))
+                    output=image if drawimage else np.zeros([0, 0]), grad=np.zeros([0, 0]))
                 if not likelihoodlog:
                     likelihood = 10**likelihood
             else:
