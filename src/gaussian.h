@@ -29,7 +29,8 @@
 
 namespace py = pybind11;
 
-typedef py::array_t<double> Matrix;
+typedef py::array_t<double> ndarray;
+typedef py::array_t<size_t> ndarray_s;
 typedef py::array_t<double> paramsgauss;
 
 namespace multiprofit {
@@ -39,7 +40,7 @@ namespace multiprofit {
     position angle ANG (annoying GALFIT convention of up=0), axis ratio AXRAT, over a grid of defined by the
     corners (XMIN, YMIN) and (XMAX, YMAX) with XDIM x YDIM pixels, to a relative tolerance ACC.
 */
-Matrix make_gaussian(
+ndarray make_gaussian(
     const double XCEN, const double YCEN, const double MAG, const double RE,
     const double ANG, const double AXRAT,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
@@ -51,7 +52,7 @@ Matrix make_gaussian(
     position angle ANG (annoying GALFIT convention of up=0), axis ratio AXRAT, at the centers of pixels on a
     grid defined by the corners (XMIN, YMIN) and (XMAX, YMAX) with XDIM x YDIM pixels.
 */
-Matrix make_gaussian_pixel(
+ndarray make_gaussian_pixel(
     const double XCEN, const double YCEN, const double L,
     const double R, const double ANG, const double AXRAT,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
@@ -61,7 +62,7 @@ Matrix make_gaussian_pixel(
     An alternative implementation of make_gaussian_pixel based on the Sersic PDF. Should be the same +/-
     machine eps.
 */
-Matrix make_gaussian_pixel_sersic(
+ndarray make_gaussian_pixel_sersic(
     const double XCEN, const double YCEN, const double L,
     const double R, const double ANG, const double AXRAT,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
@@ -71,7 +72,7 @@ Matrix make_gaussian_pixel_sersic(
     As make_gaussian_pixel but taking (modified) elements of a covariance matrix - sig_x, sig_y, and rho
     Where rho is covar[0,1]/sigx/sigy
 */
-Matrix make_gaussian_pixel_covar(const double XCEN, const double YCEN, const double L,
+ndarray make_gaussian_pixel_covar(const double XCEN, const double YCEN, const double L,
     const double SIGX, const double SIGY, const double RHO,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM);
@@ -81,22 +82,22 @@ Matrix make_gaussian_pixel_covar(const double XCEN, const double YCEN, const dou
     GAUSSIANS is an ndarray with rows of Gaussian parameters in the same order as for make_gaussian_pixel:
     [XCEN, YCEN, L, R, ANG, AXRAT]
 */
-Matrix make_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
+ndarray make_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
     const double YMIN, const double YMAX, const unsigned int XDIM, const unsigned int YDIM);
 
 /*
     As make_gaussians_pixel but outputs to an existing matrix. Can skip output for benchmarking purposes.
 */
 void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, Matrix & output);
+    const double YMIN, const double YMAX, ndarray & output);
 
 /*
     Compute the log likelihood of a Gaussian mixture model given some data and an inverse variance map.
     GAUSSIANS is as in make_gaussians_pixel()
     output is an optional matrix to output the model to. Must be the same size as DATA if provided.
 */
-double loglike_gaussians_pixel(const Matrix & DATA, const Matrix & VARINVERSE,
+double loglike_gaussians_pixel(const ndarray & DATA, const ndarray & VARINVERSE,
     const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    Matrix & output, Matrix & grad);
+    bool to_add, ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor);
 }
 #endif

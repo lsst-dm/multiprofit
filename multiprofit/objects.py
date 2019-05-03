@@ -849,10 +849,14 @@ class Model:
                     # I think this is the easiest way to reshape it into a 1x1 matrix
                     varinverse = np.zeros((1, 1)) + varinverse
                 profilemat = gaussianprofilestomatrix([profile[band] for profile in profilestodraw])
+                zeros = np.zeros([0, 0])
+                zeros_s = np.zeros(0, dtype=np.uint64)
                 likelihood = exposure.meta['likeconst'] + mpf.loglike_gaussians_pixel(
                     data=exposure.image, varinverse=varinverse, gaussians=profilemat,
-                    xmin=0, xmax=exposure.image.shape[1], ymin=0, ymax=exposure.image.shape[0],
-                    output=image if drawimage else np.zeros([0, 0]), grad=np.zeros([0, 0]))
+                    xmin=0, xmax=exposure.image.shape[1], ymin=0, ymax=exposure.image.shape[0], to_add=False,
+                    output=image if drawimage else zeros, grad=zeros,
+                    grad_param_map=zeros_s, grad_param_factor=zeros
+                )
                 if not likelihoodlog:
                     likelihood = 10**likelihood
             else:
