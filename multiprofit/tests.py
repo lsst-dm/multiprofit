@@ -30,9 +30,14 @@ import timeit
 # test = testgaussian(nbenchmark=1000)
 # for x in test:
 #   print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
-def gaussian_test(xdim=49, ydim=51, reffs=[2.0, 5.0], angs=np.linspace(0, 90, 7),
-                  axrats=[0.01, 0.1, 0.2, 0.5, 1], nbenchmark=0, nsub=1, do_like=True, do_grad=False,
-                  do_jac=False):
+def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchmark=0, nsub=1,
+                  do_like=True, do_grad=False, do_jac=False):
+    if reffs is None:
+        reffs = [2.0, 5.0]
+    if angs is None:
+        angs = np.linspace(0, 90, 7)
+    if axrats is None:
+        axrats = [0.01, 0.1, 0.2, 0.5, 1]
     results = []
     hasgs = find_spec('galsim') is not None
     nparams = nsub*6
@@ -65,17 +70,17 @@ def gaussian_test(xdim=49, ydim=51, reffs=[2.0, 5.0], angs=np.linspace(0, 90, 7)
                     if do_like:
                         functions['like'] = (
                             'mpf.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
-                            ']), 0, {}, 0, {}, False, zeros, zeros, zeros_s, zeros)').format(
+                            ']), False, 0, {}, 0, {}, False, zeros, zeros, zeros_s, zeros)').format(
                             xdim, ydim, ydim, xdim)
                     if do_grad:
                         functions['grad'] = (
                             'mpf.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
-                            ']), 0, {}, 0, {}, False, zeros, grads, zeros_s, zeros)').format(
+                            ']), False, 0, {}, 0, {}, False, zeros, grads, zeros_s, zeros)').format(
                             xdim, ydim, ydim, xdim)
                     if do_jac:
                         functions['jac'] = (
                                 'mpf.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
-                                ']), 0, {}, 0, {}, False, zeros, grads, zeros_s, zeros)').format(
+                                ']), False, 0, {}, 0, {}, False, zeros, grads, zeros_s, zeros)').format(
                             xdim, ydim, ydim, xdim)
                     timesmpf = {
                         key: np.min(timeit.repeat(
@@ -128,9 +133,9 @@ def gradient_test(dimx=5, dimy=4, reff=2, ang=0, axrat=0.5, flux=1e4, bg=1e3, pr
     paramsinit = np.array([[cenx, ceny, flux, reff, ang, axrat]])
     # Compute the log likelihood and gradients
     ll = mpf.loglike_gaussians_pixel(
-        data, np.array([[1/bg]]), paramsinit, 0, dimx, 0, dimy, False, zeros, grads, zeros_s, zeros)
+        data, np.array([[1/bg]]), paramsinit, False, 0, dimx, 0, dimy, False, zeros, grads, zeros_s, zeros)
     mpf.loglike_gaussians_pixel(
-        data, np.array([[1/bg]]), paramsinit, 0, dimx, 0, dimy, False, zeros, jacobian, zeros_s, zeros)
+        data, np.array([[1/bg]]), paramsinit, False, 0, dimx, 0, dimy, False, zeros, jacobian, zeros_s, zeros)
     # Keep this in units of sigma, not re==FWHM/2
     covar = mpfgauss.ellipsetocovar(mpfgauss.reff2sigma(reff), axrat, ang)
     dxs = [1e-8, 1e-8, 1e-3, 1e-10, 1e-10, 1e-8]
@@ -154,10 +159,10 @@ def gradient_test(dimx=5, dimy=4, reff=2, ang=0, axrat=0.5, flux=1e4, bg=1e3, pr
         # Note that there's no option to return the log likelihood and the Jacobian - the latter skips
         # computing the former for efficiency, assuming that you won't need it
         llnew = mpf.loglike_gaussians_pixel(
-            data, np.array([[1/bg]]), params, 0, dimx, 0, dimy, False, zeros, zeros, zeros_s, zeros
+            data, np.array([[1/bg]]), params, False, 0, dimx, 0, dimy, False, zeros, zeros, zeros_s, zeros
         )
         mpf.loglike_gaussians_pixel(
-            data, np.array([[1/bg]]), params, 0, dimx, 0, dimy, False, output, zeros, zeros_s, zeros
+            data, np.array([[1/bg]]), params, False, 0, dimx, 0, dimy, False, output, zeros, zeros_s, zeros
         )
         diffabs[i] = np.sum(np.abs((output - model) - jacobian[:, :, i]*dxi))
         if printout:

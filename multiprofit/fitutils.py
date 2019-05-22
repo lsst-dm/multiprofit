@@ -25,6 +25,7 @@ import functools
 import galsim as gs
 import io
 import matplotlib.pyplot as plt
+import multiprofit.gaussutils as mpfgauss
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
@@ -70,6 +71,7 @@ transformsref = {
     "inverse": mpfobj.Transform(transform=functools.partial(np.divide, 1.),
                                 reverse=functools.partial(np.divide, 1.)),
     "logit": mpfobj.Transform(transform=special.logit, reverse=special.expit),
+    "logitsigned": getlogitlimited(-1, 1),
     "logitaxrat": getlogitlimited(1e-4, 1),
     "logitsersic":  getlogitlimited(0.3, 6.2),
     "logitmultigausssersic": getlogitlimited(0.3, 6.2),
@@ -108,21 +110,6 @@ def isfluxratio(param):
     return isinstance(param, mpfobj.FluxParameter) and param.isfluxratio
 
 
-def ellipse_to_covar(ang, axrat, sigma):
-    ang = np.radians(ang)
-    sinang = np.sin(ang)
-    cosang = np.cos(ang)
-    majsq = sigma ** 2
-    minsq = majsq * axrat ** 2
-    sinangsq = sinang ** 2
-    cosangsq = cosang ** 2
-    sigxsq = majsq * cosangsq + minsq * sinangsq
-    sigysq = majsq * sinangsq + minsq * cosangsq
-    covxy = (majsq - minsq) * cosang * sinang
-    covar = np.matrix([[sigxsq, covxy], [covxy, sigysq]])
-    return covar
-
-
 def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransformed=False,
                     sersiclogit=True, ismultigauss=False):
     transform = transformsref["none"]
@@ -147,14 +134,10 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
                 limits = limitsref["nserlog10"]
             if value is None:
                 value = 0.5
-    elif param == "size":
+    elif param == "sigma_x" or param == "sigma_y":
         transform = transformsref["log10"]
-        if profile == "moffat":
-            name = "fwhm"
-        elif profile == "sersic":
-            name = "re"
-    elif param == "axrat":
-        transform = transformsref["logitaxrat"]
+    elif param == "rho":
+        transform = transformsref["logitsigned"]
     elif param == "rscale":
         transform = transformsref['log10']
 
@@ -218,18 +201,28 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
                                   isvaluetransformed=istransformedvalues,
                                   ismultigauss=ismultigaussiansersic)
                   for param, valueslice in values.items()]
+        paramsellipse = {}
+        paramsother = []
+        for param in params:
+            if param.name == 'sigma_x' or param.name == 'sigma_y' or param.name == 'rho':
+                paramsellipse[param.name] = param
+            else:
+                paramsother.append(param)
+        ellipseparams = mpfobj.EllipseParameters(
+            paramsellipse['sigma_x'], paramsellipse['sigma_y'], paramsellipse['rho'])
         if ismultigaussiansersic or issoftened:
             components.append(MultiGaussianApproximationProfile(
-                paramfluxescomp, profile=profile, parameters=params, order=order))
+                paramfluxescomp, ellipseparams=ellipseparams, profile=profile, parameters=paramsother,
+                order=order))
         else:
-            components.append(mpfobj.EllipticalProfile(
-                paramfluxescomp, profile=profile, parameters=params))
+            components.append(mpfobj.EllipticalParametricProfile(
+                paramfluxescomp, ellipseparams=ellipseparams, profile=profile, parameters=paramsother))
 
     return components
 
 
 def getmodel(
-    fluxesbyband, modelstr, imagesize, sizes=None, axrats=None, angs=None, slopes=None, fluxfracs=None,
+    fluxesbyband, modelstr, imagesize, sigma_xs=None, sigma_ys=None, rhos=None, slopes=None, fluxfracs=None,
     offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False,
     convertfluxfracs=False
 ):
@@ -241,9 +234,9 @@ def getmodel(
         source flux
     :param modelstr: String; comma-separated list of 'component_type:number'
     :param imagesize: Float[2]; the x- and y-size of the image
-    :param sizes: Float[ncomponents]; Linear sizes of each component
-    :param axrats: Float[ncomponents]; Axis ratios of each component
-    :param angs: Float[ncomponents]; Position angle of each component
+    :param sigma_xs: Float[ncomponents]; Ellipse covariance sigma_x of each component
+    :param sigma_ys: Float[ncomponents]; Ellipse covariance sigma_y of each component
+    :param rhos: Float[ncomponents]; Ellipse covariance rho of each component
     :param slopes: Float[ncomponents]; Profile shape (e.g. Sersic n) of each components
     :param fluxfracs: Float[ncomponents]; The flux fraction for each component
     :param offsetxy: Float[2][ncomponents]; The x-y offsets relative to source center of each component
@@ -269,9 +262,9 @@ def getmodel(
         ncomps += ncompsprof
     try:
         noneall = np.repeat(None, ncomps)
-        sizes = np.array(sizes) if sizes is not None else noneall
-        axrats = np.array(axrats) if axrats is not None else noneall
-        angs = np.array(angs) if angs is not None else noneall
+        sigma_xs = np.array(sigma_xs) if sigma_xs is not None else noneall
+        sigma_ys = np.array(sigma_ys) if sigma_ys is not None else noneall
+        rhos = np.array(rhos) if rhos is not None else noneall
         slopes = np.array(slopes) if slopes is not None else noneall
         if fluxfracs is not None:
             fluxfracs = np.array(fluxfracs)
@@ -312,14 +305,10 @@ def getmodel(
         # TODO: Review whether this should change to support band-dependent fluxfracs
         fluxfracscomp = [fluxfracs[i] for i in comprange][:-1]
         fluxfracscomp = {band: fluxfracscomp for band in bands}
-        if profile == "gaussian":
-            for compi in comprange:
-                if sizes[compi] is not None:
-                    sizes[compi] /= 2.
         values = {
-            "size": sizes[comprange],
-            "axrat": axrats[comprange],
-            "ang": angs[comprange],
+            "sigma_x": sigma_xs[comprange],
+            "sigma_y": sigma_ys[comprange],
+            "rho": rhos[comprange],
         }
         if not profile == "lux" or profile == "luv":
             values["slope"] = slopes[comprange]
@@ -473,7 +462,7 @@ def fitgalaxy(
     bands = OrderedDict()
     fluxes = {}
     npiximg = None
-    paramnamesmomentsinit = ["axrat", "ang", "re"]
+    paramnamesmomentsinit = ["sigma_x", "sigma_y", "rho"]
     initfrommoments = {paramname: 0 for paramname in paramnamesmomentsinit}
     for exposure, _ in exposurespsfs:
         band = exposure.band
@@ -484,14 +473,9 @@ def fitgalaxy(
         elif npiximgexp != npiximg:
             'fitgalaxy exposure image shape={} not same as first={}'.format(npiximgexp, npiximg)
         if band not in bands:
-            for paramname, value in zip(paramnamesmomentsinit, mpfutil.estimateellipse(imgarr)):
-                # TODO: Find a way to average/median angles without annoying periodicity problems
-                # i.e. average([1, 359]) = 180
-                # Obvious solution is to convert to another parameterization like covariance, etc.
-                if paramname == 'ang':
-                    initfrommoments[paramname] = value
-                else:
-                    initfrommoments[paramname] += value**2
+            moments = mpfutil.estimateellipse(imgarr)
+            for paramname, value in zip(paramnamesmomentsinit, mpfgauss.get_covar_elements(moments)):
+                initfrommoments[paramname] += value
             bands[exposure.band] = None
         # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
         fluxes[band] = np.sum(imgarr[exposure.maskinverse] if exposure.maskinverse is not None else imgarr)
@@ -512,7 +496,8 @@ def fitgalaxy(
         modellib = "scipy"
 
     valuesmax = {
-       "re": np.sqrt(np.sum((npiximg/2.)**2)),
+        "sigma_x": np.sqrt(np.sum((npiximg/2.)**2)),
+        "sigma_y": np.sqrt(np.sum((npiximg/2.)**2)),
     }
     valuesmin = {}
     for band in bands:
@@ -555,8 +540,9 @@ def fitgalaxy(
             modelname = modelinfo["name"]
             modeltype = modelinfo["model"]
             modeldefault = getmodel(
-                fluxes, modeltype, npiximg, engine=engine, engineopts=engineopts,
-                convertfluxfracs=not fitfluxfracs
+                fluxes, modeltype, npiximg, np.array([initfrommoments["sigma_x"]]),
+                np.array([initfrommoments["sigma_y"]]), np.array([initfrommoments["rho"]]),
+                engine=engine, engineopts=engineopts, convertfluxfracs=not fitfluxfracs
             )
             paramsfixeddefault[modeltype] = [param.fixed for param in
                                              modeldefault.getparameters(fixed=True)]
@@ -591,7 +577,6 @@ def fitgalaxy(
                         figure=figures, axes=axeses, figurerow=modelidx, plotascolumn=plotascolumn,
                         plotmulti=plotmulti, imgplotmaxs=imgplotmaxs, imgplotmaxmulti=imgplotmaxmulti,
                         weightsband=weightsband)
-                    #plt.show(block=False)
             else:
                 # Parse default overrides from model spec
                 paramflagkeys = ['inherit', 'modify']
@@ -849,10 +834,21 @@ def fitgalaxyexposures(
 
 def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainverse=None, factorsigma=1,
                 sizeinpixels=8.0, axrat=0.92):
+    sizes = sizeinpixels*10**((np.arange(numcomps) - numcomps/2)/numcomps)
+    axrats = np.repeat(axrat, numcomps)
+    angs = np.linspace(start=0, stop=180, num=numcomps + 2)[1:(numcomps + 1)]
+
+    sigma_xs = np.zeros(numcomps)
+    sigma_ys = np.zeros(numcomps)
+    rhos = np.zeros(numcomps)
+
+    for idx, (sizei, axrati, angi) in enumerate(zip(sizes, axrats, angs)):
+        sigma_xs[idx], sigma_ys[idx], rhos[idx] = mpfgauss.get_covar_elements(
+            mpfgauss.ellipsetocovar(sizei, axrati, angi))
+
     model = getmodel({band: 1}, psfmodel, np.flip(psfimage.shape, axis=0),
-                     sizeinpixels*10**((np.arange(numcomps) - numcomps/2)/numcomps),
-                     np.repeat(axrat, numcomps),
-                     np.linspace(start=0, stop=180, num=numcomps + 2)[1:(numcomps + 1)],
+                     sigma_xs, sigma_ys, rhos,
+                     fluxfracs=mpfutil.normalize(2.**(-np.arange(numcomps))),
                      engine=engine, engineopts=engineopts)
     for param in model.getparameters(fixed=False):
         param.fixed = isinstance(param, mpfobj.FluxParameter) and not param.isfluxratio

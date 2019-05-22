@@ -70,21 +70,23 @@ PYBIND11_MODULE(_multiprofit, m)
         "make_gaussians_pixel", &multiprofit::make_gaussians_pixel,
         "Evaluate 2D Gaussians at the centers of pixels on a rectangular grid using the standard bivariate"
         "Gaussian PDF.",
-        "gaussians"_a.noconvert(), "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "xdim"_a, "ydim"_a
+        "gaussians"_a.noconvert(), "gauss_is_covar"_a, "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a,
+        "xdim"_a, "ydim"_a
     );
 
     m.def(
         "add_gaussians_pixel", &multiprofit::add_gaussians_pixel,
         "Evaluate 2D Gaussians at the centers of pixels on a rectangular grid using the standard bivariate"
         "Gaussian PDF, adding to an existing matrix.",
-        "gaussians"_a.noconvert(), "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "output"_a.noconvert()
+        "gaussians"_a.noconvert(), "gauss_is_covar"_a, "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a,
+        "output"_a.noconvert()
     );
 
     m.def(
         "loglike_gaussians_pixel", &multiprofit::loglike_gaussians_pixel,
         "Evaluate the log likelihood of a 2D Gaussian mixture model at the centers of pixels on a rectangular"
         "grid using the standard bivariate Gaussian PDF.",
-        "data"_a.noconvert(), "varinverse"_a.noconvert(), "gaussians"_a.noconvert(),
+        "data"_a.noconvert(), "varinverse"_a.noconvert(), "gaussians"_a.noconvert(), "gauss_is_covar"_a,
         "xmin"_a, "xmax"_a, "ymin"_a, "ymax"_a, "to_add"_a, "output"_a.noconvert(), "grad"_a.noconvert(),
         "grad_param_map"_a.noconvert(), "grad_param_factor"_a.noconvert()
     );
