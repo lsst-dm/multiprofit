@@ -23,6 +23,10 @@ import numpy as np
 import scipy.optimize as spopt
 
 
+def sigma2reff(sigma):
+    return sigma*1.1774100225154746635070068805362097918987
+
+
 def reff2sigma(reff):
     return reff/1.1774100225154746635070068805362097918987
 
@@ -65,6 +69,13 @@ def ellipsetocovar(sigma, axrat, ang):
     covxy = (majsq-minsq)*cosang*sinang
     covar = np.array([[sigxsq, covxy], [covxy, sigysq]])
     return covar
+
+
+def get_covar_elements(covar):
+    sigma_x = np.sqrt(covar[0, 0])
+    sigma_y = np.sqrt(covar[1, 1])
+    rho = covar[0, 1]/sigma_x/sigma_y
+    return sigma_x, sigma_y, rho
 
 
 # https://www.wolframalpha.com/input/?i=Integrate+2*pi*x*exp(-x%5E2%2F(2*s%5E2))%2F(s*sqrt(2*pi))+dx+from+0+to+r

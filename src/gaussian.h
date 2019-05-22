@@ -82,14 +82,15 @@ ndarray make_gaussian_pixel_covar(const double XCEN, const double YCEN, const do
     GAUSSIANS is an ndarray with rows of Gaussian parameters in the same order as for make_gaussian_pixel:
     [XCEN, YCEN, L, R, ANG, AXRAT]
 */
-ndarray make_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, const unsigned int XDIM, const unsigned int YDIM);
+ndarray make_gaussians_pixel(const paramsgauss& GAUSSIANS, const bool gauss_is_covar,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const unsigned int XDIM, const unsigned int YDIM);
 
 /*
     As make_gaussians_pixel but outputs to an existing matrix. Can skip output for benchmarking purposes.
 */
-void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, ndarray & output);
+void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const bool gauss_is_covar,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX, ndarray & output);
 
 /*
     Compute the log likelihood of a Gaussian mixture model given some data and an inverse variance map.
@@ -97,7 +98,8 @@ void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const 
     output is an optional matrix to output the model to. Must be the same size as DATA if provided.
 */
 double loglike_gaussians_pixel(const ndarray & DATA, const ndarray & VARINVERSE,
-    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    bool to_add, ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor);
+    const paramsgauss& GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
+    const double YMIN, const double YMAX, bool to_add, ndarray & output, ndarray & grad,
+    ndarray_s & grad_param_map, ndarray & grad_param_factor);
 }
 #endif

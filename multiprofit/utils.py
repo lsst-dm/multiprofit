@@ -89,13 +89,7 @@ def estimateellipse(img, denoise=True):
     inertia[0, 1] = np.sum(flux*x*y)
     inertia[1, 0] = inertia[0, 1]
     inertia[1, 1] = np.sum(flux*y**2)
-    evals, evecs = np.linalg.eig(inertia)
-    idxevalmax = np.argmax(evals)
-    axrat = evals[1-idxevalmax]/evals[idxevalmax]
-    ang = np.degrees(np.arctan2(evecs[1, idxevalmax], evecs[0, idxevalmax])) - 90
-    if ang < 0:
-        ang += 360
-    return axrat, ang, np.sqrt(evals[idxevalmax]/np.sum(flux))
+    return inertia
 
 
 def normalize(ndarray):

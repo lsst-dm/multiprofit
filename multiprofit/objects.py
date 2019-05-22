@@ -197,10 +197,11 @@ class PSF:
         self.usemodel = usemodel
 
 
-def gaussianprofilestomatrix(profiles):
+def gaussianprofilestomatrix(profiles, hascovar=False):
+    e = ['sigma_x', 'sigma_y', 'rho'] if hascovar else ['re', 'ang', 'axrat']
     return np.array(
         [
-            np.array([p['cenx'], p['ceny'], mpfutil.magtoflux(p['mag']), p['re'], p['ang'], p['axrat']])
+            np.array([p['cenx'], p['ceny'], mpfutil.magtoflux(p['mag']), p[e[0]], p[e[1]], p[e[2]]])
             for p in profiles
         ]
     )
@@ -681,7 +682,8 @@ class Model:
         profilesgaussian = [comp.isgaussian()
                             for comps in [src.modelphotometric.components for src in self.sources]
                             for comp in comps]
-        allgaussian = not haspsf or (exposure.psf.model is not None and
+        allgaussian = not haspsf or (
+            exposure.psf.model is not None and
             all([comp.isgaussian() for comp in exposure.psf.model.modelphotometric.components]))
         anygaussian = allgaussian and any(profilesgaussian)
         allgaussian = allgaussian and all(profilesgaussian)
@@ -729,16 +731,22 @@ class Model:
                         if covarsrc is not None:
                             if clock:
                                 timeeig = time.time()
-                            reff, axrat, ang = mpfgauss.covartoellipse(
-                                covarpsf[0, 0] + covarsrc[0, 0],
-                                covarpsf[1, 1] + covarsrc[1, 1],
-                                covarpsf[0, 1] + covarsrc[0, 1],
-                            )
+                            covar = (covarpsf[0, 0] + covarsrc[0, 0],
+                                     covarpsf[1, 1] + covarsrc[1, 1],
+                                     covarpsf[0, 1] + covarsrc[0, 1])
+                            reff, axrat, ang = mpfgauss.covartoellipse(covar[0], covar[1], covar[2])
                             if clock:
                                 times['modelallgausseig'] += time.time() - timeeig
                             if engine == "libprofit":
                                 # Needed because each PSF component will loop over the same profile object
                                 profile = copy.copy(profile)
+                                if "rho" in profile:
+                                    sigma_x = np.sqrt(covar[0])
+                                    sigma_y = np.sqrt(covar[1])
+                                    profile["sigma_x"] = mpfgauss.reff2sigma(sigma_x)
+                                    profile["sigma_y"] = mpfgauss.reff2sigma(sigma_y)
+                                    profile["rho"] = covar[2]/sigma_x/sigma_y
+                                    profile["idxsrc"] = idxsrc
                                 profile["re"] = reff
                                 profile["axrat"] = axrat
                                 profile["mag"] += mpfutil.fluxtomag(fluxfrac)
@@ -874,7 +882,7 @@ class Model:
                     # make_gaussian_pixel is faster
                     if len(profilesflux) > 1:
                         imgprofiles = mpf.make_gaussians_pixel(
-                            gaussianprofilestomatrix([profile[band] for profile in profilesflux]),
+                            gaussianprofilestomatrix([profile[band] for profile in profilesflux]), False,
                             0, exposure.image.shape[1], 0, exposure.image.shape[0],
                             exposure.image.shape[1], exposure.image.shape[0])
                     else:
@@ -1504,7 +1512,7 @@ class Source:
         paramobjects = [
             self.modelastrometric.getparameters(free, fixed, time),
             self.modelphotometric.getparameters(free, fixed, flatten=flatten, modifiers=modifiers,
-                astrometry=astrometry)
+                                                astrometry=astrometry)
         ]
         params = []
         for paramobject in paramobjects:
@@ -1529,8 +1537,10 @@ class Source:
         """
         self._checkengine(engine)
         cenx, ceny = self.modelastrometric.getposition(time=time)
-        return self.modelphotometric.getprofiles(engine=engine, bands=bands, cenx=cenx, ceny=ceny, time=time,
-                                                 engineopts=engineopts)
+        return self.modelphotometric.getprofiles(
+            engine=engine, bands=bands, cenx=cenx, ceny=ceny,
+            params={k: v for k, v in self.modelastrometric.params.items()},
+            time=time, engineopts=engineopts)
 
     def __init__(self, modelastrometry, modelphotometry, name=""):
         self.name = name
@@ -1614,12 +1624,13 @@ class PhotometricModel:
         return params
 
     # TODO: Determine how the astrometric model is supposed to interact here
-    def getprofiles(self, engine, bands, cenx, ceny, time=None, engineopts=None):
+    def getprofiles(self, engine, bands, cenx, ceny, params=dict(), time=None, engineopts=None):
         """
         :param engine: Valid rendering engine
         :param bands: List of bands
         :param cenx: X coordinate
         :param ceny: Y coordinate
+        :param params: Dict of potentially relevant parameters (e.g. controlling cenx/y)
         :param time: A time for variable sources. Not implemented yet.
         :param engineopts: Dict of engine options
         :return: List of dicts by band
@@ -1631,7 +1642,8 @@ class PhotometricModel:
                       band in self.fluxes else None for band in bands}
         profiles = []
         for comp in self.components:
-            profiles += comp.getprofiles(bandfluxes, engine, cenx, ceny, engineopts=engineopts)
+            profiles += comp.getprofiles(
+                bandfluxes, engine, cenx, ceny, params, engineopts=engineopts)
         for flux in comp.fluxes:
             if flux.isfluxratio and flux.getvalue(transformed=False) != 1.:
                 raise RuntimeError('Non-unity flux ratio for final component')
@@ -1708,7 +1720,7 @@ class Component(object, metaclass=ABCMeta):
     optional = ["cenx", "ceny"]
 
     @abstractmethod
-    def getprofiles(self, bandfluxes, engine, cenx, ceny, engineopts=None):
+    def getprofiles(self, bandfluxes, engine, cenx, ceny, params=dict(), engineopts=None):
         """
             bandfluxes is a dict of bands with item flux in a linear scale or None if components independent
             Return is dict keyed by band with lists of engine-dependent profiles.
@@ -1727,26 +1739,106 @@ class Component(object, metaclass=ABCMeta):
 
     def __init__(self, fluxes, name=""):
         for i, param in enumerate(fluxes):
-            if not isinstance(param, Parameter):
+            if not isinstance(param, FluxParameter):
                 raise TypeError(
-                    "Component param[{:d}] (type={:s}) is not an instance of {:s}".format(
-                        i, str(type(param)), str(type(Parameter)))
+                    "Component flux[{:d}] (type={:s}) is not an instance of {:s}".format(
+                        i, str(type(param)), str(type(FluxParameter)))
                 )
         self.fluxes = fluxes
         self.name = name
 
 
+class Ellipse:
+    def getcovariance(self):
+        cov = self.rho*self.sigma_x*self.sigma_y
+        return np.array([[self.sigma_x**2, cov], [cov, self.sigma_y**2]])
+
+    def __init__(self, sigma_x, sigma_y, rho):
+        self.sigma_x = sigma_x
+        self.sigma_y = sigma_y
+        self.rho = rho
+
+
+class EllipseParameters(Ellipse):
+    def getcovariance(self):
+        sigma_x = self.sigma_x.getvalue(transformed=False)
+        sigma_y = self.sigma_y.getvalue(transformed=False)
+        cov = self.rho.getvalue(transformed=False)*sigma_x*sigma_y
+        return np.array([[sigma_x**2, cov], [cov, sigma_y**2]])
+
+    def getparameters(self, free=True, fixed=True):
+        return [value for value in [self.sigma_x, self.sigma_y, self.rho] if
+                (value.fixed and fixed) or (not value.fixed and free)]
+
+    def getprofile(self):
+        return {
+            'sigma_x': self.sigma_x.getvalue(transformed=False),
+            'sigma_y': self.sigma_y.getvalue(transformed=False),
+            'rho': self.rho.getvalue(transformed=False),
+            'params': {
+                'sigma_x': self.sigma_x,
+                'sigma_y': self.sigma_y,
+                'rho': self.rho,
+            }
+        }
+
+    def __init__(self, sigma_x, sigma_y, rho):
+        isparams = [isinstance(x, Parameter) for x in [sigma_x, sigma_y, rho]]
+        if not all(isparams):
+            raise TypeError("Not all {} parameters are {} ({})".format(
+                self.__class__, Parameter.__class__, [x.__class__ for x in [sigma_x, sigma_y, rho]]
+            ))
+        self.sigma_x = sigma_x
+        self.sigma_y = sigma_y
+        self.rho = rho
+
+
 class EllipticalProfile(Component):
+    minaxrat = 1e-6
+
+    def getprofiles(self, bandfluxes, engine, cenx, ceny, params=dict(), engineopts=None):
+        profile = self.ellipseparams.getprofile()
+        radius, axrat, ang = mpfgauss.covartoellipseeig(self.ellipseparams.getcovariance())
+        profile["params"].update(params)
+        for modifier in self.ellipseparams.rho.modifiers:
+            if modifier.name == "rscale":
+                factor = modifier.getvalue(transformed=False)
+                radius *= factor
+                profile["sigma_x"] *= factor
+                profile["sigma_y"] *= factor
+                profile["params"]["rscale"] = modifier
+        return profile, radius, axrat, ang
+
+    def getparameters(self, free=True, fixed=True):
+        return [value for value in self.fluxes if
+                (value.fixed and fixed) or (not value.fixed and free)] + \
+               self.ellipseparams.getparameters(free=free, fixed=fixed)
+
+    def isgaussian(self):
+        return False
+
+    def __init__(self, fluxes, ellipseparams, name=""):
+        super().__init__(fluxes, name=name)
+        if not isinstance(ellipseparams, EllipseParameters):
+            raise TypeError("ellipseparams type {} must be a {}".format(
+                type(ellipseparams), EllipseParameters))
+        self.ellipseparams = ellipseparams
+
+
+class EllipticalParametricProfile(EllipticalProfile):
     """
         Class for any profile with a (generalized) ellipse shape.
         TODO: implement boxiness for libprofit; not sure if galsim does generalized ellipses?
     """
     profilesavailable = ["moffat", "sersic"]
-    mandatoryshape = ["ang", "axrat"]
     # TODO: Consider adopting gs's flexible methods of specifying re, fwhm, etc.
     mandatory = {
-        "moffat": mandatoryshape + ["con", "fwhm"],
-        "sersic": mandatoryshape + ["nser", "re"],
+        "moffat": ["con"],
+        "sersic": ["nser"],
+    }
+    sizenames = {
+        "moffat": "hwhm",
+        "sersic": "re",
     }
 
     ENGINES = ["galsim", "libprofit"]
@@ -1763,12 +1855,11 @@ class EllipticalProfile(Component):
             or (self.profile == "moffat" and np.isinf(self.parameters["con"].getvalue()))
 
     def getparameters(self, free=True, fixed=True):
-        return [value for value in self.fluxes if
-                (value.fixed and fixed) or (not value.fixed and free)] + \
+        return super().getparameters(free=free, fixed=fixed) + \
             [value for value in self.parameters.values() if
                 (value.fixed and fixed) or (not value.fixed and free)]
 
-    def getprofiles(self, bandfluxes, engine, cenx, ceny, engineopts=None):
+    def getprofiles(self, bandfluxes, engine, cenx, ceny, params=dict(), engineopts=None):
         """
         :param bandfluxes: Dict of fluxes by band
         :param engine: Rendering engine
@@ -1788,6 +1879,8 @@ class EllipticalProfile(Component):
                     "bands with fluxes {}".format(self.profile, self.name, band, fluxesbands))
 
         profiles = {}
+        profilebase, radius, axrat, ang = super().getprofiles(
+            bandfluxes, engine, cenx, ceny, params, engineopts)
         for band in bandfluxes.keys():
             flux = fluxesbands[band].getvalue(transformed=False)
             if fluxesbands[band].isfluxratio:
@@ -1796,20 +1889,17 @@ class EllipticalProfile(Component):
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
                 flux *= bandfluxes[band]
                 bandfluxes[band] *= (1.0-fluxratio)
-            profile = {}
+            profile = profilebase.copy()
+            profile["axrat"] = axrat
+            profile["ang"] = ang
             for param in self.parameters.values():
-                value = param.getvalue(transformed=False)
-                if param.name == "re":
-                    for modifier in param.modifiers:
-                        if modifier.name == "rscale":
-                            value *= modifier.getvalue(transformed=False)
-                profile[param.name] = value
+                profile[param.name] = param.getvalue(transformed=False)
 
             if not 0 < profile["axrat"] <= 1:
                 if profile["axrat"] > 1:
                     profile["axrat"] = 1
-                elif profile["axrat"] <= 0:
-                    profile["axrat"] = 1e-3
+                elif profile["axrat"] <= __class__.minaxrat:
+                    profile["axrat"] = __class__.minaxrat
                 else:
                     raise ValueError("axrat {} ! >0 and <=1".format(profile["axrat"]))
 
@@ -1818,8 +1908,8 @@ class EllipticalProfile(Component):
             # Does this profile have a non-zero size?
             # TODO: Review cutoff - it can't be zero for galsim or it will request huge FFTs
             resolved = not (
-                (self.profile == "sersic" and profile["re"] < 0*(engine == "galsim")) or
-                (self.profile == "moffat" and profile["fwhm"] < 0*(engine == "galsim"))
+                (self.profile == "sersic" and radius < 0*(engine == "galsim")) or
+                (self.profile == "moffat" and radius < 0*(engine == "galsim"))
             )
             for key, value in cens.items():
                 if key in profile:
@@ -1832,12 +1922,8 @@ class EllipticalProfile(Component):
                     axratsqrt = np.sqrt(axrat)
                     gsparams = getgsparams(engineopts)
                     if isgaussian:
-                        if self.profile == "sersic":
-                            fwhm = 2.*profile["re"]
-                        else:
-                            fwhm = profile["fwhm"]
                         profilegs = gs.Gaussian(
-                            flux=flux, fwhm=fwhm*axratsqrt,
+                            flux=flux, fwhm=2*radius*axratsqrt,
                             gsparams=gsparams
                         )
                     elif self.profile == "sersic":
@@ -1846,13 +1932,13 @@ class EllipticalProfile(Component):
                                   "GalSim could fail.".format(profile["nser"]))
                         profilegs = gs.Sersic(
                             flux=flux, n=profile["nser"],
-                            half_light_radius=profile["re"]*axratsqrt,
+                            half_light_radius=radius*axratsqrt,
                             gsparams=gsparams
                         )
                     elif self.profile == "moffat":
                         profilegs = gs.Moffat(
                             flux=flux, beta=profile["con"],
-                            fwhm=profile["fwhm"]*axratsqrt,
+                            fwhm=2*radius*axratsqrt,
                             gsparams=gsparams
                         )
                     profile = {
@@ -1861,6 +1947,7 @@ class EllipticalProfile(Component):
                         "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                     }
                 elif engine == "libprofit":
+                    profile[__class__.sizenames[self.profile]] = radius
                     profile["mag"] = mpfutil.fluxtomag(flux)
                     # TODO: Review this. It might not be a great idea because Sersic != Moffat integration
                     # libprofit should be able to handle Moffats with infinite con
@@ -1868,8 +1955,6 @@ class EllipticalProfile(Component):
                         profile["profile"] = "sersic"
                         profile["nser"] = 0.5
                         if self.profile == "moffat":
-                            profile["re"] = profile["fwhm"]/2.0
-                            del profile["fwhm"]
                             del profile["con"]
                         else:
                             raise RuntimeError("No implentation for turning profile {:s} into gaussian".format(
@@ -1889,7 +1974,7 @@ class EllipticalProfile(Component):
 
     @classmethod
     def _checkparameters(cls, parameters, profile):
-        mandatory = {param: False for param in EllipticalProfile.mandatory[profile]}
+        mandatory = {param: False for param in EllipticalParametricProfile.mandatory[profile]}
         paramnamesneeded = mandatory.keys()
         paramnames = [param.name for param in parameters]
         errors = []
@@ -1910,17 +1995,17 @@ class EllipticalProfile(Component):
             if not found:
                 errors.append("Missing mandatory param {:s}".format(paramname))
         if errors:
-            errorstr = "Errors validating params of component (profile={:s}):\n" + \
+            errorstr = "Errors validating params of component (profile={}):\n".format(profile) + \
                        "\n".join(errors) + "\nPassed params:" + str(parameters)
             raise ValueError(errorstr)
 
-    def __init__(self, fluxes, name="", profile="sersic", parameters=None):
-        if profile not in EllipticalProfile.profilesavailable:
+    def __init__(self, fluxes, ellipseparams, name="", profile="sersic", parameters=None):
+        super().__init__(fluxes, ellipseparams, name=name)
+        if profile not in __class__.profilesavailable:
             raise ValueError("Profile type={:s} not in available: ".format(profile) + str(
-                EllipticalProfile.profilesavailable))
+                __class__.profilesavailable))
         self._checkparameters(parameters, profile)
         self.profile = profile
-        Component.__init__(self, fluxes, name)
         self.parameters = {param.name: param for param in parameters}
 
 
@@ -1938,7 +2023,7 @@ class PointSourceProfile(Component):
         return False
 
     def getparameters(self, free=True, fixed=True):
-        return [value for value in self.fluxes if \
+        return [value for value in self.fluxes if
                 (value.fixed and fixed) or (not value.fixed and free)]
 
     # TODO: default PSF could be unit image?

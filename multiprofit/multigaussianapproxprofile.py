@@ -28,18 +28,16 @@ import numpy as np
 import scipy.interpolate as spinterp
 
 
-class MultiGaussianApproximationProfile(mpfobj.Component):
+class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
     # TODO: Figure out a better way to split functionality between this and EllipticalProfile
     # Maybe have a generic EllipticalProfile and SingleEllipticalProfile?
     """
         Class for multi-Gaussian profiles with (generalized) ellipse shape(s).
     """
     profilesavailable = ["sersic"]
-    mandatoryshape = ["ang", "axrat"]
     ENGINES = ["galsim", "libprofit"]
-    mandatoryshape = ["ang", "axrat"]
     mandatory = {
-        "sersic": mandatoryshape + ["nser", "re"],
+        "sersic": ["nser"],
     }
 
     # These weights are derived here:
@@ -1560,12 +1558,11 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
         return True
 
     def getparameters(self, free=True, fixed=True):
-        return [value for value in self.fluxes if
-                (value.fixed and fixed) or (not value.fixed and free)] + \
+        return super().getparameters(free=free, fixed=fixed) + \
             [value for value in self.parameters.values() if
                 (value.fixed and fixed) or (not value.fixed and free)]
 
-    def getprofiles(self, bandfluxes, engine, cenx, ceny, engineopts=None):
+    def getprofiles(self, bandfluxes, engine, cenx, ceny, params=dict(), engineopts=None):
         self._checkengine(engine)
 
         fluxesbands = {flux.band: flux for flux in self.fluxes}
@@ -1598,8 +1595,14 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
             weights = mpfutil.normalize(weights)
             profiles = [{} for _ in range(self.order)]
 
+        profilebase, radius, axrat, ang = super().getprofiles(
+            bandfluxes, engine, cenx, ceny, params=params, engineopts=engineopts)
+        profilebase["nser"] = 0.5
         for band in bandfluxes.keys():
             flux = fluxesbands[band].getvalue(transformed=False)
+            profile = profilebase.copy()
+            profile["axrat"] = axrat
+            profile["ang"] = ang
             if fluxesbands[band].isfluxratio:
                 fluxratio = np.float(flux)
                 if not 0 <= fluxratio <= 1:
@@ -1634,7 +1637,7 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
 
             for subcomp, (weight, sigma) in enumerate(zip(weights, sigmas)):
                 weightprofile = copy.copy(profile)
-                re = profile["re"]*sigma
+                re = radius*sigma
                 fluxsub = weight*flux
                 if not fluxsub >= 0:
                     print(np.array([f(slope) for f in self.weightsplines]))
@@ -1650,7 +1653,6 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
                         "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                     })
                 elif engine == "libprofit":
-                    weightprofile["nser"] = 0.5
                     weightprofile["mag"] = mpfutil.fluxtomag(weight*flux)
                     weightprofile["re"] = re
                 profiles[subcomp][band] = weightprofile
@@ -1659,19 +1661,18 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
 
     @classmethod
     def _checkparameters(cls, parameters, profile, order):
-        mandatory = {param: False for param in mpfobj.EllipticalProfile.mandatory[profile]}
+        if profile != "sersic" and order not in MultiGaussianApproximationProfile.weights[profile]:
+            raise ValueError("{} profile={} order={} not in supported {}".format(
+                cls.__name__, profile, order, MultiGaussianApproximationProfile.weights[profile].keys()))
+
+        mandatory = {param: False for param in mpfobj.EllipticalParametricProfile.mandatory[profile]}
         paramnamesneeded = mandatory.keys()
         paramnames = [param.name for param in parameters]
         errors = []
+        # Not as efficient as early exit if true but oh well
         if len(paramnames) > len(set(paramnames)):
             errors.append("Parameters array not unique")
         # Check if these parameters are known (in mandatory)
-
-        if profile != "sersic" and order not in MultiGaussianApproximationProfile.weights[profile]:
-            raise ValueError("{} profile={} order={} not in supported {}".format(
-                cls.__name__, profile, order,
-                MultiGaussianApproximationProfile.weights[profile].keys()))
-
         for param in parameters:
             if isinstance(param, mpfobj.FluxParameter):
                 errors.append("Param {:s} is {:s}, not {:s}".format(param.name, type(mpfobj.FluxParameter),
@@ -1687,7 +1688,6 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
                         raise RuntimeError("Asked for Multigaussiansersic with n={} not {}<n<{}".format(
                             nser, nsermin, nsermax
                         ))
-
             elif param.name not in mpfobj.Component.optional:
                 errors.append("Unknown param {:s}".format(param.name))
 
@@ -1695,18 +1695,19 @@ class MultiGaussianApproximationProfile(mpfobj.Component):
             if not found:
                 errors.append("Missing mandatory param {:s}".format(paramname))
         if errors:
-            errorstr = "Errors validating params of component (profile={:s}):\n" + \
+            errorstr = "Errors validating params of component (profile={}):\n".format(profile) + \
                        "\n".join(errors) + "\nPassed params:" + str(parameters)
             raise ValueError(errorstr)
 
-    def __init__(self, fluxes, name="", profile="sersic", parameters=None, order=8, weightvars=None):
+    def __init__(self, fluxes, ellipseparams, name="", profile="sersic", parameters=None, order=8,
+                 weightvars=None):
         if profile not in MultiGaussianApproximationProfile.profilesavailable:
             raise ValueError("Profile type={:s} not in available: ".format(profile) + str(
                 MultiGaussianApproximationProfile.profilesavailable))
+        super().__init__(fluxes, ellipseparams, name=name)
         self._checkparameters(parameters, profile, order)
         self.profile = profile
         self.order = order
-        mpfobj.Component.__init__(self, fluxes, name)
         self.parameters = {param.name: param for param in parameters}
 
         # Also shamelessly modified from Tractor
