@@ -26,9 +26,11 @@ import galsim as gs
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
-import multiprofit.gaussutils as mpfgauss
-import multiprofit.utils as mpfutil
 import multiprofit.asinhstretchsigned as mpfasinh
+import multiprofit.gaussutils as mpfgauss
+from multiprofit.limits import Limits
+from multiprofit.transforms import Transform
+import multiprofit.utils as mpfutil
 import numpy as np
 import pyprofit as pyp
 import scipy.stats as spstats
@@ -2068,52 +2070,6 @@ class PointSourceProfile(Component):
         Component.__init__(fluxes=fluxes, name=name)
 
 
-class Transform:
-    @classmethod
-    def null(cls, value):
-        return value
-
-    def __init__(self, transform=None, reverse=None):
-        if transform is None or reverse is None:
-            if transform is not reverse:
-                raise ValueError(
-                    "One of transform (type={:s}) and reverse (type={:s}) is {:s} but "
-                    "both or neither must be".format(type(transform), type(reverse), type(None))
-                 )
-            else:
-                transform = self.null
-                reverse = self.null
-        self.transform = transform
-        self.reverse = reverse
-        # TODO: Verify if forward(reverse(x)) == reverse(forward(x)) +/- error for x in ???
-
-
-class Limits:
-    """
-        Limits for a Parameter.
-    """
-    def within(self, value):
-        return self.lower <= value <= self.upper
-
-    def __init__(self, lower=-np.inf, upper=np.inf, lowerinclusive=True, upperinclusive=True,
-                 transformed=True):
-        isnanlower = np.isnan(lower)
-        isnanupper = np.isnan(upper)
-        if isnanlower or isnanupper:
-            raise ValueError("Limits lower,upper={},{} finite check={},{}".format(
-                lower, upper, isnanlower, isnanupper))
-        if not upper >= lower:
-            raise ValueError("Limits upper={} !>= lower{}".format(lower, upper))
-        # TODO: Should pass in the transform and check if lower
-        if not lowerinclusive:
-            lower = np.nextafter(lower, lower+1.)
-        if not upperinclusive:
-            upper = np.nextafter(upper, upper-1.)
-        self.lower = lower
-        self.upper = upper
-        self.transformed = transformed
-
-
 # TODO: This class needs loads of sanity checks and testing
 class Parameter:
     """
@@ -2160,10 +2116,12 @@ class Parameter:
         for param in self.inheritors:
             param.value = self.value
 
-    def __init__(self, name, value, unit="", limits=None, transform=Transform(), transformed=True, prior=None,
-                 fixed=False, inheritors=None, modifiers=None):
+    def __init__(self, name, value, unit="", limits=None, transform=None, transformed=True,
+                 prior=None, fixed=False, inheritors=None, modifiers=None):
         if prior is not None and not isinstance(prior, Prior):
             raise TypeError("prior (type={:s}) is not an instance of {:s}".format(type(prior), type(Prior)))
+        if transform is None:
+            transform = Transform()
         if limits is None:
             limits = Limits(transformed=transformed)
         if limits.transformed != transformed:

@@ -21,73 +21,20 @@
 
 from collections import OrderedDict
 import csv
-import functools
 import galsim as gs
 import io
 import matplotlib.pyplot as plt
 import multiprofit.gaussutils as mpfgauss
+from multiprofit.limits import limitsref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
 import multiprofit.objects as mpfobj
+from multiprofit.transforms import transformsref, getlogitlimited
 import multiprofit.utils as mpfutil
 import numpy as np
-from scipy import special, stats
+from scipy import stats
 import sys
 import time
 import traceback
-
-
-def logstretch(x, lower, factor=1.0):
-    return np.log10(x-lower)*factor
-
-
-def powstretch(x, lower, factor=1.0):
-    return 10**(x*factor) + lower
-
-
-def getlogstretch(lower, factor=1.0):
-    return mpfobj.Transform(
-        transform=functools.partial(logstretch, lower=lower, factor=factor),
-        reverse=functools.partial(powstretch, lower=lower, factor=1./factor))
-
-
-def logitlimited(x, lower, extent, factor=1.0):
-    return special.logit((x-lower)/extent)*factor
-
-
-def expitlimited(x, lower, extent, factor=1.0):
-    return special.expit(x*factor)*extent + lower
-
-
-def getlogitlimited(lower, upper, factor=1.0):
-    return mpfobj.Transform(
-        transform=functools.partial(logitlimited, lower=lower, extent=upper-lower, factor=factor),
-        reverse=functools.partial(expitlimited, lower=lower, extent=upper-lower, factor=1./factor))
-
-
-transformsref = {
-    "none": mpfobj.Transform(),
-    "log": mpfobj.Transform(transform=np.log, reverse=np.exp),
-    "log10": mpfobj.Transform(transform=np.log10, reverse=functools.partial(np.power, 10.)),
-    "inverse": mpfobj.Transform(transform=functools.partial(np.divide, 1.),
-                                reverse=functools.partial(np.divide, 1.)),
-    "logit": mpfobj.Transform(transform=special.logit, reverse=special.expit),
-    "logitsigned": getlogitlimited(-1, 1),
-    "logitaxrat": getlogitlimited(1e-4, 1),
-    "logitsersic":  getlogitlimited(0.3, 6.2),
-    "logitmultigausssersic": getlogitlimited(0.3, 6.2),
-}
-
-
-# TODO: Replace with a parameter factory and/or profile factory
-limitsref = {
-    "none": mpfobj.Limits(),
-    "fraction": mpfobj.Limits(lower=0., upper=1., transformed=True),
-    "fractionlog10": mpfobj.Limits(upper=0., transformed=True),
-    "axratlog10": mpfobj.Limits(lower=-2., upper=0., transformed=True),
-    "coninverse": mpfobj.Limits(lower=0.1, upper=0.9090909, transformed=True),
-    "nserlog10": mpfobj.Limits(lower=np.log10(0.3), upper=np.log10(6.0), lowerinclusive=False,
-                               upperinclusive=False, transformed=True),
-}
 
 
 class ImageEmpty:
@@ -288,9 +235,9 @@ def getmodel(
         data = None
 
     paramsastrometry = [
-        mpfobj.Parameter("cenx", cenx, "pix", mpfobj.Limits(lower=0., upper=imagesize[0]),
+        mpfobj.Parameter("cenx", cenx, "pix", Limits(lower=0., upper=imagesize[0]),
                          transform=transformsref["none"]),
-        mpfobj.Parameter("ceny", ceny, "pix", mpfobj.Limits(lower=0., upper=imagesize[1]),
+        mpfobj.Parameter("ceny", ceny, "pix", Limits(lower=0., upper=imagesize[1]),
                          transform=transformsref["none"]),
     ]
     modelastro = mpfobj.AstrometricModel(paramsastrometry)
