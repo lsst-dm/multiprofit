@@ -22,6 +22,7 @@
 
 import copy
 import galsim as gs
+import multiprofit.gaussutils as mpfgauss
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 import numpy as np
@@ -1562,7 +1563,8 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
             [value for value in self.parameters.values() if
                 (value.fixed and fixed) or (not value.fixed and free)]
 
-    def getprofiles(self, bandfluxes, engine, cenx, ceny, params=dict(), engineopts=None):
+    def getprofiles(self, bandfluxes, engine, cenx, ceny, params=dict(), engineopts=None,
+                    getderivatives=False):
         self._checkengine(engine)
 
         fluxesbands = {flux.band: flux for flux in self.fluxes}
@@ -1577,27 +1579,39 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
         slope = profile["nser"] if self.profile == "sersic" else None
         if slope is None:
             raise RuntimeError("Can't get multigaussian profiles for profile {}".format(profile))
-        if self.profile == "sersic" and slope <= 0.5:
+        canreturngauss = self.profile == "sersic" and (slope <= 0.5) and (
+            not self.returnallprofiles or self.parameters["nser"].fixed) and not getderivatives
+        if canreturngauss:
             weights = [1]
             sigmas = [1]
             profiles = [{}]
         else:
             if slope in MultiGaussianApproximationProfile.weights[self.profile][self.order]:
                 weights, sigmas = MultiGaussianApproximationProfile.weights[self.profile][self.order][slope]
-                weights[weights < 0] = 0
+                negatives = weights < 0
+                if any(negatives):
+                    raise RuntimeError("MultiGaussianApproximationProfile.weights[{}][{}] = {} "
+                                       "has negative weights in {}".format(self.profile, self.order, weights))
             else:
                 slope = np.log10(slope)
-                weights = np.array([max([f(slope), 0]) for f in self.weightsplines])
+                weights = np.array([f(slope) for f in self.weightsplines])
                 sigmas = np.array([f(slope) for f in self.sigmasplines])
+                negatives = weights < 0
+            weights[negatives] = 0
             if not all([0 <= w <= 1 and (s > 0 or s > 0) for w, s in zip(weights, sigmas)]):
                 raise RuntimeError('Weights {} not all >= 0 and <= 1 and/or sigmas {} not all >=0 for slope '
                                    '{:.4e}'.format(weights, sigmas, slope))
-            weights = mpfutil.normalize(weights)
+            weights, total = mpfutil.normalize(weights, return_sum=True)
+            if getderivatives:
+                dweights = np.array([f.derivatives(slope)[0] for f in self.weightsplines])
+                dsigmas = np.array([f.derivatives(slope)[0] for f in self.sigmasplines])
+                dweights[negatives] = 0
             profiles = [{} for _ in range(self.order)]
 
-        profilebase, radius, axrat, ang = super().getprofiles(
-            bandfluxes, engine, cenx, ceny, params=params, engineopts=engineopts)
-        profilebase["nser"] = 0.5
+        profilebase = super().getprofiles(bandfluxes, engine, cenx, ceny, params, engineopts)[0]
+        sigma, axrat, ang = mpfgauss.covartoellipse(self.ellipseparams)
+        reff = mpfgauss.sigma2reff(sigma)
+        profilebase['nser'] = 0.5
         for band in bandfluxes.keys():
             flux = fluxesbands[band].getvalue(transformed=False)
             profile = profilebase.copy()
@@ -1635,9 +1649,10 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
             profile["resolved"] = True
             profile["fluxparameter"] = fluxesbands[band]
 
-            for subcomp, (weight, sigma) in enumerate(zip(weights, sigmas)):
+            for subcomp, (weight, size) in enumerate(zip(weights, sigmas)):
                 weightprofile = copy.copy(profile)
-                re = radius*sigma
+                weightprofile["sigma_x"] *= size
+                weightprofile["sigma_y"] *= size
                 fluxsub = weight*flux
                 if not fluxsub >= 0:
                     print(np.array([f(slope) for f in self.weightsplines]))
@@ -1646,7 +1661,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                     print(weight, sigma, slope, weightprofile)
                     raise RuntimeError('wtf2 fluxsub !>=0')
                 if engine == "galsim":
-                    profilegs = gs.Gaussian(flux=weight*flux, fwhm=2.0*re*axratsqrt, gsparams=gsparams)
+                    profilegs = gs.Gaussian(flux=weight*flux, sigma=sigma*size*axratsqrt, gsparams=gsparams)
                     weightprofile.update({
                         "profile": profilegs,
                         "shear": gs.Shear(q=axrat, beta=(profile["ang"] + 90.)*gs.degrees),
@@ -1654,7 +1669,10 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                     })
                 elif engine == "libprofit":
                     weightprofile["mag"] = mpfutil.fluxtomag(weight*flux)
-                    weightprofile["re"] = re
+                    weightprofile["re"] = reff*size
+                if getderivatives:
+                    weightprofile["dweight"] = dweights[subcomp]
+                    weightprofile["dsigma"] = dsigmas[subcomp]
                 profiles[subcomp][band] = weightprofile
 
         return profiles
@@ -1700,7 +1718,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
             raise ValueError(errorstr)
 
     def __init__(self, fluxes, ellipseparams, name="", profile="sersic", parameters=None, order=8,
-                 weightvars=None):
+                 weightvars=None, returnallprofiles=False):
         if profile not in MultiGaussianApproximationProfile.profilesavailable:
             raise ValueError("Profile type={:s} not in available: ".format(profile) + str(
                 MultiGaussianApproximationProfile.profilesavailable))
@@ -1709,6 +1727,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
         self.profile = profile
         self.order = order
         self.parameters = {param.name: param for param in parameters}
+        self.returnallprofiles = returnallprofiles
 
         # Also shamelessly modified from Tractor
         # TODO: Update this to raise errors instead of asserting

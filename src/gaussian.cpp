@@ -31,6 +31,14 @@
 #include <utility>
 #include <vector>
 
+#include <type_traits>
+
+template <typename E>
+constexpr auto to_underlying(E e) noexcept
+{
+    return static_cast<std::underlying_type_t<E>>(e);
+}
+
 typedef pybind11::detail::unchecked_reference<double, 2l> MatrixUnchecked;
 typedef pybind11::detail::unchecked_reference<size_t, 2l> MatrixSUnchecked;
 typedef pybind11::detail::unchecked_mutable_reference<double, 1l> ArrayUncheckedMutable;
@@ -263,8 +271,8 @@ const std::vector<double> & Profit2DGaussianIntegrator::integral(
 }
 
 ndarray make_gaussian(
-    const double XCEN, const double YCEN, const double MAG, const double RE,
-    const double ANG, const double AXRAT,
+    const double XCEN, const double YCEN, const double MAG,
+    const double RE, const double AXRAT, const double ANG,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM,
     const double ACC)
@@ -337,6 +345,12 @@ ndarray make_gaussian(
     return mat;
 }
 
+typedef std::vector<double> vecd;
+typedef std::vector<vecd> vecvecd;
+typedef std::unique_ptr<vecd> vecdptr;
+typedef std::vector<vecdptr> vecdptrvec;
+
+
 inline void check_is_matrix(const ndarray * mat, std::string name = "matrix")
 {
     if(mat == nullptr) throw std::invalid_argument("Passed null " + name + " to check_is_matrix");
@@ -356,32 +370,42 @@ inline void check_is_jacobian(const ndarray * mat, std::string name = "matrix")
 }
 
 const size_t NGAUSSPARAMS = 6;
-inline void check_is_gaussians(const ndarray & mat)
+const size_t NGAUSSPARAMSCONV = 9;
+inline void check_is_gaussians(const ndarray & mat, bool isconv=true)
 {
     check_is_matrix(&mat, "Gaussian parameter matrix");
-    if(mat.shape(1) != NGAUSSPARAMS)
+    const size_t LENGTH = isconv ? NGAUSSPARAMSCONV : NGAUSSPARAMS;
+    if(mat.shape(1) != LENGTH)
     {
         throw std::invalid_argument("Passed Gaussian parameter matrix with shape=[" +
-            std::to_string(mat.shape(0)) + ", " + std::to_string(mat.shape(1)) + "!=6]");
+            std::to_string(mat.shape(0)) + ", " + std::to_string(mat.shape(1)) + "!=" +
+            std::to_string(LENGTH) + "]");
     }
 }
 
+struct GaussianMoments
+{
+    vecdptr x;
+    vecdptr x_norm;
+    vecdptr xx;
+};
 
-inline std::pair<std::pair<std::vector<double>, std::vector<double>>, std::vector<double>>
+inline GaussianMoments
 gaussian_pixel_x_xx(const double XCEN, const double XMIN, const double XBIN, const unsigned int XDIM,
     const double XXNORMINV, const double XYNORMINV)
 {
     const double XINIT = XMIN - XCEN + XBIN/2.;
-    std::vector<double> x(XDIM);
-    std::vector<double> xx(XDIM);
-    std::vector<double> xnorm(XDIM);
+    vecdptr x = std::make_unique<vecd>(XDIM);
+    vecdptr xx = std::make_unique<vecd>(XDIM);
+    vecdptr x_norm = std::make_unique<vecd>(XDIM);
     for(unsigned int i = 0; i < XDIM; i++)
     {
-        x[i] = XINIT + i*XBIN;
-        xx[i] = x[i]*x[i]*XXNORMINV;
-        xnorm[i] = x[i]*XYNORMINV;
+        double dist = XINIT + i*XBIN;
+        (*x)[i] = dist;
+        (*xx)[i] = dist*dist*XXNORMINV;
+        (*x_norm)[i] = dist*XYNORMINV;
     }
-    return {{x, xnorm}, xx};
+    return GaussianMoments({std::move(x), std::move(x_norm), std::move(xx)});
 }
 
 inline void gaussian_pixel(ndarray & mat, const double NORM, const double XCEN, const double YCEN,
@@ -394,8 +418,8 @@ inline void gaussian_pixel(ndarray & mat, const double NORM, const double XCEN, 
     const unsigned int YDIM = mat.shape(0);
 
     const auto YVALS = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, YYNORMINV, XYNORMINV);
-    const std::vector<double> & YN = YVALS.first.second;
-    const std::vector<double> & YY = YVALS.second;
+    const vecd & YN = *(YVALS.x_norm);
+    const vecd & YY = *(YVALS.xx);
 
     auto matref = mat.mutable_unchecked<2>();
     double x = XMIN-XCEN+XBIN/2.;
@@ -495,6 +519,14 @@ Covar ellipse_to_covar(const double SIGMAMAJ, const double AXRAT, const double A
     return rval;
 }
 
+Covar convolution(const Covar & C, const Covar & K)
+{
+    const double sigx = sqrt(C.sigx*C.sigx + K.sigx*K.sigx);
+    const double sigy = sqrt(C.sigy*C.sigy + K.sigy*K.sigy);
+    return Covar{sigx, sigy, (C.rho*C.sigx*C.sigy + K.rho*K.sigx*K.sigy)/(sigx*sigy)};
+}
+
+
 // Various multiplicative terms that appread in a Gaussian PDF
 struct TermsGaussPDF
 {
@@ -516,6 +548,127 @@ TermsGaussPDF terms_from_covar(const double NORM, const Covar & COV)
     return rval;
 }
 
+class GaussianTerms
+{
+public:
+    vecdptr norms = nullptr;
+    vecdptr xmc = nullptr;
+    vecdptr xmc_norm = nullptr;
+    vecdptrvec ymc_norm;
+    vecdptr norms_xx = nullptr;
+    vecdptr xsqs = nullptr;
+    vecdptrvec yy_norm;
+    // TODO: Give these variables more compelling names
+
+    GaussianTerms(size_t ngauss)
+    {
+        this->norms = std::make_unique<vecd>(ngauss);
+        this->xmc = std::make_unique<vecd>(ngauss);
+        this->xmc_norm = std::make_unique<vecd>(ngauss);
+        ymc_norm.resize(ngauss);
+        this->norms_xx = std::make_unique<vecd>(ngauss);
+        this->xsqs = std::make_unique<vecd>(ngauss);
+        yy_norm.resize(ngauss);
+    }
+
+    void set(size_t g, double norm, double xmc, double xx, vecdptr y_norm, vecdptr yy)
+    {
+        (*(this->norms))[g] = norm;
+        (*(this->xmc))[g] = xmc;
+        (*(this->norms_xx))[g] = xx;
+        this->ymc_norm[g] = std::move(y_norm);
+        this->yy_norm[g] = std::move(yy);
+    }
+};
+
+class GradientTerms
+{
+public:
+    vecdptrvec ymc;
+    vecdptr xx_factor = nullptr;
+    vecdptr xy_factor = nullptr;
+    vecdptr yy_factor = nullptr;
+    vecdptr rho_factor = nullptr;
+    vecdptr sig_x_inv = nullptr;
+    vecdptr sig_y_inv = nullptr;
+    vecdptr rho_xy_factor = nullptr;
+    vecdptr sig_x_src_div_conv = nullptr;
+    vecdptr sig_y_src_div_conv = nullptr;
+    vecdptr drho_c_dsig_x_src = nullptr;
+    vecdptr drho_c_dsig_y_src = nullptr;
+    vecdptr drho_c_drho_s = nullptr;
+    vecdptr xsnormxy = nullptr;
+
+    GradientTerms(size_t ngauss = 0)
+    {
+        if(ngauss > 0)
+        {
+            this->ymc.resize(ngauss);
+            this->xx_factor = std::make_unique<vecd>(ngauss);
+            this->xy_factor = std::make_unique<vecd>(ngauss);
+            this->yy_factor = std::make_unique<vecd>(ngauss);
+            this->rho_factor = std::make_unique<vecd>(ngauss);
+            this->sig_x_inv = std::make_unique<vecd>(ngauss);
+            this->sig_y_inv = std::make_unique<vecd>(ngauss);
+            this->rho_xy_factor = std::make_unique<vecd>(ngauss);
+            this->sig_x_src_div_conv = std::make_unique<vecd>(ngauss);
+            this->sig_y_src_div_conv = std::make_unique<vecd>(ngauss);
+            this->drho_c_dsig_x_src = std::make_unique<vecd>(ngauss);
+            this->drho_c_dsig_y_src = std::make_unique<vecd>(ngauss);
+            this->drho_c_drho_s = std::make_unique<vecd>(ngauss);
+            this->xsnormxy = std::make_unique<vecd>(ngauss);
+        }
+    }
+
+    void set(size_t g, double l, const TermsGaussPDF & TERMS, const Covar & COVSRC, const Covar & COVPSF,
+        const Covar & COV, vecdptr ymc)
+    {
+        this->ymc[g] = std::move(ymc);
+        const double SIGXY = COV.sigx*COV.sigy;
+        (*(this->xx_factor))[g] = TERMS.xx;
+        (*(this->xy_factor))[g] = TERMS.xy;
+        (*(this->yy_factor))[g] = TERMS.yy;
+        (*(this->rho_factor))[g] = COV.rho/(1. - COV.rho*COV.rho);
+        (*(this->sig_x_inv))[g] = 1/COV.sigx;
+        (*(this->sig_y_inv))[g] = 1/COV.sigy;
+        (*(this->rho_xy_factor))[g] = 1./(1. - COV.rho*COV.rho)/SIGXY;
+        /*
+
+    sigma_conv = sqrt(sigma_src^2 + sigma_psf^2)
+    https://www.wolframalpha.com/input/?i=d(sqrt(x%5E2%2By%5E2))%2Fdx
+    dsigma_conv/dsigma_src = sigma_src/sigma_conv
+    df/dsigma_src = df/d_sigma_conv * dsigma_conv/dsigma_src
+
+    rho_conv*sigmaxy_conv = rho_src*sigmaxy_src + rho_psf*sigmaxy_psf
+    rho_conv = (rho_src*sigmaxy_src + rho_psf*sigmaxy_psf)/sigmaxy_conv
+    drho_conv/drho_src = sigmaxy_src/sigmaxy_conv
+
+    drho_conv/dsigmax_src = rho_src*sigmay_src/sigmay_conv*sigmax_psf^2/sigmax_conv^3 (*sigmax_src/sigmax_src)
+                          = rho_conv/sigmax_src*(sigmax_psf/sigmax_conv)^2
+        + rho_psf*sigmax_psf*sigmay_psf*sigmax_src/sigmay_conv/sigmax_conv^3
+
+        */
+        double sig_x_src_div_conv = COVSRC.sigx/COV.sigx;
+        double sig_y_src_div_conv = COVSRC.sigy/COV.sigy;
+        (*(this->sig_x_src_div_conv))[g] = sig_x_src_div_conv;
+        (*(this->sig_y_src_div_conv))[g] = sig_y_src_div_conv;
+        double offdiagpsf_dsigxy = COVPSF.rho*COVPSF.sigx*COVPSF.sigy/SIGXY;
+        if(COVPSF.sigx > 0)
+        {
+            double sig_p_ratio = COVPSF.sigx/COV.sigx;
+            (*(this->drho_c_dsig_x_src))[g] = COVSRC.rho*sig_y_src_div_conv*sig_p_ratio*sig_p_ratio/COV.sigx -
+                offdiagpsf_dsigxy*(COVSRC.sigx/COV.sigx)/COV.sigx;
+        }
+        if(COVPSF.sigy > 0)
+        {
+            double sig_p_ratio = COVPSF.sigy/COV.sigy;
+            (*(this->drho_c_dsig_y_src))[g] = COVSRC.rho*sig_x_src_div_conv*sig_p_ratio*sig_p_ratio/COV.sigy -
+                offdiagpsf_dsigxy*(COVSRC.sigy/COV.sigy)/COV.sigy;
+        }
+        (*(this->drho_c_drho_s))[g] = COVSRC.sigx*COVSRC.sigy/SIGXY;
+    }
+};
+
 // Evaluate a Gaussian on a grid given the three elements of the symmetric covariance matrix
 // Actually, rho is scaled by sigx and sigy (i.e. the covariance is RHO*SIGX*SIGY)
 ndarray make_gaussian_pixel_covar(const double XCEN, const double YCEN, const double L,
@@ -536,8 +689,8 @@ ndarray make_gaussian_pixel_covar(const double XCEN, const double YCEN, const do
 
 // Evaluate a Gaussian on a grid given R_e, the axis ratio and position angle
 ndarray make_gaussian_pixel(
-    const double XCEN, const double YCEN, const double L, const double R,
-    const double ANG, const double AXRAT,
+    const double XCEN, const double YCEN, const double L,
+    const double R, const double AXRAT, const double ANG,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM)
 {
@@ -557,8 +710,8 @@ ndarray make_gaussian_pixel(
 }
 
 ndarray make_gaussian_pixel_sersic(
-    const double XCEN, const double YCEN, const double L, const double R,
-    const double ANG, const double AXRAT,
+    const double XCEN, const double YCEN, const double L,
+    const double R, const double AXRAT, const double ANG,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM)
 {
@@ -597,12 +750,13 @@ ndarray make_gaussian_pixel_sersic(
     return mat;
 }
 
-typedef std::array<double, NGAUSSPARAMS> GaussParams;
+typedef std::array<double, NGAUSSPARAMS> GaussWeights;
 enum class OutputType : unsigned char
 {
     none      = 0,
     overwrite = 1,
     add       = 2,
+    residual  = 3,
 };
 enum class GradientType : unsigned char
 {
@@ -616,25 +770,36 @@ inline void gaussians_pixel_output(MatrixUncheckedMutable & output, double value
     unsigned int dim2) {};
 
 template <>
-inline void gaussians_pixel_output<OutputType::overwrite>(MatrixUncheckedMutable & output, double value,
+inline void gaussians_pixel_output<OutputType::overwrite>(MatrixUncheckedMutable & output, const double value,
     unsigned int dim1, unsigned int dim2)
 {
     output(dim1, dim2) = value;
 }
 
 template <>
-inline void gaussians_pixel_output<OutputType::add>(MatrixUncheckedMutable & output, double value,
+inline void gaussians_pixel_output<OutputType::add>(MatrixUncheckedMutable & output, const double value,
     unsigned int dim1, unsigned int dim2)
 {
     output(dim1, dim2) += value;
 }
 
-template <bool getlikelihood>
-inline void gaussians_pixel_getlikelihood(double & loglike, const double model, const MatrixUnchecked & DATA,
+template <OutputType output_type>
+inline void gaussians_pixel_residual(MatrixUncheckedMutable & output, const MatrixUnchecked & DATA,
+    double model, unsigned int dim1, unsigned int dim2) {};
+
+template <>
+inline void gaussians_pixel_residual<OutputType::residual>(MatrixUncheckedMutable & output,
+    const MatrixUnchecked & DATA, const double model, unsigned int dim1, unsigned int dim2)
+{
+    output(dim1, dim2) = DATA(dim1, dim2) - model;
+}
+
+template <bool getlikelihood, GradientType gradient_type>
+inline void gaussians_pixel_add_like(double & loglike, const double model, const MatrixUnchecked & DATA,
     const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2, const bool VARISMAT) {};
 
 template <>
-inline void gaussians_pixel_getlikelihood<true>(double & loglike, const double model,
+inline void gaussians_pixel_add_like<true, GradientType::none>(double & loglike, const double model,
     const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
     const bool VARISMAT)
 {
@@ -643,21 +808,6 @@ inline void gaussians_pixel_getlikelihood<true>(double & loglike, const double m
     loglike -= (diff*(diff*VARINVERSE(dim1*VARISMAT, dim2*VARISMAT)))/2.;
 }
 
-// Computes dmodel/dx for x in [cenx, ceny, flux, sigma_x, sigma_y, rho]
-template <GradientType gradient_type>
-inline void gaussians_pixel_getmodelgrad(GaussParams & output, const double m,
-    const double xmc_norm, const double ymc_norm,const double xmc, const double ymc, const double norms_yy,
-    const double xsnormxy, const double l_inv, const double sig_x_inv, const double sig_y_inv,
-    const double xy, const double xx_norm, const double yy_norm, const double rho_div_one_m_rhosq,
-    const double norms_xy_div_rho) {};
-
-template <>
-inline void gaussians_pixel_getmodelgrad<GradientType::loglike>(GaussParams & output, const double m,
-    const double xmc_norm, const double ymc_norm, const double xmc, const double ymc, const double norms_yy,
-    const double xsnormxy, const double l_inv, const double sig_x_inv, const double sig_y_inv,
-    const double xy, const double xx_norm, const double yy_norm, const double rho_div_one_m_rhosq,
-    const double norms_xy_div_rho)
-{
 /*
     m = L*XBIN*YBIN/(2.*M_PI*COV.sigx*COV.sigy)/sqrt(1-COV.rho*COV.rho) * exp(-(
         + xmc[g]^2/COV.sigx^2/(2*(1-COV.rho*COV.rho))
@@ -684,58 +834,97 @@ inline void gaussians_pixel_getmodelgrad<GradientType::loglike>(GaussParams & ou
     exp(-((x-m)%5E2*s%5E2+%2B+(y-n)%5E2*t%5E2+-+2*r*(x-m)*(y-n)*s*t)%2F(2*(1-r%5E2)))+wrt+s
 
 */
-    output[0] = m*(2*xmc_norm - ymc_norm);
-    // TODO: The ymc*norms_yy term could also be cached
-    output[1] = m*(2*ymc*norms_yy - xsnormxy);
-    output[2] = m*l_inv;
-    // factors for reff=2 ang=45: 2.848, ang=30:3.28, reff=4 ang=30: -12.4 ang=45: -13.255??
-    double onepxy = 1. + xy;
-    // TODO: Determine why this doesn't seem to return the right answer
-    // It seems to work for rho=0, so the xy term is the likely suspect
-    output[3] = m*sig_x_inv*(2*xx_norm - onepxy);
-    output[4] = m*sig_y_inv*(2*yy_norm - onepxy);
-    // The last term could be reduced to xy/rho for rho > 0
-    output[5] = m*(rho_div_one_m_rhosq*(1 - 2*(xx_norm + yy_norm - xy)) + xmc*ymc*norms_xy_div_rho);
+inline void gaussian_pixel_add_jacobian(
+    double & cenx, double & ceny, double & l, double & sigx, double & sigy, double & rho,
+    const double cenxweight, const double cenyweight, const double lweight,
+    const double sigxweight, const double sigyweight, const double rhoweight,
+    const double m, const double m_unweight,
+    const double xmc_norm, const double ymc_norm, const double xmc, const double ymc,
+    const double norms_yy, const double xsnormxy, const double sig_x_inv, const double sig_y_inv,
+    const double xy_norm, const double xx_norm, const double yy_norm,
+    const double rho_div_one_m_rhosq, const double norms_xy_div_rho,
+    const double dsig_x_conv_src = 1, const double dsig_y_conv_src = 1,
+    const double drho_c_dsig_x_src = 0, const double drho_c_dsig_y_src = 0,
+    const double drho_c_drho_s = 1)
+{
+    cenx += cenxweight*m*(2*xmc_norm - ymc_norm);
+    ceny += cenyweight*m*(2*ymc*norms_yy - xsnormxy);
+    l += lweight*m_unweight;
+    const double onepxy = 1. + xy_norm;
+    //df/dsigma_src = df/d_sigma_conv * dsigma_conv/dsigma_src
+    const double dfdrho_c = m*(
+            rho_div_one_m_rhosq*(1 - 2*(xx_norm + yy_norm - xy_norm)) + xmc*ymc*norms_xy_div_rho);
+    sigx += sigxweight*(dfdrho_c*drho_c_dsig_x_src + dsig_x_conv_src*(m*sig_x_inv*(2*xx_norm - onepxy)));
+    sigy += sigyweight*(dfdrho_c*drho_c_dsig_y_src + dsig_y_conv_src*(m*sig_y_inv*(2*yy_norm - onepxy)));
+    //drho_conv/drho_src = sigmaxy_src/sigmaxy_conv
+    rho += rhoweight*dfdrho_c*drho_c_drho_s;
 }
 
 template <GradientType gradient_type>
-inline void gaussians_pixel_getmodeljac(Array3UncheckedMutable & output,
-    MatrixSUnchecked & grad_param_map, const size_t g, unsigned int dim1, unsigned int dim2, const double m,
-    const double xmc_norm, const double ymc_norm,const double xmc, const double ymc, const double norms_yy,
-    const double xsnormxy, const double l_inv, const double sig_x_inv, const double sig_y_inv,
-    const double xy_norm, const double xx_norm, const double yy_norm, const double rho_div_one_m_rhosq,
-    const double norms_xy_div_rho) {};
+inline void gaussian_pixel_add_jacobian_type(Array3UncheckedMutable & output,
+    const MatrixSUnchecked & grad_param_map, const MatrixUnchecked & grad_param_factor, const size_t g,
+    unsigned int dim1, unsigned int dim2, const double m, const double m_unweight,
+    const double xmc_norm, const double ymc_norm, const double xmc, const double ymc,
+    const double norms_yy, const double xsnormxy, const double sig_x_inv, const double sig_y_inv,
+    const double xy_norm, const double xx_norm, const double yy_norm,
+    const double rho_div_one_m_rhosq, const double norms_xy_div_rho,
+    const double dsig_x_conv_src, const double dsig_y_conv_src,
+    const double drho_dsig_x_src, const double drho_dsig_y_src,
+    const double drho_c_drho_s) {};
 
 template <>
-inline void gaussians_pixel_getmodeljac<GradientType::jacobian>(Array3UncheckedMutable & output,
-    MatrixSUnchecked & grad_param_map, const size_t g, unsigned int dim1, unsigned int dim2, const double m,
-    const double xmc_norm, const double ymc_norm, const double xmc, const double ymc, const double norms_yy,
-    const double xsnormxy, const double l_inv, const double sig_x_inv, const double sig_y_inv,
-    const double xy_norm, const double xx_norm, const double yy_norm, const double rho_div_one_m_rhosq,
-    const double norms_xy_div_rho)
+inline void gaussian_pixel_add_jacobian_type<GradientType::jacobian>(Array3UncheckedMutable & output,
+    const MatrixSUnchecked & grad_param_map, const MatrixUnchecked & grad_param_factor, const size_t g,
+    unsigned int dim1, unsigned int dim2, const double m, const double m_unweight,
+    const double xmc_norm, const double ymc_norm, const double xmc, const double ymc,
+    const double norms_yy, const double xsnormxy, const double sig_x_inv, const double sig_y_inv,
+    const double xy_norm, const double xx_norm, const double yy_norm,
+    const double rho_div_one_m_rhosq, const double norms_xy_div_rho,
+    const double dsig_x_conv_src, const double dsig_y_conv_src,
+    const double drho_dsig_x_src, const double drho_dsig_y_src,
+    const double drho_c_drho_s)
 {
-    output(dim1, dim2, grad_param_map(g, 0)) += m*(2*xmc_norm - ymc_norm);
-    output(dim1, dim2, grad_param_map(g, 1)) += m*(2*ymc*norms_yy - xsnormxy);
-    output(dim1, dim2, grad_param_map(g, 2)) += m*l_inv;
-    double onepxy = 1. + xy_norm;
-    output(dim1, dim2, grad_param_map(g, 3)) += m*sig_x_inv*(2*xx_norm - onepxy);
-    output(dim1, dim2, grad_param_map(g, 4)) += m*sig_y_inv*(2*yy_norm - onepxy);
-    output(dim1, dim2, grad_param_map(g, 5)) +=
-        m*(rho_div_one_m_rhosq*(1 - 2*(xx_norm + yy_norm - xy_norm)) + xmc*ymc*norms_xy_div_rho);
+    gaussian_pixel_add_jacobian(
+        output(dim1, dim2, grad_param_map(g, 0)), output(dim1, dim2, grad_param_map(g, 1)),
+        output(dim1, dim2, grad_param_map(g, 2)), output(dim1, dim2, grad_param_map(g, 3)),
+        output(dim1, dim2, grad_param_map(g, 4)), output(dim1, dim2, grad_param_map(g, 5)),
+        grad_param_factor(g, 0), grad_param_factor(g, 1), grad_param_factor(g, 2),
+        grad_param_factor(g, 3), grad_param_factor(g, 4), grad_param_factor(g, 5),
+        m, m_unweight, xmc_norm, ymc_norm, xmc, ymc, norms_yy, xsnormxy, sig_x_inv, sig_y_inv,
+        xy_norm, xx_norm, yy_norm, rho_div_one_m_rhosq, norms_xy_div_rho,
+        dsig_x_conv_src, dsig_y_conv_src, drho_dsig_x_src, drho_dsig_y_src, drho_c_drho_s
+    );
+}
+
+
+// Computes dmodel/dx for x in [cenx, ceny, flux, sigma_x, sigma_y, rho]
+template <GradientType gradient_type>
+inline void gaussian_pixel_set_weights(GaussWeights & output, const double m,
+    const double m_unweight, const double xy) {};
+
+template <>
+inline void gaussian_pixel_set_weights<GradientType::loglike>(GaussWeights & output, const double m,
+    const double m_unweight, const double xy)
+{
+    output[0] = m;
+    output[1] = m_unweight;
+    output[2] = xy;
 }
 
 // Computes and stores LL along with dll/dx for all components
 template <bool getlikelihood, GradientType gradient_type>
-inline void gaussians_pixel_getlikegrad(ArrayUncheckedMutable & output,
-    MatrixSUnchecked & grad_param_map, const size_t ngauss, const std::vector<GaussParams> & gradmodels,
-    double & loglike, const double model, const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE,
-    unsigned int dim1, unsigned int dim2, const bool VARISMAT) {};
+inline void gaussians_pixel_add_like_grad(ArrayUncheckedMutable & output,
+    MatrixSUnchecked & grad_param_map, MatrixUnchecked & grad_param_factor, const size_t ngauss,
+    const std::vector<GaussWeights> & gaussweights, double & loglike, const double model,
+    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
+    const bool VARISMAT, const GaussianTerms & gaussterms, const GradientTerms & gradterms) {};
 
 template <>
-inline void gaussians_pixel_getlikegrad<true, GradientType::loglike>(ArrayUncheckedMutable & output,
-    MatrixSUnchecked & grad_param_map, const size_t ngauss, const std::vector<GaussParams> & gradmodels,
-    double & loglike, const double model, const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE,
-    unsigned int dim1, unsigned int dim2, const bool VARISMAT)
+inline void gaussians_pixel_add_like_grad<true, GradientType::loglike>(ArrayUncheckedMutable & output,
+    MatrixSUnchecked & grad_param_map, MatrixUnchecked & grad_param_factor, const size_t ngauss,
+    const std::vector<GaussWeights> & gaussweights, double & loglike, const double model,
+    const MatrixUnchecked & DATA, const MatrixUnchecked & VARINVERSE, unsigned int dim1, unsigned int dim2,
+    const bool VARISMAT, const GaussianTerms & gaussterms, const GradientTerms & gradterms)
 {
     double diff = DATA(dim1, dim2) - model;
     double diffvar = diff*VARINVERSE(dim1*VARISMAT, dim2*VARISMAT);
@@ -750,14 +939,47 @@ inline void gaussians_pixel_getlikegrad<true, GradientType::loglike>(ArrayUnchec
     loglike -= diff*diffvar/2.;
     for(size_t g = 0; g < ngauss; ++g)
     {
-        const GaussParams & grads = gradmodels[g];
-        output(grad_param_map(g, 0)) += grads[0]*diffvar;
-        output(grad_param_map(g, 1)) += grads[1]*diffvar;
-        output(grad_param_map(g, 2)) += grads[2]*diffvar;
-        output(grad_param_map(g, 3)) += grads[3]*diffvar;
-        output(grad_param_map(g, 4)) += grads[4]*diffvar;
-        output(grad_param_map(g, 5)) += grads[5]*diffvar;
+        const GaussWeights & weights = gaussweights[g];
+        gaussian_pixel_add_jacobian(
+            output(grad_param_map(g, 0)), output(grad_param_map(g, 1)), output(grad_param_map(g, 2)),
+            output(grad_param_map(g, 3)), output(grad_param_map(g, 4)), output(grad_param_map(g, 5)),
+            grad_param_factor(g, 0), grad_param_factor(g, 1), grad_param_factor(g, 2),
+            grad_param_factor(g, 3), grad_param_factor(g, 4), grad_param_factor(g, 5),
+            weights[0]*diffvar, weights[1]*diffvar,
+            (*(gaussterms.xmc_norm))[g], (*(gaussterms.ymc_norm[g]))[dim1],
+            (*(gaussterms.xmc))[g], (*(gradterms.ymc[g]))[dim1],
+            (*(gradterms.yy_factor))[g], (*(gradterms.xsnormxy))[g],
+            (*(gradterms.sig_x_inv))[g], (*(gradterms.sig_y_inv))[g], weights[2],
+            (*(gaussterms.xsqs))[g], (*(gaussterms.yy_norm[g]))[dim1],
+            (*(gradterms.rho_factor))[g], (*(gradterms.rho_xy_factor))[g],
+            (*(gradterms.sig_x_src_div_conv))[g], (*(gradterms.sig_y_src_div_conv))[g],
+            (*(gradterms.drho_c_dsig_x_src))[g], (*(gradterms.drho_c_dsig_y_src))[g],
+            (*(gradterms.drho_c_drho_s))[g]
+        );
     }
+}
+
+template <GradientType gradient_type>
+double gaussian_pixel_add_all(size_t g, size_t j, size_t i, double weight, const GaussianTerms & gaussterms,
+    Array3UncheckedMutable & output_jac_ref, const MatrixSUnchecked & grad_param_map_ref,
+    const MatrixUnchecked & grad_param_factor_ref, std::vector<GaussWeights> & gradweights, 
+    const GradientTerms & gradterms)
+{
+    double xy = (*(gaussterms.xmc))[g]*(*(gaussterms.ymc_norm[g]))[j];
+    double value_unweight = (*(gaussterms.norms))[g]*exp(
+            -((*(gaussterms.xsqs))[g] + (*(gaussterms.yy_norm[g]))[j] - xy));
+    double value = weight*value_unweight;
+    gaussian_pixel_set_weights<gradient_type>(gradweights[g], value, value_unweight, xy);
+    gaussian_pixel_add_jacobian_type<gradient_type>(output_jac_ref, grad_param_map_ref,
+        grad_param_factor_ref, g, j, i, value, value_unweight,
+        (*(gaussterms.xmc_norm))[g], (*(gaussterms.ymc_norm[g]))[j], (*(gaussterms.xmc))[g],
+        (*(gradterms.ymc[g]))[j], (*(gradterms.yy_factor))[g], (*(gradterms.xsnormxy))[g],
+        (*(gradterms.sig_x_inv))[g], (*(gradterms.sig_y_inv))[g], xy, (*(gaussterms.xsqs))[g],
+        (*(gaussterms.yy_norm[g]))[j], (*(gradterms.rho_factor))[g], (*(gradterms.rho_xy_factor))[g],
+        (*(gradterms.sig_x_src_div_conv))[g], (*(gradterms.sig_y_src_div_conv))[g],
+        (*(gradterms.drho_c_dsig_x_src))[g], (*(gradterms.drho_c_dsig_y_src))[g],
+        (*(gradterms.drho_c_drho_s))[g]);
+    return value;
 }
 
 // Compute Gaussian mixtures with the option to write output and/or evaluate the log likehood
@@ -765,7 +987,7 @@ inline void gaussians_pixel_getlikegrad<true, GradientType::loglike>(ArrayUnchec
 // The template arguments ensure that there is no performance penalty to any of the versions of this function.
 // However, some messy validation is required as a result.
 template <OutputType output_type, bool getlikelihood, GradientType gradient_type>
-double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_is_covar,
+double gaussians_pixel_template(const paramsgauss & GAUSSIANS,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const ndarray * const DATA, const ndarray * const VARINVERSE, ndarray * output = nullptr,
     ndarray * grads = nullptr, ndarray_s * grad_param_map = nullptr, ndarray * grad_param_factor = nullptr)
@@ -802,6 +1024,7 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_
     }
     const size_t NGAUSSIANS = GAUSSIANS.shape(0);
     std::unique_ptr<ndarray_s> grad_param_map_default;
+    std::unique_ptr<ndarray> grad_param_factor_default;
     ArrayUncheckedMutable outputgradref = gradient_type == GradientType::loglike ?
         (*grads).mutable_unchecked<1>() : (*array_null).mutable_unchecked<1>();
     Array3UncheckedMutable output_jac_ref = gradient_type == GradientType::jacobian ?
@@ -810,12 +1033,15 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_
         (gradient_type == GradientType::jacobian ? output_jac_ref.shape(2) : 0);
     if(do_gradient)
     {
-        if(grad_param_map == nullptr or (*grad_param_map).size() == 0)
+        const size_t NPARAMS_GRAD = NGAUSSIANS*NGAUSSPARAMS;
+        const bool has_grad_param_map = grad_param_map != nullptr and (*grad_param_map).size() != 0;
+        const bool has_grad_param_factor = grad_param_factor != nullptr and (*grad_param_factor).size() != 0;
+        if(!has_grad_param_map)
         {
-            if(NPARAMS != NGAUSSIANS*NGAUSSPARAMS)
+            if(NPARAMS != NPARAMS_GRAD)
             {
                 throw std::runtime_error("Passed gradient vector of size=" + std::to_string(NPARAMS) +
-                    "!= default mapping size of ngaussiansx6=" + std::to_string(NGAUSSIANS*NGAUSSPARAMS));
+                   "!= default mapping size of ngaussiansx6=" + std::to_string(NPARAMS_GRAD));
             }
             grad_param_map_default = std::make_unique<ndarray_s>(
                 pybind11::array::ShapeContainer({NGAUSSIANS, NGAUSSPARAMS}));
@@ -828,6 +1054,56 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_
                 {
                     grad_param_map_ref(g, p) = index++;
                 }
+            }
+        }
+        if(!has_grad_param_factor)
+        {
+            grad_param_factor_default = std::make_unique<ndarray>(
+                pybind11::array::ShapeContainer({NGAUSSIANS, NGAUSSPARAMS}));
+            grad_param_factor = grad_param_factor_default.get();
+            MatrixUncheckedMutable grad_param_factor_ref = (*grad_param_factor).mutable_unchecked<2>();
+            for(size_t g = 0; g < NGAUSSIANS; ++g)
+            {
+                for(size_t p = 0; p < NGAUSSPARAMS; ++p)
+                {
+                    grad_param_factor_ref(g, p) = 1.;
+                }
+            }
+        }
+        else
+        {
+            /*
+            MatrixUnchecked grad_param_factor_ref = (*grad_param_factor).unchecked<2>();
+            for(size_t g = 0; g < NGAUSSIANS; ++g)
+            {
+                for(size_t p = 0; p < NGAUSSPARAMS; ++p)
+                {
+                    std::cout << grad_param_factor_ref(g, p) << ",";
+                }
+                std::cout << std::endl;
+            }
+            */
+        }
+        if(has_grad_param_map or has_grad_param_factor)
+        {
+            auto & grad_param_map_ref = *grad_param_map;
+            auto & grad_param_factor_ref = *grad_param_factor;
+            const size_t ndim_map = grad_param_map_ref.ndim();
+            const size_t ndim_fac = grad_param_factor_ref.ndim();
+            if(ndim_map != 2 or ndim_fac != 2) throw std::runtime_error(
+                "grad_param_map ndim=" + std::to_string(ndim_map) + " and/or grad_param_factor ndim=" +
+                std::to_string(ndim_fac) + " != 2");
+            const size_t rows_map = grad_param_map_ref.shape(0);
+            const size_t cols_map = grad_param_map_ref.shape(1);
+            const size_t rows_fac = grad_param_factor_ref.shape(0);
+            const size_t cols_fac = grad_param_factor_ref.shape(1);
+            if(rows_map != NGAUSSIANS or rows_map != rows_fac or cols_map != NGAUSSPARAMS or
+                cols_map != cols_fac)
+            {
+                throw std::runtime_error("grad_param_map shape (" + std::to_string(rows_map) + "," +
+                    std::to_string(cols_map) + ") and/or grad_param_factor shape (" +
+                    std::to_string(rows_fac) + "," + std::to_string(cols_fac) + ") != (" +
+                    std::to_string(NGAUSSIANS) + "," + std::to_string(NGAUSSPARAMS) + ")");
             }
         }
     }
@@ -878,53 +1154,34 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_
     }
     const double XBIN=(XMAX-XMIN)/XDIM;
     const double YBIN=(YMAX-YMIN)/YDIM;
+    const double XBINHALF = XBIN/2.;
 
-    std::vector<std::vector<double>> ymc_norm;
-    std::vector<std::vector<double>> yy_norm;
-    // TODO: Give these variables more compelling names
-    std::vector<double> xmc(NGAUSSIANS);
-    std::vector<double> norms_xx(NGAUSSIANS);
-    std::vector<double> norms(NGAUSSIANS);
+    GaussianTerms gaussterms(NGAUSSIANS);
     // These are to store pre-computed values for gradients and are unused otherwise
     // TODO: Move these into a simple class/struct
     const size_t ngaussgrad = NGAUSSIANS*(do_gradient);
-    std::vector<std::vector<double>> ymc;
-    std::vector<double> l_inv(ngaussgrad);
-    std::vector<double> norms_xy(ngaussgrad);
-    std::vector<double> norms_yy(ngaussgrad);
-    std::vector<double> rho_div_one_m_rhosq(ngaussgrad);
-    std::vector<double> sig_x_inv(ngaussgrad);
-    std::vector<double> sig_y_inv(ngaussgrad);
-    std::vector<double> norms_xy_div_rho(ngaussgrad);
-    std::vector<GaussParams> gradmodels(NGAUSSIANS*(gradient_type == GradientType::loglike), GaussParams());
+    GradientTerms gradterms(ngaussgrad);
+    std::vector<GaussWeights> gradweights(NGAUSSIANS*(gradient_type == GradientType::loglike),
+        GaussWeights());
     const MatrixUnchecked GAUSSIANSREF = GAUSSIANS.unchecked<2>();
     for(size_t g = 0; g < NGAUSSIANS; ++g)
     {
         const double XCEN = GAUSSIANSREF(g, 0);
         const double YCEN = GAUSSIANSREF(g, 1);
         const double L = GAUSSIANSREF(g, 2);
-        const Covar COV = gauss_is_covar ? Covar{GAUSSIANSREF(g, 3), GAUSSIANSREF(g, 4), GAUSSIANSREF(g, 5)} :
-            ellipse_to_covar(reff_to_sigma_gauss(GAUSSIANSREF(g, 3)), GAUSSIANSREF(g, 5),
-                degrees_to_radians(GAUSSIANSREF(g, 4)));
-        const TermsGaussPDF TERMS = terms_from_covar(L*XBIN*YBIN, COV);
+        const Covar COVPSF = Covar{GAUSSIANSREF(g, 6), GAUSSIANSREF(g, 7), GAUSSIANSREF(g, 8)};
+        const Covar COVSRC = Covar{GAUSSIANSREF(g, 3), GAUSSIANSREF(g, 4), GAUSSIANSREF(g, 5)};
+        const Covar COV = convolution(COVSRC, COVPSF);
+        // Deliberately omit luminosity for now
+        const TermsGaussPDF TERMS = terms_from_covar(XBIN*YBIN, COV);
 
         auto yvals = gaussian_pixel_x_xx(YCEN, YMIN, YBIN, YDIM, TERMS.yy, TERMS.xy);
 
-        ymc_norm.push_back(yvals.first.second);
-        yy_norm.push_back(yvals.second);
-        xmc[g] = XMIN-XCEN+XBIN/2.;
-        norms_xx[g] = TERMS.xx;
-        norms[g] = TERMS.norm;
+        gaussterms.set(g, TERMS.norm, XMIN - XCEN + XBINHALF, TERMS.xx,
+            std::move(yvals.x_norm), std::move(yvals.xx));
         if(do_gradient)
         {
-            ymc.push_back(yvals.first.first);
-            l_inv[g] = 1/GAUSSIANSREF(g, 2);
-            norms_xy[g] = TERMS.xy;
-            norms_yy[g] = TERMS.yy;
-            rho_div_one_m_rhosq[g] = COV.rho/(1. - COV.rho*COV.rho);
-            sig_x_inv[g] = 1/COV.sigx;
-            sig_y_inv[g] = 1/COV.sigy;
-            norms_xy_div_rho[g] = 1./(1. - COV.rho*COV.rho)/COV.sigx/COV.sigy;
+            gradterms.set(g, L, TERMS, COVSRC, COVPSF, COV, std::move(yvals.x));
         }
     }
     /*
@@ -936,11 +1193,10 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_
         (*matrix_null).mutable_unchecked<2>();
     MatrixSUnchecked grad_param_map_ref = do_gradient ? (*grad_param_map).unchecked<2>() :
         (*matrix_s_null).unchecked<2>();
+    MatrixUnchecked grad_param_factor_ref = do_gradient ? (*grad_param_factor).unchecked<2>() :
+        (*matrix_null).unchecked<2>();
     const MatrixUnchecked DATAREF = getlikelihood ? (*DATA).unchecked<2>() : GAUSSIANSREF;
     const MatrixUnchecked VARINVERSEREF = getlikelihood ? (*VARINVERSE).unchecked<2>() : GAUSSIANSREF;
-    std::vector<double> xmc_norm(NGAUSSIANS);
-    std::vector<double> xsqs(NGAUSSIANS);
-    std::vector<double> xsnormxy(ngaussgrad);
     double loglike = 0;
     double model = 0;
     // TODO: Consider a version with cached xy, although it doubles memory usage
@@ -948,64 +1204,60 @@ double gaussians_pixel_template(const paramsgauss & GAUSSIANS, const bool gauss_
     {
         for(size_t g = 0; g < NGAUSSIANS; ++g)
         {
-            xmc_norm[g] = xmc[g]*norms_xx[g];
-            xsqs[g] = xmc_norm[g]*xmc[g];
-            if(do_gradient) xsnormxy[g] = xmc[g]*norms_xy[g];
+            (*(gaussterms.xmc_norm))[g] = (*(gaussterms.xmc))[g]*(*(gaussterms.norms_xx))[g];
+            (*(gaussterms.xsqs))[g] = (*(gaussterms.xmc_norm))[g]*(*(gaussterms.xmc))[g];
+            if(do_gradient) (*(gradterms.xsnormxy))[g] = (*(gaussterms.xmc))[g]*(*(gradterms.xy_factor))[g];
         }
         for(unsigned int j = 0; j < YDIM; j++)
         {
             model = 0;
             for(size_t g = 0; g < NGAUSSIANS; ++g)
             {
-                double xy = xmc[g]*ymc_norm[g][j];
-                double value = norms[g]*exp(-(xsqs[g] + yy_norm[g][j] - xy));
-                model += value;
-                gaussians_pixel_getmodelgrad<gradient_type>(gradmodels[g], value,
-                    xmc_norm[g], ymc_norm[g][j], xmc[g], ymc[g][j], norms_yy[g], xsnormxy[g], l_inv[g],
-                    sig_x_inv[g], sig_y_inv[g], xy, xsqs[g], yy_norm[g][j], rho_div_one_m_rhosq[g],
-                    norms_xy_div_rho[g]);
-                gaussians_pixel_getmodeljac<gradient_type>(output_jac_ref, grad_param_map_ref, g, j, i, value,
-                    xmc_norm[g], ymc_norm[g][j], xmc[g], ymc[g][j], norms_yy[g], xsnormxy[g], l_inv[g],
-                    sig_x_inv[g], sig_y_inv[g], xy, xsqs[g], yy_norm[g][j], rho_div_one_m_rhosq[g],
-                    norms_xy_div_rho[g]);
+                model += gaussian_pixel_add_all<gradient_type>(g, j, i, GAUSSIANSREF(g, 2), gaussterms,
+                    output_jac_ref, grad_param_map_ref, grad_param_factor_ref, gradweights, gradterms);
             }
             gaussians_pixel_output<output_type>(outputref, model, j, i);
-            gaussians_pixel_getlikelihood<getlikelihood>(loglike, model, DATAREF,
+            gaussians_pixel_residual<output_type>(outputref, DATAREF, model, j, i);
+            gaussians_pixel_add_like<getlikelihood, gradient_type>(loglike, model, DATAREF,
                 VARINVERSEREF, j, i, VARISMAT);
-            gaussians_pixel_getlikegrad<getlikelihood, gradient_type>(outputgradref, grad_param_map_ref,
-                NGAUSSIANS, gradmodels, loglike, model, DATAREF, VARINVERSEREF, j, i, VARISMAT);
+            gaussians_pixel_add_like_grad<getlikelihood, gradient_type>(outputgradref, grad_param_map_ref,
+                grad_param_factor_ref, NGAUSSIANS, gradweights, loglike, model, DATAREF, VARINVERSEREF, j, i,
+                VARISMAT, gaussterms, gradterms);
         }
-        for(size_t g = 0; g < NGAUSSIANS; ++g) xmc[g] += XBIN;
+        for(size_t g = 0; g < NGAUSSIANS; ++g) (*(gaussterms.xmc))[g] += XBIN;
     }
     return loglike;
+}
+
+GradientType get_gradient_type(const ndarray & grad)
+{
+    const auto ndim = grad.ndim() * (grad.size() > 0);
+    return ndim == 1 ? GradientType::loglike : (ndim == 3 ? GradientType::jacobian : GradientType::none);
 }
 
 // See loglike_gaussians_pixel for docs. This is just for explicit template instantiation.
 template <OutputType output_type, bool get_likelihood>
 double loglike_gaussians_pixel_getlike(const ndarray & DATA, const ndarray & VARINVERSE,
-    const paramsgauss & GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, ndarray & output, ndarray & grad,
-    ndarray_s & grad_param_map, ndarray & grad_param_factor)
+    const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor)
 {
-    const auto ndim = grad.ndim() * (grad.size() > 0);
-    const GradientType gradient_type = ndim == 1 ? GradientType::loglike :
-        (ndim == 3 ? GradientType::jacobian : GradientType::none);
+    const GradientType gradient_type = get_gradient_type(grad);
     if(gradient_type == GradientType::loglike)
     {
         return gaussians_pixel_template<output_type, get_likelihood, GradientType::loglike>(
-            GAUSSIANS, gauss_is_covar, XMIN, XMAX, YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad,
+            GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad,
             &grad_param_map, &grad_param_factor);
     }
     else if (gradient_type == GradientType::jacobian)
     {
         return gaussians_pixel_template<output_type, get_likelihood, GradientType::jacobian>(
-            GAUSSIANS, gauss_is_covar, XMIN, XMAX, YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad,
+            GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad,
             &grad_param_map, &grad_param_factor);
     }
     else
     {
         return gaussians_pixel_template<output_type, get_likelihood, GradientType::none>(
-            GAUSSIANS, gauss_is_covar, XMIN, XMAX, YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad,
+            GAUSSIANS, XMIN, XMAX, YMIN, YMAX, &DATA, &VARINVERSE, &output, &grad,
             &grad_param_map, &grad_param_factor);
     }
 }
@@ -1013,20 +1265,19 @@ double loglike_gaussians_pixel_getlike(const ndarray & DATA, const ndarray & VAR
 // See loglike_gaussians_pixel for docs. This is just for explicit template instantiation.
 template <OutputType output_type>
 double loglike_gaussians_pixel_output(const ndarray & DATA, const ndarray & VARINVERSE,
-    const paramsgauss & GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, ndarray & output, ndarray & grad, ndarray_s & grad_param_map,
-    ndarray & grad_param_factor)
+    const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor)
 {
     const bool get_likelihood = DATA.size() > 0;
     if(get_likelihood)
     {
         return loglike_gaussians_pixel_getlike<output_type, true>(DATA, VARINVERSE, GAUSSIANS,
-            gauss_is_covar, XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
+            XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
     }
     else
     {
         return loglike_gaussians_pixel_getlike<output_type, false>(DATA, VARINVERSE, GAUSSIANS,
-            gauss_is_covar, XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
+            XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
     }
 }
 
@@ -1048,51 +1299,59 @@ double loglike_gaussians_pixel_output(const ndarray & DATA, const ndarray & VARI
  *    where M <= N x 6 to allow for condensing gradients based on grad_param_map.
  * @param grad_param_map Nx6 matrix of indices of grad to add each gradient to. For example, if four gaussians
  *    share the same cen_x, one could set grad_param_map[0:4,0] = 0. All values must be < grad.size().
- * @param grad_param_factor Nx6 matrix of multiplcative factors for each gradient term. For example, if a
+ * @param grad_param_factor Nx6 matrix of multiplicative factors for each gradient term. For example, if a
  *    Gaussian is a sub-component of a multi-Gaussian component with a total flux parameter but fixed
  *    ratios, as in multi-Gaussian Sersic models.
  * @return The log likelihood.
  */
 double loglike_gaussians_pixel(const ndarray & DATA, const ndarray & VARINVERSE,
-    const paramsgauss & GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
+    const paramsgauss & GAUSSIANS, const double XMIN, const double XMAX,
     const double YMIN, const double YMAX, bool to_add, ndarray & output, ndarray & grad,
     ndarray_s & grad_param_map, ndarray & grad_param_factor)
 {
-    const OutputType output_type = output.size() > 0 ? (to_add ? OutputType::add : OutputType::overwrite) :
+    const GradientType gradient_type = get_gradient_type(grad);
+    const OutputType output_type = output.size() > 0 ? (
+            gradient_type == GradientType::jacobian ? OutputType::residual : (
+            to_add ? OutputType::add : OutputType::overwrite)) :
         OutputType::none;
     if(output_type == OutputType::overwrite)
     {
         return loglike_gaussians_pixel_output<OutputType::overwrite>(DATA, VARINVERSE, GAUSSIANS,
-            gauss_is_covar, XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
+            XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
     }
     else if(output_type == OutputType::add)
     {
         return loglike_gaussians_pixel_output<OutputType::add>(DATA, VARINVERSE, GAUSSIANS,
-            gauss_is_covar, XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
+            XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
+    }
+    else if(output_type == OutputType::residual)
+    {
+        return loglike_gaussians_pixel_output<OutputType::residual>(DATA, VARINVERSE, GAUSSIANS,
+            XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
     }
     else
     {
         return loglike_gaussians_pixel_output<OutputType::none>(DATA, VARINVERSE, GAUSSIANS,
-            gauss_is_covar, XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
+            XMIN, XMAX, YMIN, YMAX, output, grad, grad_param_map, grad_param_factor);
     }
 }
 
 ndarray make_gaussians_pixel(
-    const paramsgauss& GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, const unsigned int XDIM, const unsigned int YDIM)
+    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    const unsigned int XDIM, const unsigned int YDIM)
 {
     ndarray mat({YDIM, XDIM});
     gaussians_pixel_template<OutputType::overwrite, false, GradientType::none>(
-        GAUSSIANS, gauss_is_covar, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &mat);
+        GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &mat);
     return mat;
 }
 
 void add_gaussians_pixel(
-    const paramsgauss& GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, ndarray & output)
+    const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX, const double YMIN, const double YMAX,
+    ndarray & output)
 {
     gaussians_pixel_template<OutputType::add, true, GradientType::none>(
-        GAUSSIANS, gauss_is_covar, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &output);
+        GAUSSIANS, XMIN, XMAX, YMIN, YMAX, nullptr, nullptr, &output);
 }
 }
 #endif

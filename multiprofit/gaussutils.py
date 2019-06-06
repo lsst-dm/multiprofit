@@ -21,6 +21,7 @@
 
 import numpy as np
 import scipy.optimize as spopt
+from multiprofit.ellipse import Ellipse
 
 
 def sigma2reff(sigma):
@@ -31,32 +32,58 @@ def reff2sigma(reff):
     return reff/1.1774100225154746635070068805362097918987
 
 
-def covartoellipseeig(covar):
-    eigenvals, eigenvecs = np.linalg.eigh(covar)
-    indexmaj = np.argmax(eigenvals)
-    sigmamaj = np.sqrt(eigenvals[indexmaj])
-    axrat = np.sqrt(eigenvals[1-indexmaj])/sigmamaj
-    ang = np.degrees(np.arctan2(2*covar[0, 1], covar[0, 0] - covar[1, 1])/2)
-    return sigmamaj, axrat, ang
-
-
-def covartoellipse(sigxsq, sigysq, covdiag):
-    theta = np.arctan2(2*covdiag, sigxsq - sigysq)/2
-    cossqth = np.cos(theta)**2
-    sinsqth = 1-cossqth
-    #  == cos^2 - sin^2 == cos(2*theta)
-    denom = 2.*cossqth - 1.
-    if denom < 1e-4:
-        return covartoellipseeig(np.array([[sigxsq, covdiag], [covdiag, sigysq]]))
+def covartoellipse(x, useeigenmethod=True):
+    if isinstance(x, Ellipse):
+        ismatrix = True
+        covar = x.getcovariance(matrix=True)
     else:
-        sigu = np.sqrt((cossqth*sigxsq - sinsqth*sigysq)/denom)
-        sigv = np.sqrt((cossqth*sigysq - sinsqth*sigxsq)/denom)
-        sigmamaj = np.max([sigu, sigv])
-        axrat = sigu/sigv if sigu < sigv else sigv/sigu
-    return sigmamaj, axrat, np.degrees(theta)
+        if not isinstance(x, np.ndarray):
+            raise TypeError("x must be ndarray or Ellipse, not {}".format(type(x)))
+        ismatrix = x.shape != (2, 2)
+        if ismatrix:
+            covar = x
+        else:
+            if not x.ndim == 1 and x.size == 3:
+                raise ValueError("x.shape={} must be (2, 2) or (3,)".format(x.shape))
+            if useeigenmethod:
+                covar = Ellipse.covar_terms_as(*x)
+    sigxsq, sigysq, offdiag = (covar[0, 0], covar[1, 1], covar[0, 1]) if ismatrix else x
+    # TODO: Determine if this preserves the right quadrant in all cases
+    ang = np.arctan2(2*offdiag, sigxsq - sigysq)/2
+    useeigenmethod = useeigenmethod and np.abs(np.linalg.cond(covar)) < 1e8
+    if not useeigenmethod:
+        if np.pi/4 < (np.abs(ang) % np.pi) < 3*np.pi/4:
+            sinsqth = np.sin(ang)**2
+            cossqth = 1-sinsqth
+        else:
+            cossqth = np.cos(ang)**2
+            sinsqth = 1-cossqth
+        #  == cos^2 - sin^2 == cos(2*theta)
+        denom = 2.*cossqth - 1.
+        if np.abs(denom) < 1e-4:
+            useeigenmethod = True
+            if not ismatrix:
+                covar = Ellipse.covar_terms_as(*x)
+        else:
+            sigu = np.sqrt((cossqth*sigxsq - sinsqth*sigysq)/denom)
+            sigv = np.sqrt((cossqth*sigysq - sinsqth*sigxsq)/denom)
+            sigmamaj = np.max([sigu, sigv])
+            axrat = sigu/sigv if sigu < sigv else sigv/sigu
+            if not 0 < axrat <= 1:
+                raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
+                                   "sigu={} sigv={}".format(axrat, x, sigu, sigv))
+    if useeigenmethod:
+        eigenvals, eigenvecs = np.linalg.eigh(covar)
+        indexmaj = np.argmax(eigenvals)
+        sigmamaj = np.sqrt(eigenvals[indexmaj])
+        axrat = np.sqrt(eigenvals[1-indexmaj])/sigmamaj
+        if not 0 < axrat <= 1:
+            raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
+                               "eigenvals={} eigenvecs={}".format(axrat, x, eigenvals, eigenvecs))
+    return sigmamaj, axrat, np.degrees(ang)
 
 
-def ellipsetocovar(sigma, axrat, ang):
+def ellipsetocovar(sigma, axrat, ang, returnmatrix=True, returnparams=False):
     ang = np.radians(ang)
     sinang = np.sin(ang)
     cosang = np.cos(ang)
@@ -66,16 +93,8 @@ def ellipsetocovar(sigma, axrat, ang):
     cosangsq = cosang**2
     sigxsq = majsq*cosangsq + minsq*sinangsq
     sigysq = majsq*sinangsq + minsq*cosangsq
-    covxy = (majsq-minsq)*cosang*sinang
-    covar = np.array([[sigxsq, covxy], [covxy, sigysq]])
-    return covar
-
-
-def get_covar_elements(covar):
-    sigma_x = np.sqrt(covar[0, 0])
-    sigma_y = np.sqrt(covar[1, 1])
-    rho = covar[0, 1]/sigma_x/sigma_y
-    return sigma_x, sigma_y, rho
+    offdiag = (majsq-minsq)*cosang*sinang
+    return Ellipse.covar_terms_as(sigxsq, sigysq, offdiag, matrix=returnmatrix, params=returnparams)
 
 
 # https://www.wolframalpha.com/input/?i=Integrate+2*pi*x*exp(-x%5E2%2F(2*s%5E2))%2F(s*sqrt(2*pi))+dx+from+0+to+r

@@ -41,8 +41,8 @@ namespace multiprofit {
     corners (XMIN, YMIN) and (XMAX, YMAX) with XDIM x YDIM pixels, to a relative tolerance ACC.
 */
 ndarray make_gaussian(
-    const double XCEN, const double YCEN, const double MAG, const double RE,
-    const double ANG, const double AXRAT,
+    const double XCEN, const double YCEN, const double MAG,
+    const double RE, const double AXRAT, const double ANG,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM,
     const double ACC);
@@ -54,7 +54,7 @@ ndarray make_gaussian(
 */
 ndarray make_gaussian_pixel(
     const double XCEN, const double YCEN, const double L,
-    const double R, const double ANG, const double AXRAT,
+    const double R, const double AXRAT, const double ANG,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM);
 
@@ -64,7 +64,7 @@ ndarray make_gaussian_pixel(
 */
 ndarray make_gaussian_pixel_sersic(
     const double XCEN, const double YCEN, const double L,
-    const double R, const double ANG, const double AXRAT,
+    const double R, const double AXRAT, const double ANG,
     const double XMIN, const double XMAX, const double YMIN, const double YMAX,
     const unsigned int XDIM, const unsigned int YDIM);
 
@@ -82,24 +82,22 @@ ndarray make_gaussian_pixel_covar(const double XCEN, const double YCEN, const do
     GAUSSIANS is an ndarray with rows of Gaussian parameters in the same order as for make_gaussian_pixel:
     [XCEN, YCEN, L, R, ANG, AXRAT]
 */
-ndarray make_gaussians_pixel(const paramsgauss& GAUSSIANS, const bool gauss_is_covar,
-    const double XMIN, const double XMAX, const double YMIN, const double YMAX,
-    const unsigned int XDIM, const unsigned int YDIM);
+ndarray make_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
+    const double YMIN, const double YMAX, const unsigned int XDIM, const unsigned int YDIM);
 
 /*
     As make_gaussians_pixel but outputs to an existing matrix. Can skip output for benchmarking purposes.
 */
-void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const bool gauss_is_covar,
-    const double XMIN, const double XMAX, const double YMIN, const double YMAX, ndarray & output);
+void add_gaussians_pixel(const paramsgauss& GAUSSIANS, const double XMIN, const double XMAX,
+    const double YMIN, const double YMAX, ndarray & output);
 
 /*
     Compute the log likelihood of a Gaussian mixture model given some data and an inverse variance map.
     GAUSSIANS is as in make_gaussians_pixel()
     output is an optional matrix to output the model to. Must be the same size as DATA if provided.
 */
-double loglike_gaussians_pixel(const ndarray & DATA, const ndarray & VARINVERSE,
-    const paramsgauss& GAUSSIANS, const bool gauss_is_covar, const double XMIN, const double XMAX,
-    const double YMIN, const double YMAX, bool to_add, ndarray & output, ndarray & grad,
-    ndarray_s & grad_param_map, ndarray & grad_param_factor);
+double loglike_gaussians_pixel(const ndarray & DATA, const ndarray & VARINVERSE, const paramsgauss& GAUSSIANS,
+    const double XMIN, const double XMAX, const double YMIN, const double YMAX, bool to_add, ndarray & output,
+    ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor);
 }
 #endif
