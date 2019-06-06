@@ -24,6 +24,7 @@ import csv
 import galsim as gs
 import io
 import matplotlib.pyplot as plt
+from multiprofit.ellipse import Ellipse
 import multiprofit.gaussutils as mpfgauss
 from multiprofit.limits import limitsref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
@@ -99,7 +100,9 @@ def getparamdefault(param, value=None, profile=None, fixed=False, isvaluetransfo
     return param
 
 
-def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxesfracs=True):
+def getcomponents(profile, fluxes, values=None, istransformedvalues=False, isfluxesfracs=True):
+    if values is None:
+        values = {}
     bands = list(fluxes.keys())
     bandref = bands[0]
     for band in bands:
@@ -128,7 +131,6 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
     ismultigaussiansersic = profile.startswith('mgsersic')
     if ismultigaussiansersic:
         order = np.int(profile.split('mgsersic')[1])
-    issoftened = profile == "lux" or profile == "luv"
     if isgaussian or ismultigaussiansersic:
         profile = "sersic"
         if 'nser' in values:
@@ -157,7 +159,7 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
                 paramsother.append(param)
         ellipseparams = mpfobj.EllipseParameters(
             paramsellipse['sigma_x'], paramsellipse['sigma_y'], paramsellipse['rho'])
-        if ismultigaussiansersic or issoftened:
+        if ismultigaussiansersic:
             components.append(MultiGaussianApproximationProfile(
                 paramfluxescomp, ellipseparams=ellipseparams, profile=profile, parameters=paramsother,
                 order=order))
@@ -168,10 +170,11 @@ def getcomponents(profile, fluxes, values={}, istransformedvalues=False, isfluxe
     return components
 
 
+# TODO: Fix per-component offsetxy as it's not actually working
 def getmodel(
     fluxesbyband, modelstr, imagesize, sigma_xs=None, sigma_ys=None, rhos=None, slopes=None, fluxfracs=None,
-    offsetxy=None, name="", nexposures=1, engine="galsim", engineopts=None, istransformedvalues=False,
-    convertfluxfracs=False
+    offsetxy=None, namemodel="", namesrc="", nexposures=1, engine="galsim", engineopts=None,
+    istransformedvalues=False, convertfluxfracs=False, repeat_ellipse=False
 ):
     """
     Convenience function to get a multiprofit.objects.model with a single source with components with
@@ -187,12 +190,15 @@ def getmodel(
     :param slopes: Float[ncomponents]; Profile shape (e.g. Sersic n) of each components
     :param fluxfracs: Float[ncomponents]; The flux fraction for each component
     :param offsetxy: Float[2][ncomponents]; The x-y offsets relative to source center of each component
-    :param name: String; a name for the source
+    :param namemodel: String; a name for this model
+    :param namesrc: String; a name for the source
     :param nexposures: Int > 0; the number of exposures in each band.
     :param engine: String; the rendering engine to pass to the multiprofit.objects.Model.
     :param engineopts: Dict; the rendering options to pass to the multiprofit.objects.Model.
     :param istransformedvalues: Boolean; are the provided initial values above already transformed?
     :param convertfluxfracs: Boolean; should the model have absolute fluxes per component instead of ratios?
+    :param repeat_ellipse: Boolean; is there only one set of values in sigma_xs, sigma_ys, rhos?
+        If so, re-use the provided value for each component.
     :return:
     """
     bands = list(fluxesbyband.keys())
@@ -252,17 +258,21 @@ def getmodel(
         # TODO: Review whether this should change to support band-dependent fluxfracs
         fluxfracscomp = [fluxfracs[i] for i in comprange][:-1]
         fluxfracscomp = {band: fluxfracscomp for band in bands}
+        comprangeellipse = range(0, 1) if repeat_ellipse else comprange
         values = {
-            "sigma_x": sigma_xs[comprange],
-            "sigma_y": sigma_ys[comprange],
-            "rho": rhos[comprange],
+            "sigma_x": sigma_xs[comprangeellipse],
+            "sigma_y": sigma_ys[comprangeellipse],
+            "rho": rhos[comprangeellipse],
         }
-        if not profile == "lux" or profile == "luv":
-            values["slope"] = slopes[comprange]
-
+        if repeat_ellipse:
+            for key, value in values.items():
+                values[key] = np.repeat(value, nprofiles)
+        values["slope"] = slopes[comprange]
         components += getcomponents(profile, fluxfracscomp, values, istransformedvalues)
+        if len(components) != nprofiles:
+            raise RuntimeError('getcomponents returned {}/{} expected profiles'.format(
+                len(components), nprofiles))
         compnum += nprofiles
-
     paramfluxes = [mpfobj.FluxParameter(
             band, "flux", np.log10(fluxesbyband[band]), None, limits=limitsref["none"],
             transform=transformsref["log10"], transformed=True, prior=None, fixed=False,
@@ -273,8 +283,8 @@ def getmodel(
     if convertfluxfracs:
         modelphoto.convertfluxparameters(
             usefluxfracs=False, transform=transformsref['log10'], limits=limitsref["none"])
-    source = mpfobj.Source(modelastro, modelphoto, name)
-    model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts)
+    source = mpfobj.Source(modelastro, modelphoto, namesrc)
+    model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts, name=namemodel)
     return model
 
 
@@ -409,7 +419,7 @@ def fitgalaxy(
     bands = OrderedDict()
     fluxes = {}
     npiximg = None
-    paramnamesmomentsinit = ["sigma_x", "sigma_y", "rho"]
+    paramnamesmomentsinit = mpfobj.names_params_ellipse
     initfrommoments = {paramname: 0 for paramname in paramnamesmomentsinit}
     for exposure, _ in exposurespsfs:
         band = exposure.band
@@ -421,15 +431,16 @@ def fitgalaxy(
             'fitgalaxy exposure image shape={} not same as first={}'.format(npiximgexp, npiximg)
         if band not in bands:
             moments = mpfutil.estimateellipse(imgarr)
-            for paramname, value in zip(paramnamesmomentsinit, mpfgauss.get_covar_elements(moments)):
+            for paramname, value in zip(paramnamesmomentsinit, Ellipse.covar_matrix_as(moments, params=False)):
                 initfrommoments[paramname] += value
             bands[exposure.band] = None
         # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
         fluxes[band] = np.sum(imgarr[exposure.maskinverse] if exposure.maskinverse is not None else imgarr)
     npiximg = np.flip(npiximg, axis=0)
     for paramname in initfrommoments:
-        if paramname != 'ang':
-            initfrommoments[paramname] = np.sqrt(initfrommoments[paramname]/len(bands))
+        initfrommoments[paramname] /= len(bands)
+    initfrommoments = {paramname: value for paramname, value in zip(
+        paramnamesmomentsinit, Ellipse.covar_terms_as(*initfrommoments.values(), matrix=False, params=True))}
     print('Bands:', bands, 'Moment init.:', initfrommoments)
     engine = 'galsim'
     engines = {
@@ -487,9 +498,10 @@ def fitgalaxy(
             modelname = modelinfo["name"]
             modeltype = modelinfo["model"]
             modeldefault = getmodel(
-                fluxes, modeltype, npiximg, np.array([initfrommoments["sigma_x"]]),
-                np.array([initfrommoments["sigma_y"]]), np.array([initfrommoments["rho"]]),
-                engine=engine, engineopts=engineopts, convertfluxfracs=not fitfluxfracs
+                fluxes, modeltype, npiximg, [initfrommoments["sigma_x"]],
+                [initfrommoments["sigma_y"]], [initfrommoments["rho"]],
+                engine=engine, engineopts=engineopts, convertfluxfracs=not fitfluxfracs,
+                repeat_ellipse=True, namemodel=modelname
             )
             paramsfixeddefault[modeltype] = [param.fixed for param in
                                              modeldefault.getparameters(fixed=True)]
@@ -595,7 +607,11 @@ def fitgalaxy(
                         valuemax = valuesmax[paramname]
                         # Most scipy algos ignore limits, so we need to restrict the range manually
                         if modellib == 'scipy':
-                            factor = 1/fluxes[param.band] if isflux else 1
+                            # TODO: Review this. It seems to go very slowly when factor is not set for fluxes
+                            # ... but the square root is arbitrary and leaving it as 1/flux restricts the
+                            # range of values too much
+                            # Alternatively,
+                            factor = 1/np.sqrt(fluxes[param.band]) if isflux else 1
                             value = np.max([np.min([param.getvalue(transformed=False), valuemax]), valuemin])
                             param.transform = getlogitlimited(valuemin, valuemax, factor=factor)
                             param.setvalue(value, transformed=False)
@@ -628,7 +644,7 @@ def fitgalaxy(
                 model.name = modelname
                 sys.stdout.flush()
                 if guesstype is not None:
-                    initmodelbyguessing(model, guesstype, bands, nguesses=11)
+                    initmodelbyguessing(model, guesstype, bands, nguesses=3)
                 try:
                     fits = []
                     dosecond = len(model.sources[0].modelphotometric.components) > 1 or not usemodellibdefault
@@ -790,8 +806,8 @@ def getpsfmodel(engine, engineopts, numcomps, band, psfmodel, psfimage, sigmainv
     rhos = np.zeros(numcomps)
 
     for idx, (sizei, axrati, angi) in enumerate(zip(sizes, axrats, angs)):
-        sigma_xs[idx], sigma_ys[idx], rhos[idx] = mpfgauss.get_covar_elements(
-            mpfgauss.ellipsetocovar(sizei, axrati, angi))
+        sigma_xs[idx], sigma_ys[idx], rhos[idx] = mpfgauss.ellipsetocovar(
+            sizei, axrati, angi, returnmatrix=False, returnparams=True)
 
     model = getmodel({band: 1}, psfmodel, np.flip(psfimage.shape, axis=0),
                      sigma_xs, sigma_ys, rhos,
@@ -953,13 +969,14 @@ def initmodelbyguessing(model, guesstype, bands, nguesses=5):
                     likeinit = model.evaluate()[0]
                     likebest = likeinit
                 params = model.getparameters(fixed=False)
-                paramsinit = {name: [] for name in ['re', 'nser'] + ['flux_' + band for band in bands]}
+                names = ['sigma_x', 'sigma_y', 'rho']
+                paramsinit = {name: [] for name in names + ['nser'] + ['flux_' + band for band in bands]}
                 for param in params:
                     init = None
                     issersic = dosersic and param.name == 'nser'
                     if isinstance(param, mpfobj.FluxParameter):
                         init = paramsinit['flux_' + param.band]
-                    elif param.name == 're' or issersic:
+                    elif issersic or param.name in names:
                         init = paramsinit[param.name]
                     if init is not None:
                         init.append((param, param.getvalue(transformed=False)))
@@ -967,25 +984,26 @@ def initmodelbyguessing(model, guesstype, bands, nguesses=5):
                         # TODO: This will change everything to exp/dev which is not really intended
                         # TODO: Decide if this should work for multiple components
                         param.setvalue(1. if guesstype == 'gauss2exp' else 4., transformed=False)
-                nparamsinit = len(paramsinit['re'])
+                nparamsinit = len(paramsinit['rho'])
                 # TODO: Ensure that fluxes and sizes come from the same component - this check is insufficient
                 for band in bands:
                     if nparamsinit != len(paramsinit['flux_' + band]):
-                        raise RuntimeError('len(flux_{})={} != len(re)={}'.format(
-                            len(paramsinit['flux_' + band], nparamsinit)))
+                        raise RuntimeError('len(flux_{})={} != len(rho)={}; paramsinit={}'.format(
+                            band, len(paramsinit['flux_' + band]), nparamsinit, paramsinit))
                 coeffs, xrange = coeffsinitguess[guesstype]
                 xvalues = np.linspace(xrange[0], xrange[1], nguesses)
                 yvalues = np.polyval(coeffs, xvalues)
                 # For every pair of fluxes & sizes, take a guess
                 for idxparam in range(nparamsinit):
                     paramfluxes = [paramsinit['flux_' + band][idxparam] for band in bands]
-                    paramre = paramsinit['re'][idxparam]
-                    paramstoset = paramfluxes + [paramre]
+                    paramsigx = paramsinit['sigma_x'][idxparam]
+                    paramsigy = paramsinit['sigma_y'][idxparam]
+                    paramstoset = paramfluxes + [paramsigx, paramsigy]
                     if dosersic:
                         paramstoset += [paramsinit['nser'][idxparam]]
                     for x, y in zip(xvalues, yvalues):
-                        for (param, value), ratiolog in \
-                                [(paramflux, x) for paramflux in paramfluxes] + [(paramre, y)]:
+                        for (param, value), ratiolog in [(paramflux, x) for paramflux in paramfluxes] + \
+                                                        [(paramsigx, y), (paramsigy, y)]:
                             param.setvalue(value*10**ratiolog, transformed=False)
                         like = model.evaluate()[0]
                         if like > likebest:

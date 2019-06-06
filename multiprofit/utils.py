@@ -78,22 +78,35 @@ def magtoflux(ndarray):
 # Fairly standard moment of inertia estimate of ellipse orientation and size
 # TODO: compare with galsim's convenient calculateHLR/FWHM
 # TODO: replace with the stack's method (in meas_?)
-def estimateellipse(img, denoise=True):
+def estimateellipse(img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0):
     imgmeas = absconservetotal(np.copy(img)) if denoise else img
+    if cenx is None:
+        cenx = imgmeas.shape[0]/2.
+    if ceny is None:
+        ceny = imgmeas.shape[1]/2.
     y, x = np.nonzero(imgmeas)
     flux = imgmeas[y, x]
-    y = y - imgmeas.shape[0]/2.
-    x = x - imgmeas.shape[1]/2.
+    fluxsum = np.sum(flux)
+    y = y + 0.5 - ceny
+    x = x + 0.5 - cenx
     inertia = np.zeros((2, 2))
-    inertia[0, 0] = np.sum(flux*x**2)
-    inertia[0, 1] = np.sum(flux*x*y)
+    inertia[0, 0] = np.sum(flux*x**2)/fluxsum
+    inertia[0, 1] = np.sum(flux*x*y)/fluxsum
+    inertia[1, 1] = np.sum(flux*y**2)/fluxsum
+
+    if deconvolution_matrix is not None:
+        inertia -= deconvolution_matrix
+        inertia[0, 0] = np.clip(inertia[0, 0], sigma_sq_min, np.Inf)
+        inertia[1, 1] = np.clip(inertia[1, 1], sigma_sq_min, np.Inf)
     inertia[1, 0] = inertia[0, 1]
-    inertia[1, 1] = np.sum(flux*y**2)
     return inertia
 
 
-def normalize(ndarray):
-    ndarray /= np.sum(ndarray)
+def normalize(ndarray, return_sum=False):
+    total = np.sum(ndarray)
+    ndarray /= total
+    if return_sum:
+        return ndarray, total
     return ndarray
 
 
@@ -104,4 +117,3 @@ def str2bool(v):
         return False
     else:
         raise ValueError('Cannot parse {} as boolean.'.format(v))
-

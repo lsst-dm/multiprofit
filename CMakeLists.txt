@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 2.8.11)
 project(multiprofit)
 # Set source directory
 set(SOURCE_DIR "src")

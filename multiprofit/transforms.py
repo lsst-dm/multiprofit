@@ -38,6 +38,9 @@ class Transform:
     def zero(cls, value):
         return np.zeros_like(value)
 
+    def __call__(self, *args, **kwargs):
+        return self.transform(*args, **kwargs)
+
     def __init__(self, transform=None, reverse=None, derivative=None):
         if transform is None or reverse is None:
             if transform is not reverse:
