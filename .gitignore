@@ -1,7 +1,9 @@
 .idea/
 __pycache__/
 build/
+CMakeCache.txt
 dist/
+multiprofit.cbp
 multiprofit.egg-info/
 multiprofit/__pycache__/
 venv/
