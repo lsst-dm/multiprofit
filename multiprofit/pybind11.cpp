@@ -25,6 +25,10 @@
 #include "../src/gaussian.h"
 #endif
 
+#ifndef MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
+#include "../src/gaussian_integrator.h"
+#endif
+
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/eigen.h>
