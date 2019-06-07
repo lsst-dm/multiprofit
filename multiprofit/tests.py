@@ -25,7 +25,7 @@ import multiprofit as mpf
 from multiprofit.ellipse import Ellipse
 import multiprofit.gaussutils as mpfgauss
 from multiprofit.objects import names_params_gauss
-from multiprofit.utils import estimateellipse
+from multiprofit.utils import estimate_ellipse
 import timeit
 
 
@@ -43,7 +43,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
         axrats = [0.01, 0.1, 0.2, 0.5, 1]
     results = []
     hasgs = find_spec('galsim') is not None
-    nparams = nsub*6
+    num_params = nsub*6
     if hasgs:
         import galsim as gs
     for reff in reffs:
@@ -69,8 +69,8 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                         'new': 'mpf.make_gaussian_pixel' + argsmpf,
                     }
                     if do_like or do_grad or do_jac:
-                        sigma_x, sigma_y, rho = mpfgauss.ellipsetocovar(
-                            mpfgauss.reff2sigma(reff), axrat, ang, returnmatrix=False, returnparams=True)
+                        sigma_x, sigma_y, rho = mpfgauss.ellipse_to_covar(
+                            mpfgauss.reff_to_sigma(reff), axrat, ang, return_as_matrix=False, return_as_params=True)
                         gaussarrays = ','.join(np.repeat('[' + ','.join(np.repeat('{}', 9)).format(
                             xdim/2, ydim/2, 1/nsub, sigma_x, sigma_y, rho, 0, 0, 0) + ']', nsub))
                     if do_like:
@@ -95,8 +95,8 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                                   'import numpy as np; data=np.zeros(({}, {})); zeros = np.zeros((0, 0));'
                                   'zeros_s = np.zeros(0, dtype=np.uint64);'.format(ydim, xdim)
                                 if key in ['grad', 'like', 'jac'] else '') + (
-                                'grads=np.zeros(({}))'.format(nparams) if key == 'grad' else (
-                                    'grads=np.zeros(({},{},{}))'.format(ydim, xdim, nparams) if key == 'jac'
+                                'grads=np.zeros(({}))'.format(num_params) if key == 'grad' else (
+                                    'grads=np.zeros(({},{},{}))'.format(ydim, xdim, num_params) if key == 'jac'
                                     else ''
                                 )
                             ),
@@ -104,7 +104,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                         for key, callstr in functions.items()
                     }
                     if hasgs:
-                        timegs = np.min(timeit.repeat(
+                        time_gs = np.min(timeit.repeat(
                             'x=gs.Gaussian(flux=1, half_light_radius={}).shear(q={}, beta={}*gs.degrees)'
                             '.drawImage(nx={}, ny={}, scale=1, method="no_pixel").array'.format(
                                 reff*np.sqrt(axrat), axrat, ang, xdim, ydim
@@ -112,7 +112,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                             setup='import galsim as gs', repeat=nbenchmark, number=1
                         ))
                     mpffuncs = list(timesmpf.keys())
-                    times = [timesmpf[x] for x in mpffuncs] + [timegs] if hasgs else []
+                    times = [timesmpf[x] for x in mpffuncs] + [time_gs] if hasgs else []
                     result += ';' + '/'.join(mpffuncs) + ('/GalSim' if hasgs else '') + ' times=(' + \
                               ','.join(['{:.3e}'.format(x) for x in times]) + ')'
                 results.append({
@@ -130,13 +130,13 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                   reff_psf=0, axrat_psf=0.95, ang_psf=0, printout=False, plot=False):
     cenx, ceny = dimx/2., dimy/2.
     # Keep this in units of sigma, not re==FWHM/2
-    source = Ellipse().set_from_covariance(mpfgauss.ellipsetocovar(mpfgauss.reff2sigma(reff), axrat, ang))
+    source = Ellipse().set_from_covariance(mpfgauss.ellipse_to_covar(mpfgauss.reff_to_sigma(reff), axrat, ang))
     psf = Ellipse()
     if reff_psf > 0:
-        psf.set_from_covariance(mpfgauss.ellipsetocovar(mpfgauss.reff2sigma(reff_psf), axrat_psf, ang_psf))
+        psf.set_from_covariance(mpfgauss.ellipse_to_covar(mpfgauss.reff_to_sigma(reff_psf), axrat_psf, ang_psf))
         conv = source.convolve(psf, new=True)
-        reff_conv, axrat_conv, ang_conv = mpfgauss.covartoellipse(conv)
-        reff_conv = mpfgauss.sigma2reff(reff_conv)
+        reff_conv, axrat_conv, ang_conv = mpfgauss.covar_to_ellipse(conv)
+        reff_conv = mpfgauss.sigma_to_reff(reff_conv)
     else:
         conv = source
         reff_conv, axrat_conv, ang_conv = reff, axrat, ang
@@ -147,31 +147,31 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     model = mpf.make_gaussian_pixel(cenx, ceny, flux, reff_conv, axrat_conv, ang_conv,
                                     0, dimx, 0, dimy, dimx, dimy)
     if printout:
-        sumimg = np.sum(model)
+        sum_img = np.sum(model)
         print("Modelsum = {:5e} vs flux {:.5e} ({:.2f}% missing)".format(
-            sumimg, flux, (flux-sumimg)/sumimg/100))
+            sum_img, flux, (flux-sum_img)/sum_img/100))
         print("Source: {}".format(source))
         print("PSF: {}".format(psf))
         print("Convolved: {}".format(conv))
         print("reff, axrat, ang: ", (reff_conv, axrat_conv, ang_conv))
         print("Estimated ellipse:", Ellipse.covar_matrix_as(
-            estimateellipse(model, cenx=cenx, ceny=ceny, denoise=False), params=True))
-        print("Estimated deconvolved ellipse:", Ellipse.covar_matrix_as(estimateellipse(
-            model, cenx=cenx, ceny=ceny, denoise=False, deconvolution_matrix=psf.getcovariance()),
+            estimate_ellipse(model, cenx=cenx, ceny=ceny, denoise=False), params=True))
+        print("Estimated deconvolved ellipse:", Ellipse.covar_matrix_as(estimate_ellipse(
+            model, cenx=cenx, ceny=ceny, denoise=False, deconvolution_matrix=psf.get_covariance()),
             params=True))
     data = np.random.poisson(model + bg) - bg
     output = np.zeros_like(data)
-    nparams = 6
-    grads = np.zeros(nparams)
-    jacobian = np.zeros([dimy, dimx, nparams])
+    num_params = 6
+    grads = np.zeros(num_params)
+    jacobian = np.zeros([dimy, dimx, num_params])
     zeros = np.zeros((0, 0))
     zeros_s = np.zeros(0, dtype=np.uint64)
-    paramsinit = np.array([[cenx, ceny, flux, sigma_x, sigma_y, rho, sigma_x_psf, sigma_y_psf, rho_psf]])
+    params_init = np.array([[cenx, ceny, flux, sigma_x, sigma_y, rho, sigma_x_psf, sigma_y_psf, rho_psf]])
     # Compute the log likelihood and gradients
     ll = mpf.loglike_gaussians_pixel(
-        data, np.array([[1/bg]]), paramsinit, 0, dimx, 0, dimy, False, zeros, grads, zeros_s, zeros)
+        data, np.array([[1/bg]]), params_init, 0, dimx, 0, dimy, False, zeros, grads, zeros_s, zeros)
     mpf.loglike_gaussians_pixel(
-        data, np.array([[1/bg]]), paramsinit, 0, dimx, 0, dimy, False, zeros, jacobian, zeros_s, zeros)
+        data, np.array([[1/bg]]), params_init, 0, dimx, 0, dimy, False, zeros, jacobian, zeros_s, zeros)
     dxs = [1e-6, 1e-6, flux*1e-6, 1e-8, 1e-8, 1e-8]
     dlls = np.zeros(6)
     diffabs = np.zeros(6)

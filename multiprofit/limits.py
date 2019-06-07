@@ -29,19 +29,19 @@ class Limits:
     def within(self, value):
         return self.lower <= value <= self.upper
 
-    def __init__(self, lower=-np.inf, upper=np.inf, lowerinclusive=True, upperinclusive=True,
+    def __init__(self, lower=-np.inf, upper=np.inf, is_lower_inclusive=True, is_upper_inclusive=True,
                  transformed=True):
-        isnanlower = np.isnan(lower)
-        isnanupper = np.isnan(upper)
-        if isnanlower or isnanupper:
+        is_nan_lower = np.isnan(lower)
+        is_nan_upper = np.isnan(upper)
+        if is_nan_lower or is_nan_upper:
             raise ValueError("Limits lower,upper={},{} finite check={},{}".format(
-                lower, upper, isnanlower, isnanupper))
+                lower, upper, is_nan_lower, is_nan_upper))
         if not upper >= lower:
             raise ValueError("Limits upper={} !>= lower{}".format(lower, upper))
         # TODO: Should pass in the transform and check if lower
-        if not lowerinclusive:
+        if not is_lower_inclusive:
             lower = np.nextafter(lower, lower+1.)
-        if not upperinclusive:
+        if not is_upper_inclusive:
             upper = np.nextafter(upper, upper-1.)
         self.lower = lower
         self.upper = upper
@@ -49,12 +49,12 @@ class Limits:
 
 
 # TODO: Replace with a parameter factory and/or profile factory
-limitsref = {
+limits_ref = {
     "none": Limits(),
     "fraction": Limits(lower=0., upper=1., transformed=True),
     "fractionlog10": Limits(upper=0., transformed=True),
     "axratlog10": Limits(lower=-2., upper=0., transformed=True),
     "coninverse": Limits(lower=0.1, upper=0.9090909, transformed=True),
-    "nserlog10": Limits(lower=np.log10(0.3), upper=np.log10(6.0), lowerinclusive=False,
-                        upperinclusive=False, transformed=True),
+    "nserlog10": Limits(lower=np.log10(0.3), upper=np.log10(6.0), is_lower_inclusive=False,
+                        is_upper_inclusive=False, transformed=True),
 }

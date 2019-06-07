@@ -25,8 +25,9 @@
 #include "gaussian_integrator.h"
 #endif
 
-//#include <utility>
 #include <vector>
+
+namespace multiprofit {
 
 /*
   TODO: Use covariance ellipse parameters
@@ -323,4 +324,5 @@ ndarray make_gaussian(
     }
 
     return mat;
+}
 }

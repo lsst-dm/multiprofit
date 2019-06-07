@@ -24,77 +24,77 @@ import scipy.optimize as spopt
 from multiprofit.ellipse import Ellipse
 
 
-def sigma2reff(sigma):
+def sigma_to_reff(sigma):
     return sigma*1.1774100225154746635070068805362097918987
 
 
-def reff2sigma(reff):
+def reff_to_sigma(reff):
     return reff/1.1774100225154746635070068805362097918987
 
 
-def covartoellipse(x, useeigenmethod=True):
+def covar_to_ellipse(x, use_method_eigen=True):
     if isinstance(x, Ellipse):
-        ismatrix = True
-        covar = x.getcovariance(matrix=True)
+        is_matrix = True
+        covar = x.get_covariance(matrix=True)
     else:
         if not isinstance(x, np.ndarray):
             raise TypeError("x must be ndarray or Ellipse, not {}".format(type(x)))
-        ismatrix = x.shape != (2, 2)
-        if ismatrix:
+        is_matrix = x.shape != (2, 2)
+        if is_matrix:
             covar = x
         else:
             if not x.ndim == 1 and x.size == 3:
                 raise ValueError("x.shape={} must be (2, 2) or (3,)".format(x.shape))
-            if useeigenmethod:
+            if use_method_eigen:
                 covar = Ellipse.covar_terms_as(*x)
-    sigxsq, sigysq, offdiag = (covar[0, 0], covar[1, 1], covar[0, 1]) if ismatrix else x
+    sigma_x_sq, sigma_y_sq, offdiag = (covar[0, 0], covar[1, 1], covar[0, 1]) if is_matrix else x
     # TODO: Determine if this preserves the right quadrant in all cases
-    ang = np.arctan2(2*offdiag, sigxsq - sigysq)/2
-    useeigenmethod = useeigenmethod and np.abs(np.linalg.cond(covar)) < 1e8
-    if not useeigenmethod:
+    ang = np.arctan2(2*offdiag, sigma_x_sq - sigma_y_sq)/2
+    use_method_eigen = use_method_eigen and np.abs(np.linalg.cond(covar)) < 1e8
+    if not use_method_eigen:
         if np.pi/4 < (np.abs(ang) % np.pi) < 3*np.pi/4:
-            sinsqth = np.sin(ang)**2
-            cossqth = 1-sinsqth
+            sin_ang_sq = np.sin(ang)**2
+            cos_ang_sq = 1-sin_ang_sq
         else:
-            cossqth = np.cos(ang)**2
-            sinsqth = 1-cossqth
+            cos_ang_sq = np.cos(ang)**2
+            sin_ang_sq = 1-cos_ang_sq
         #  == cos^2 - sin^2 == cos(2*theta)
-        denom = 2.*cossqth - 1.
+        denom = 2.*cos_ang_sq - 1.
         if np.abs(denom) < 1e-4:
-            useeigenmethod = True
-            if not ismatrix:
+            use_method_eigen = True
+            if not is_matrix:
                 covar = Ellipse.covar_terms_as(*x)
         else:
-            sigu = np.sqrt((cossqth*sigxsq - sinsqth*sigysq)/denom)
-            sigv = np.sqrt((cossqth*sigysq - sinsqth*sigxsq)/denom)
-            sigmamaj = np.max([sigu, sigv])
-            axrat = sigu/sigv if sigu < sigv else sigv/sigu
+            sigma_u = np.sqrt((cos_ang_sq*sigma_x_sq - sin_ang_sq*sigma_y_sq)/denom)
+            sigma_v = np.sqrt((cos_ang_sq*sigma_y_sq - sin_ang_sq*sigma_x_sq)/denom)
+            sigma_maj = np.max([sigma_u, sigma_v])
+            axrat = sigma_u/sigma_v if sigma_u < sigma_v else sigma_v/sigma_u
             if not 0 < axrat <= 1:
                 raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
-                                   "sigu={} sigv={}".format(axrat, x, sigu, sigv))
-    if useeigenmethod:
-        eigenvals, eigenvecs = np.linalg.eigh(covar)
-        indexmaj = np.argmax(eigenvals)
-        sigmamaj = np.sqrt(eigenvals[indexmaj])
-        axrat = np.sqrt(eigenvals[1-indexmaj])/sigmamaj
+                                   "sigma_u={} sigma_v={}".format(axrat, x, sigma_u, sigma_v))
+    if use_method_eigen:
+        eigenvalues, eigenvecs = np.linalg.eigh(covar)
+        index_maj = np.argmax(eigenvalues)
+        sigma_maj = np.sqrt(eigenvalues[index_maj])
+        axrat = np.sqrt(eigenvalues[1-index_maj])/sigma_maj
         if not 0 < axrat <= 1:
             raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
-                               "eigenvals={} eigenvecs={}".format(axrat, x, eigenvals, eigenvecs))
-    return sigmamaj, axrat, np.degrees(ang)
+                               "eigenvalues={} eigenvecs={}".format(axrat, x, eigenvalues, eigenvecs))
+    return sigma_maj, axrat, np.degrees(ang)
 
 
-def ellipsetocovar(sigma, axrat, ang, returnmatrix=True, returnparams=False):
+def ellipse_to_covar(sigma, axrat, ang, return_as_matrix=True, return_as_params=False):
     ang = np.radians(ang)
-    sinang = np.sin(ang)
-    cosang = np.cos(ang)
-    majsq = sigma**2
-    minsq = (sigma*axrat)**2
-    sinangsq = sinang**2
-    cosangsq = cosang**2
-    sigxsq = majsq*cosangsq + minsq*sinangsq
-    sigysq = majsq*sinangsq + minsq*cosangsq
-    offdiag = (majsq-minsq)*cosang*sinang
-    return Ellipse.covar_terms_as(sigxsq, sigysq, offdiag, matrix=returnmatrix, params=returnparams)
+    sin_ang = np.sin(ang)
+    cos_ang = np.cos(ang)
+    maj_sq = sigma**2
+    min_sq = (sigma*axrat)**2
+    sin_ang_sq = sin_ang**2
+    cos_ang_sq = cos_ang**2
+    sigma_x_sq = maj_sq*cos_ang_sq + min_sq*sin_ang_sq
+    sigma_y_sq = maj_sq*sin_ang_sq + min_sq*cos_ang_sq
+    covar = (maj_sq-min_sq)*cos_ang*sin_ang
+    return Ellipse.covar_terms_as(sigma_x_sq, sigma_y_sq, covar, matrix=return_as_matrix, params=return_as_params)
 
 
 # https://www.wolframalpha.com/input/?i=Integrate+2*pi*x*exp(-x%5E2%2F(2*s%5E2))%2F(s*sqrt(2*pi))+dx+from+0+to+r
@@ -114,13 +114,13 @@ def gauss2dint(xdivsigma):
 #   at the value of x containing a fraction quant of the total flux
 # This is so you can use root finding algorithms to find x for a given quant (see below)
 def multigauss2dint(x, weightsizes, quant=0):
-    retosigma = np.sqrt(2.*np.log(2.))
-    weightsumtox = 0
-    weightsum = 0
+    re_to_sigma = np.sqrt(2.*np.log(2.))
+    weight_sum_to_x = 0
+    weight_sum = 0
     for weight, size in weightsizes:
-        weightsumtox += weight*(gauss2dint(x/size*retosigma) if size > 0 else 1)
-        weightsum += weight
-    return weightsumtox/weightsum - quant
+        weight_sum_to_x += weight*(gauss2dint(x/size*re_to_sigma) if size > 0 else 1)
+        weight_sum += weight
+    return weight_sum_to_x/weight_sum - quant
 
 
 # Compute x_quant for a sum of Gaussians, where 0<quant<1
@@ -131,12 +131,12 @@ def multigauss2dint(x, weightsizes, quant=0):
 def multigauss2drquant(weightsizes, quant=0.5, xmin=0, xmax=1e5):
     if not 0 <= quant <= 1:
         raise ValueError('Quant {} not >=0 & <=1'.format(quant, quant))
-    weightsumzerosize = 0
-    weightsum = 0
+    weight_sum_zero_size = 0
+    weight_sum = 0
     for weight, size in weightsizes:
         if not (size > 0):
-            weightsumzerosize += weight
-        weightsum += weight
-    if weightsumzerosize/weightsum >= quant:
+            weight_sum_zero_size += weight
+        weight_sum += weight
+    if weight_sum_zero_size/weight_sum >= quant:
         return 0
     return spopt.brentq(multigauss2dint, a=xmin, b=xmax, args=(weightsizes, quant))

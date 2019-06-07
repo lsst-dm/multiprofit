@@ -29,9 +29,9 @@ class Ellipse:
             return np.array([[sigma_x_sq, offdiag], [offdiag, sigma_y_sq]])
         else:
             if params:
-                sigx = np.sqrt(sigma_x_sq)
-                sigy = np.sqrt(sigma_y_sq)
-                return sigx, sigy, offdiag/(sigx*sigy)
+                sigma_x = np.sqrt(sigma_x_sq)
+                sigma_y = np.sqrt(sigma_y_sq)
+                return sigma_x, sigma_y, offdiag/(sigma_x*sigma_y)
             else:
                 return sigma_x_sq, sigma_y_sq, offdiag
 
@@ -70,7 +70,7 @@ class Ellipse:
         self.set_sigma_y(sigma_y)
         return self
 
-    def getcovariance(self, matrix=True, params=False):
+    def get_covariance(self, matrix=True, params=False):
         sigma_x, sigma_y, rho = self.get_sigma_x(), self.get_sigma_y(), self.get_rho()
         if matrix or not params:
             return self.covar_terms_as(sigma_x * sigma_x, sigma_y * sigma_y, sigma_x * sigma_y * rho,
