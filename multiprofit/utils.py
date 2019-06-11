@@ -31,18 +31,18 @@ def absconservetotal(ndarray):
     if any(ndarray < 0):
         indices = np.argsort(ndarray)
         # Not sure if this is any faster than cumsum - probably if most pixels are positive
-        indexarr = 0
-        sumneg = 0
-        while ndarray[indices[indexarr]] < 0:
-            sumneg += ndarray[indices[indexarr]]
-            ndarray[indices[indexarr]] = 0
-            indexarr += 1
-        while sumneg < 0 and indexarr < ndarray.shape[0]:
-            sumneg += ndarray[indices[indexarr]]
-            ndarray[indices[indexarr]] = 0
-            indexarr += 1
-        ndarray[indices[indexarr-1]] = sumneg
-        if indexarr == ndarray.shape[0]:
+        idx_indices = 0
+        sum_neg = 0
+        while ndarray[indices[idx_indices]] < 0:
+            sum_neg += ndarray[indices[idx_indices]]
+            ndarray[indices[idx_indices]] = 0
+            idx_indices += 1
+        while sum_neg < 0 and idx_indices < ndarray.shape[0]:
+            sum_neg += ndarray[indices[idx_indices]]
+            ndarray[indices[idx_indices]] = 0
+            idx_indices += 1
+        ndarray[indices[idx_indices-1]] = sum_neg
+        if idx_indices == ndarray.shape[0]:
             raise RuntimeError("absconservetotal failed for array with sum {}".format(np.sum(ndarray)))
     ndarray.shape = shape
     return ndarray
@@ -58,27 +58,27 @@ def allequal(iterator):
     return all(first == rest for rest in iterator)
 
 
-def getchisqred(chis):
+def get_chisqred(chis):
     chisum = 0
-    chicount = 0
-    for chivals in chis:
-        chisum += np.sum(chivals*chivals)
-        chicount += chivals.size
-    return chisum/chicount
+    num_chi = 0
+    for chivalues in chis:
+        chisum += np.sum(chivalues*chivalues)
+        num_chi += chivalues.size
+    return chisum/num_chi
 
 
-def fluxtomag(ndarray):
+def flux_to_mag(ndarray):
     return -2.5*np.log10(ndarray)
 
 
-def magtoflux(ndarray):
+def mag_to_flux(ndarray):
     return 10**(-0.4*ndarray)
 
 
 # Fairly standard moment of inertia estimate of ellipse orientation and size
 # TODO: compare with galsim's convenient calculateHLR/FWHM
 # TODO: replace with the stack's method (in meas_?)
-def estimateellipse(img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0):
+def estimate_ellipse(img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0):
     imgmeas = absconservetotal(np.copy(img)) if denoise else img
     if cenx is None:
         cenx = imgmeas.shape[0]/2.

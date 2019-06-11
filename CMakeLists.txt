@@ -4,7 +4,7 @@ project(multiprofit)
 set(SOURCE_DIR "src")
 # Tell CMake that headers are also in SOURCE_DIR
 include_directories(${SOURCE_DIR})
-set(SOURCES "${SOURCE_DIR}/gaussian.cpp")
+set(SOURCES "${SOURCE_DIR}/gaussian.cpp;${SOURCE_DIR}/gaussian_integrator.cpp")
 # Generate Python module
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})

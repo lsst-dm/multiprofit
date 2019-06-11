@@ -78,7 +78,7 @@ def powstretch(x, lower, factor=1.0):
     return 10**(x*factor) + lower
 
 
-def getlogstretch(lower, factor=1.0):
+def get_stretch_log(lower, factor=1.0):
     return Transform(
         transform=functools.partial(logstretch, lower=lower, factor=factor),
         reverse=functools.partial(powstretch, lower=lower, factor=1./factor))
@@ -97,7 +97,7 @@ def expitlimited(x, lower, extent, factor=1.0):
     return special.expit(x*factor)*extent + lower
 
 
-def getlogitlimited(lower, upper, factor=1.0):
+def get_logit_limited(lower, upper, factor=1.0):
     return Transform(
         transform=functools.partial(logitlimited, lower=lower, extent=upper-lower, factor=factor),
         reverse=functools.partial(expitlimited, lower=lower, extent=upper-lower, factor=1./factor),
@@ -105,14 +105,14 @@ def getlogitlimited(lower, upper, factor=1.0):
     )
 
 
-transformsref = {
+transforms_ref = {
     "none": Transform(),
     "log": Transform(transform=np.log, reverse=np.exp, derivative=np.reciprocal),
     "log10": Transform(transform=np.log10, reverse=functools.partial(np.power, 10.), derivative=dlog10dx),
     "inverse": Transform(transform=np.reciprocal, reverse=np.reciprocal, derivative=negativeinversesquare),
     "logit": Transform(transform=special.logit, reverse=special.expit, derivative=dlogitdx),
-    "logitsigned": getlogitlimited(-1, 1),
-    "logitaxrat": getlogitlimited(1e-4, 1),
-    "logitsersic":  getlogitlimited(0.3, 6.2),
-    "logitmultigausssersic": getlogitlimited(0.3, 6.2),
+    "logitsigned": get_logit_limited(-1, 1),
+    "logitaxrat": get_logit_limited(1e-4, 1),
+    "logitsersic":  get_logit_limited(0.3, 6.2),
+    "logitmultigausssersic": get_logit_limited(0.3, 6.2),
 }
