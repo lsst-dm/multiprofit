@@ -75,6 +75,7 @@ def get_param_default(param, value=None, profile=None, fixed=False, is_value_tra
             if use_sersic_logit:
                 if is_multigauss:
                     transform = transforms_ref["logitmultigausssersic"]
+                    limits = limits_ref["nsermultigauss"]
                 else:
                     transform = transforms_ref["logitsersic"]
             else:
@@ -85,7 +86,8 @@ def get_param_default(param, value=None, profile=None, fixed=False, is_value_tra
     elif param == "sigma_x" or param == "sigma_y":
         transform = transforms_ref["log10"]
     elif param == "rho":
-        transform = transforms_ref["logitsigned"]
+        transform = transforms_ref["logitrho"]
+        limits = limits_ref["logitrho"]
     elif param == "rscale":
         transform = transforms_ref['log10']
 
@@ -283,7 +285,7 @@ def get_model(
     ]
     modelphoto = mpfobj.PhotometricModel(components, param_fluxes)
     if convertfluxfracs:
-        modelphoto.convertparam_fluxs(
+        modelphoto.convert_param_fluxes(
             use_fluxfracs=False, transform=transforms_ref['log10'], limits=limits_ref["none"])
     source = mpfobj.Source(modelastro, modelphoto, namesrc)
     model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts, name=name_model)
@@ -380,7 +382,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, sigma_inverse
             if is_empty:
                 set_exposure(model, band, image=imgpsf, sigma_inverse=sigma_inverse)
             evaluate_model(
-                model, params=fits_model_psf[engine][name_model]['fit']['params_best'],
+                model, param_values=fits_model_psf[engine][name_model]['fit']['params_best'],
                 plot=plot, title=title, name_model=label, figure=figaxes[0], axes=figaxes[1],
                 row_figure=row_figure)
             if is_empty:
@@ -437,6 +439,7 @@ def fit_galaxy(
             'fit_galaxy exposure image shape={} not same as first={}'.format(num_pix_img_exp, num_pix_img)
         if band not in bands:
             moments = mpfutil.estimate_ellipse(img_exp)
+            # TODO: subtract PSF moments from object
             for name_param, value in zip(name_params_moments_init,
                                          Ellipse.covar_matrix_as(moments, params=False)):
                 moments_by_name[name_param] += value
@@ -468,7 +471,7 @@ def fit_galaxy(
     }
     values_min = {}
     for band in bands:
-        values_min["flux_" + band] = 1e-4 * fluxes[band]
+        values_min["flux_" + band] = 0 #* fluxes[band]
         values_max["flux_" + band] = 100 * fluxes[band]
     models = {} if (models is None) else models
     params_fixed_default = {}
@@ -625,6 +628,7 @@ def fit_galaxy(
                             value = np.max([np.min([param.get_value(transformed=False), value_max]),
                                             value_min])
                             param.transform = get_logit_limited(value_min, value_max, factor=factor)
+                            param.limits = mpfobj.Limits(lower=value_min, upper=value_max, transformed=False)
                             param.set_value(value, transformed=False)
                         else:
                             transform = param.transform.transform
@@ -798,6 +802,7 @@ def fit_galaxy_exposures(
         for name_model, model in models.items():
             for band in bands:
                 set_exposure(model, band, image='empty')
+            model.do_fit_leastsq_cleanup(bands)
         for engine, modelfitinfo in fits.items():
             for name_model, modelfits in modelfitinfo.items():
                 if 'fits' in modelfits:
@@ -861,8 +866,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
     # TODO: Come up with a better structure for parameter
     # TODO: Move to utils as a generic init model from other model(s) method
     chisqreds = [value['chisqred'] for value in modelfits]
+    model_best = chisqreds.index(min(chisqreds))
     if fluxfracs is None:
-        model_best = chisqreds.index(min(chisqreds))
         fluxfracs = 1./np.array(chisqreds)
         fluxfracs = fluxfracs/np.sum(fluxfracs)
     if not len(model.sources) == 1:
@@ -1012,15 +1017,20 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
                 # For every pair of fluxes & sizes, take a guess
                 for idx_param in range(num_params_init):
                     param_fluxes = [params_init['flux_' + band][idx_param] for band in bands]
-                    params_igx = params_init['sigma_x'][idx_param]
-                    params_igy = params_init['sigma_y'][idx_param]
-                    params_to_set = param_fluxes + [params_igx, params_igy]
+                    param_sig_x = params_init['sigma_x'][idx_param]
+                    param_sig_y = params_init['sigma_y'][idx_param]
+                    params_to_set = param_fluxes + [param_sig_x, param_sig_y]
                     if do_sersic:
                         params_to_set += [params_init['nser'][idx_param]]
                     for x, y in zip(values_x, values_y):
                         for (param, value), ratiolog in [(param_flux, x) for param_flux in param_fluxes] + \
-                                                        [(params_igx, y), (params_igy, y)]:
-                            param.set_value(value*10**ratiolog, transformed=False)
+                                                        [(param_sig_x, y), (param_sig_y, y)]:
+                            value_new = value*10**ratiolog
+                            if not np.isfinite(value_new):
+                                raise RuntimeError('Init by guessing tried to set non-finite value_new={}'
+                                                   'from value={} and ratiolog={}'.format(
+                                                        value_new, value, ratiolog))
+                            param.set_value(value_new, transformed=False)
                         like = model.evaluate()[0]
                         if like > like_best:
                             like_best = like
@@ -1169,7 +1179,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
 # Convenience function to set an exposure object with optional defaults for the sigma (variance) map
 # Can be used to nullify an exposure before saving to disk, for example
 def set_exposure(model, band, index=0, image=None, sigma_inverse=None, psf=None, mask=None, meta=None,
-                factor_sigma=1):
+                 factor_sigma=1):
     if band not in model.data.exposures:
         model.data.exposures[band] = [mpfobj.Exposure(band=band, image=None)]
     exposure = model.data.exposures[band][index]

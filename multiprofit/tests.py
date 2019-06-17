@@ -70,34 +70,31 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                     }
                     if do_like or do_grad or do_jac:
                         sigma_x, sigma_y, rho = mpfgauss.ellipse_to_covar(
-                            mpfgauss.reff_to_sigma(reff), axrat, ang, return_as_matrix=False, return_as_params=True)
+                            mpfgauss.reff_to_sigma(reff), axrat, ang, return_as_matrix=False,
+                            return_as_params=True)
                         gaussarrays = ','.join(np.repeat('[' + ','.join(np.repeat('{}', 9)).format(
                             xdim/2, ydim/2, 1/nsub, sigma_x, sigma_y, rho, 0, 0, 0) + ']', nsub))
                     if do_like:
                         functions['like'] = (
-                            'mpf.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
-                            ']), 0, {}, 0, {}, False, zeros, zeros, zeros_s, zeros)').format(
-                            xdim, ydim, ydim, xdim)
+                            'mpfg.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
+                            ']))')
                     if do_grad:
                         functions['grad'] = (
-                            'mpf.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
-                            ']), 0, {}, 0, {}, False, zeros, grads, zeros_s, zeros)').format(
-                            xdim, ydim, ydim, xdim)
+                            'mpfg.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
+                            ']), grad=grads)')
                     if do_jac:
-                        functions['jac'] = (
-                                'mpf.loglike_gaussians_pixel(data, data, np.array([' + gaussarrays +
-                                ']), 0, {}, 0, {}, False, zeros, grads, zeros_s, zeros)').format(
-                            xdim, ydim, ydim, xdim)
+                        functions['jac'] = 'mpfg.loglike_gaussians_pixel(data, data, ' \
+                                           'np.array([{}]), grad=grads)'.format(gaussarrays)
                     timesmpf = {
                         key: np.min(timeit.repeat(
                             callstr,
-                            setup='import multiprofit as mpf;' + (
+                            setup='import multiprofit as mpf; import multiprofit.gaussutils as mpfg;' + (
                                   'import numpy as np; data=np.zeros(({}, {})); zeros = np.zeros((0, 0));'
                                   'zeros_s = np.zeros(0, dtype=np.uint64);'.format(ydim, xdim)
                                 if key in ['grad', 'like', 'jac'] else '') + (
                                 'grads=np.zeros(({}))'.format(num_params) if key == 'grad' else (
-                                    'grads=np.zeros(({},{},{}))'.format(ydim, xdim, num_params) if key == 'jac'
-                                    else ''
+                                    'grads=np.zeros(({},{},{}))'.format(ydim, xdim, num_params) if
+                                    key == 'jac' else ''
                                 )
                             ),
                             repeat=nbenchmark, number=1))
@@ -130,10 +127,12 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                   reff_psf=0, axrat_psf=0.95, ang_psf=0, printout=False, plot=False):
     cenx, ceny = dimx/2., dimy/2.
     # Keep this in units of sigma, not re==FWHM/2
-    source = Ellipse().set_from_covariance(mpfgauss.ellipse_to_covar(mpfgauss.reff_to_sigma(reff), axrat, ang))
+    source = Ellipse().set_from_covariance(
+        mpfgauss.ellipse_to_covar(mpfgauss.reff_to_sigma(reff), axrat, ang))
     psf = Ellipse()
     if reff_psf > 0:
-        psf.set_from_covariance(mpfgauss.ellipse_to_covar(mpfgauss.reff_to_sigma(reff_psf), axrat_psf, ang_psf))
+        psf.set_from_covariance(mpfgauss.ellipse_to_covar(
+            mpfgauss.reff_to_sigma(reff_psf), axrat_psf, ang_psf))
         conv = source.convolve(psf, new=True)
         reff_conv, axrat_conv, ang_conv = mpfgauss.covar_to_ellipse(conv)
         reff_conv = mpfgauss.sigma_to_reff(reff_conv)
@@ -163,15 +162,12 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     output = np.zeros_like(data)
     num_params = 6
     grads = np.zeros(num_params)
-    jacobian = np.zeros([dimy, dimx, num_params])
-    zeros = np.zeros((0, 0))
-    zeros_s = np.zeros(0, dtype=np.uint64)
     params_init = np.array([[cenx, ceny, flux, sigma_x, sigma_y, rho, sigma_x_psf, sigma_y_psf, rho_psf]])
     # Compute the log likelihood and gradients
-    ll = mpf.loglike_gaussians_pixel(
-        data, np.array([[1/bg]]), params_init, 0, dimx, 0, dimy, False, zeros, grads, zeros_s, zeros)
-    mpf.loglike_gaussians_pixel(
-        data, np.array([[1/bg]]), params_init, 0, dimx, 0, dimy, False, zeros, jacobian, zeros_s, zeros)
+    mpfgauss.loglike_gaussians_pixel(data, np.array([[1/bg]]), params_init)
+    ll = mpfgauss.loglike_gaussians_pixel(data, np.array([[1/bg]]), params_init, grad=grads)
+    jacobian = np.zeros([dimy, dimx, num_params])
+    mpfgauss.loglike_gaussians_pixel(data, np.array([[1/bg]]), params_init, grad=jacobian)
     dxs = [1e-6, 1e-6, flux*1e-6, 1e-8, 1e-8, 1e-8]
     dlls = np.zeros(6)
     diffabs = np.zeros(6)
@@ -184,12 +180,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                             sigma_x_psf, sigma_y_psf, rho_psf]])
         # Note that there's no option to return the log likelihood and the Jacobian - the latter skips
         # computing the former for efficiency, assuming that you won't need it
-        llnew = mpf.loglike_gaussians_pixel(
-            data, np.array([[1/bg]]), params, 0, dimx, 0, dimy, False, zeros, zeros, zeros_s, zeros
-        )
-        mpf.loglike_gaussians_pixel(
-            data, np.array([[1/bg]]), params, 0, dimx, 0, dimy, False, output, zeros, zeros_s, zeros
-        )
+        llnew = mpfgauss.loglike_gaussians_pixel(data, np.array([[1/bg]]), params, output=output)
         findiff = (output-model)/dxi
         jacparam = jacobian[:, :, i]
         diffabs[i] = np.sum(np.abs(findiff - jacparam))

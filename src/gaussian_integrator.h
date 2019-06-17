@@ -21,8 +21,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
-#define MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
+#ifndef __MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
+#define __MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
 
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>

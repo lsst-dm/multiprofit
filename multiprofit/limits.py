@@ -20,6 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import numpy as np
+from multiprofit.transforms import transforms_ref
 
 
 class Limits:
@@ -55,6 +56,14 @@ limits_ref = {
     "fractionlog10": Limits(upper=0., transformed=True),
     "axratlog10": Limits(lower=-2., upper=0., transformed=True),
     "coninverse": Limits(lower=0.1, upper=0.9090909, transformed=True),
+    "nser": Limits(lower=0.3, upper=6.0),
+    "nsermultigauss": Limits(lower=transforms_ref["logitmultigausssersic"](0.5),
+                             upper=transforms_ref["logitmultigausssersic"](6.0),
+                             transformed=True),
     "nserlog10": Limits(lower=np.log10(0.3), upper=np.log10(6.0), is_lower_inclusive=False,
                         is_upper_inclusive=False, transformed=True),
+    "rho": Limits(lower=-1+1e-8, upper=1-1e-8),
+    "logitrho": Limits(lower=transforms_ref["logitrho"](-1+1e-8),
+                       upper=transforms_ref["logitrho"](1-1e-8),
+                       transformed=True),
 }
