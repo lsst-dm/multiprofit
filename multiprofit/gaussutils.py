@@ -60,7 +60,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
             sin_ang_sq = 1-cos_ang_sq
         #  == cos^2 - sin^2 == cos(2*theta)
         denom = 2.*cos_ang_sq - 1.
-        if np.abs(denom) < 1e-4:
+        if np.abs(denom) < 1e-4 or (1 - np.abs(denom)) < 1e-4:
             use_method_eigen = True
             if not is_matrix:
                 covar = Ellipse.covar_terms_as(*x)
@@ -69,7 +69,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
             sigma_v = np.sqrt((cos_ang_sq*sigma_y_sq - sin_ang_sq*sigma_x_sq)/denom)
             sigma_maj = np.max([sigma_u, sigma_v])
             axrat = sigma_u/sigma_v if sigma_u < sigma_v else sigma_v/sigma_u
-            if not 0 < axrat <= 1:
+            if not 0 <= axrat <= 1:
                 raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
                                    "sigma_u={} sigma_v={}".format(axrat, x, sigma_u, sigma_v))
     if use_method_eigen:
@@ -77,7 +77,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
         index_maj = np.argmax(eigenvalues)
         sigma_maj = np.sqrt(eigenvalues[index_maj])
         axrat = np.sqrt(eigenvalues[1-index_maj])/sigma_maj
-        if not 0 < axrat <= 1:
+        if not 0 <= axrat <= 1:
             raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
                                "eigenvalues={} eigenvecs={}".format(axrat, x, eigenvalues, eigenvecs))
     return sigma_maj, axrat, np.degrees(ang)
