@@ -22,6 +22,7 @@
 import numpy as np
 import scipy.optimize as spopt
 from multiprofit.ellipse import Ellipse
+from _multiprofit import loglike_gaussians_pixel as loglike_gaussians_pixel_pb
 
 
 def sigma_to_reff(sigma):
@@ -60,7 +61,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
             sin_ang_sq = 1-cos_ang_sq
         #  == cos^2 - sin^2 == cos(2*theta)
         denom = 2.*cos_ang_sq - 1.
-        if np.abs(denom) < 1e-4:
+        if np.abs(denom) < 1e-4 or (1 - np.abs(denom)) < 1e-4:
             use_method_eigen = True
             if not is_matrix:
                 covar = Ellipse.covar_terms_as(*x)
@@ -69,7 +70,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
             sigma_v = np.sqrt((cos_ang_sq*sigma_y_sq - sin_ang_sq*sigma_x_sq)/denom)
             sigma_maj = np.max([sigma_u, sigma_v])
             axrat = sigma_u/sigma_v if sigma_u < sigma_v else sigma_v/sigma_u
-            if not 0 < axrat <= 1:
+            if not 0 <= axrat <= 1:
                 raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
                                    "sigma_u={} sigma_v={}".format(axrat, x, sigma_u, sigma_v))
     if use_method_eigen:
@@ -77,7 +78,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
         index_maj = np.argmax(eigenvalues)
         sigma_maj = np.sqrt(eigenvalues[index_maj])
         axrat = np.sqrt(eigenvalues[1-index_maj])/sigma_maj
-        if not 0 < axrat <= 1:
+        if not 0 <= axrat <= 1:
             raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
                                "eigenvalues={} eigenvecs={}".format(axrat, x, eigenvalues, eigenvecs))
     return sigma_maj, axrat, np.degrees(ang)
@@ -140,3 +141,39 @@ def multigauss2drquant(weightsizes, quant=0.5, xmin=0, xmax=1e5):
     if weight_sum_zero_size/weight_sum >= quant:
         return 0
     return spopt.brentq(multigauss2dint, a=xmin, b=xmax, args=(weightsizes, quant))
+
+
+zeros_double = np.zeros((0, 0))
+zeros_uint64 = np.zeros((0, 0), dtype=np.uint64)
+
+
+def loglike_gaussians_pixel(
+        data, variance_inv, gaussians, x_min=None, x_max=None, y_min=None, y_max=None,
+        to_add=False, output=None, grad=None, grad_param_map=None, grad_param_factor=None,
+        sersic_param_map=None, sersic_param_factor=None,
+):
+    if output is None:
+        output = zeros_double
+    if grad is None:
+        grad = zeros_double
+    if grad_param_map is None:
+        grad_param_map = zeros_uint64
+    if sersic_param_map is None:
+        sersic_param_map = zeros_uint64
+    if grad_param_factor is None:
+        grad_param_factor = zeros_double
+    if sersic_param_factor is None:
+        sersic_param_factor = zeros_double
+    if x_min is None:
+        x_min = 0
+    if x_max is None:
+        x_max = data.shape[1]
+    if y_min is None:
+        y_min = 0
+    if y_max is None:
+        y_max = data.shape[0]
+    return loglike_gaussians_pixel_pb(
+        data=data, variance_inv=variance_inv, gaussians=gaussians, x_min=x_min, x_max=x_max,
+        y_min=y_min, y_max=y_max, to_add=to_add, output=output, grad=grad,
+        grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
+        sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor)

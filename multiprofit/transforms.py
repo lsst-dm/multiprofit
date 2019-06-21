@@ -111,8 +111,9 @@ transforms_ref = {
     "log10": Transform(transform=np.log10, reverse=functools.partial(np.power, 10.), derivative=dlog10dx),
     "inverse": Transform(transform=np.reciprocal, reverse=np.reciprocal, derivative=negativeinversesquare),
     "logit": Transform(transform=special.logit, reverse=special.expit, derivative=dlogitdx),
+    "logitrho": get_logit_limited(-1, 1),
     "logitsigned": get_logit_limited(-1, 1),
     "logitaxrat": get_logit_limited(1e-4, 1),
-    "logitsersic":  get_logit_limited(0.3, 6.2),
-    "logitmultigausssersic": get_logit_limited(0.3, 6.2),
+    "logitsersic": get_logit_limited(np.nextafter(0.3, 0), np.nextafter(6.0, np.Inf)),
+    "logitmultigausssersic": get_logit_limited(np.nextafter(0.5, 0), np.nextafter(6.0, np.Inf)),
 }

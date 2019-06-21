@@ -28,6 +28,8 @@ import multiprofit.utils as mpfutil
 import numpy as np
 import scipy.interpolate as spinterp
 
+ln10 = np.log(10)
+
 
 class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
     # TODO: Figure out a better way to split functionality between this and EllipticalProfile
@@ -1564,7 +1566,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                 (value.fixed and fixed) or (not value.fixed and free)]
 
     def get_profiles(self, flux_by_band, engine, cenx, ceny, params=None, engineopts=None,
-                     get_derivatives=False):
+                     get_derivatives=True):
         self._checkengine(engine)
         if params is None:
             params = {}
@@ -1578,16 +1580,20 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
 
         profile = {param.name: param.get_value(transformed=False) for param in
                    self.parameters.values()}
-        slope = profile["nser"] if self.profile == "sersic" else None
+        is_sersic = self.profile == "sersic"
+        slope = profile["nser"] if is_sersic else None
+        if is_sersic:
+            param_nser = self.parameters["nser"]
         if slope is None:
             raise RuntimeError("Can't get multigaussian profiles for profile {}".format(profile))
-        canreturngauss = self.profile == "sersic" and (slope <= 0.5) and (
-            not self.returnallprofiles or self.parameters["nser"].fixed) and not get_derivatives
-        if canreturngauss:
+        can_return_gauss = self.profile == "sersic" and (slope <= 0.5) and (
+            not self.do_return_all_profiles or self.parameters["nser"].fixed) and not get_derivatives
+        if can_return_gauss:
             weights = [1]
             sigmas = [1]
             profiles = [{}]
         else:
+            slope_log10 = np.log10(slope)
             if slope in MultiGaussianApproximationProfile.weights[self.profile][self.order]:
                 weights, sigmas = MultiGaussianApproximationProfile.weights[self.profile][self.order][slope]
                 negatives = weights < 0
@@ -1595,18 +1601,21 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                     raise RuntimeError("MultiGaussianApproximationProfile.weights[{}][{}] = {} "
                                        "has negative weights".format(self.profile, self.order, weights))
             else:
-                slope = np.log10(slope)
-                weights = np.array([f(slope) for f in self.weightsplines])
-                sigmas = np.array([f(slope) for f in self.sigmasplines])
+                weights = np.array([f[0](slope_log10) for f in self.weight_splines])
+                sigmas = np.array([f[0](slope_log10) for f in self.sigma_splines])
                 negatives = weights < 0
             weights[negatives] = 0
             if not all([0 <= w <= 1 and (s > 0 or s > 0) for w, s in zip(weights, sigmas)]):
                 raise RuntimeError('Weights {} not all >= 0 and <= 1 and/or sigmas {} not all >=0 for slope '
-                                   '{:.4e}'.format(weights, sigmas, slope))
+                                   '{:.4e} log10(slope)={:.4e}'.format(weights, sigmas, slope, slope_log10))
             weights, total = mpfutil.normalize(weights, return_sum=True)
             if get_derivatives:
-                dweights = np.array([f.derivatives(slope)[0] for f in self.weightsplines])
-                dsigmas = np.array([f.derivatives(slope)[0] for f in self.sigmasplines])
+                try:
+                    # Return dy/dn_ser, not dy/d(log10(nser))
+                    dweights = np.array([f[1](slope_log10)/(slope*ln10) for f in self.weight_splines])
+                    dsigmas = np.array([f[1](slope_log10)/(slope*ln10) for f in self.sigma_splines])
+                except Exception as e:
+                    raise e
                 dweights[negatives] = 0
             profiles = [{} for _ in range(self.order)]
 
@@ -1626,10 +1635,8 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                 flux *= flux_by_band[band]
                 flux_by_band[band] *= (1.0-fluxratio)
             if not 0 < profile["axrat"] <= 1:
-                if profile["axrat"] > 1:
-                    profile["axrat"] = 1
-                elif profile["axrat"] <= 0:
-                    profile["axrat"] = 1e-15
+                if profile["axrat"] <= __class__.axrat_min:
+                    profile["axrat"] = __class__.axrat_min
                 else:
                     raise ValueError("axrat {} ! >0 and <=1".format(profile["axrat"]))
 
@@ -1650,18 +1657,23 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
             profile["pointsource"] = False
             profile["resolved"] = True
             profile["param_flux"] = flux_param_by_band[band]
+            if is_sersic:
+                profile["param_nser"] = param_nser
 
             for subcomp, (weight, size) in enumerate(zip(weights, sigmas)):
                 profile_sub = copy.copy(profile)
+                # Not needed right now. Maybe later?
+                #profile_sub["fluxfrac_sub"] = weight
+                profile_sub["sigma_factor"] = size
                 profile_sub["sigma_x"] *= size
                 profile_sub["sigma_y"] *= size
                 fluxsub = weight*flux
                 if not fluxsub >= 0:
-                    print(np.array([f(slope) for f in self.weightsplines]))
+                    print(np.array([f[0](slope_log10) for f in self.weight_splines]))
                     print(weights)
                     print(sigmas)
-                    print(weight, sigma, slope, profile_sub)
-                    raise RuntimeError('wtf2 fluxsub !>=0')
+                    print(weight, sigma, slope_log10, profile_sub)
+                    raise RuntimeError('MGA {} fluxsub={} !>=0'.format(self.profile, fluxsub))
                 if engine == "galsim":
                     profile_gs = gs.Gaussian(flux=weight*flux, sigma=sigma*size*axrat_sqrt, gsparams=gsparams)
                     profile_sub.update({
@@ -1673,8 +1685,8 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                     profile_sub["mag"] = mpfutil.flux_to_mag(weight * flux)
                     profile_sub["re"] = reff*size
                 if get_derivatives:
-                    profile_sub["dweight"] = dweights[subcomp]
-                    profile_sub["dsigma"] = dsigmas[subcomp]
+                    profile_sub["dweight_dn"] = dweights[subcomp]
+                    profile_sub["dsigma_dn"] = dsigmas[subcomp]
                 profiles[subcomp][band] = profile_sub
 
         return profiles
@@ -1702,11 +1714,11 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                 if param.name == "nser":
                     nser = param.get_value(transformed=False)
                     nsers = [x for x in MultiGaussianApproximationProfile.weights[profile][order]]
-                    nsermin = min(nsers)
-                    nsermax = max(nsers)
-                    if nser < nsermin or nser > nsermax:
+                    nser_min = min(nsers)
+                    nser_max = max(nsers)
+                    if nser < nser_min or nser > nser_max:
                         raise RuntimeError("Asked for Multigaussiansersic with n={} not {}<n<{}".format(
-                            nser, nsermin, nsermax
+                            nser, nser_min, nser_max
                         ))
             elif param.name not in mpfobj.Component.optional:
                 errors.append("Unknown param {:s}".format(param.name))
@@ -1720,7 +1732,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
             raise ValueError(error_msg)
 
     def __init__(self, fluxes, params_ellipse, name="", profile="sersic", parameters=None, order=8,
-                 weightvars=None, returnallprofiles=False):
+                 weightvars=None, do_return_all_profiles=False):
         if profile not in MultiGaussianApproximationProfile.profiles_avail:
             raise ValueError("Profile type={:s} not in available: ".format(profile) + str(
                 MultiGaussianApproximationProfile.profiles_avail))
@@ -1729,26 +1741,27 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
         self.profile = profile
         self.order = order
         self.parameters = {param.name: param for param in parameters}
-        self.returnallprofiles = returnallprofiles
+        self.do_return_all_profiles = do_return_all_profiles
 
         # Also shamelessly modified from Tractor
         # TODO: Update this to raise errors instead of asserting
         if weightvars is None:
             weightvars = MultiGaussianApproximationProfile.weights[profile][order]
-        self.weightsplines = []
-        self.sigmasplines = []
+        self.weight_splines = []
+        self.sigma_splines = []
         for index, (weights, variances) in weightvars.items():
             assert (len(weights) == order), 'len(n={})={}'.format(index, len(weights))
             assert (len(variances) == order), 'len(n={})={}'.format(index, len(variances))
         indices = np.log10(np.array(list(weightvars.keys())))
-        weightvalues = np.array(list(weightvars.values()))
+        weight_values = np.array(list(weightvars.values()))
         for i in range(order):
             # Weights we want to ignore are flagged by negative radii
             # you might want a spline knot at r=0 and weight=0, although there is a danger of getting r < 0
-            isweight = np.array([value[1][i] >= 0 for value in weightvalues])
-            weightvaluestouse = weightvalues[isweight]
-            for j, (splines, ext, splineorder) in enumerate(
-                    [(self.weightsplines, 'zeros', 3), (self.sigmasplines, 'const', 5)]):
-                splines.append(spinterp.InterpolatedUnivariateSpline(
-                    indices[isweight], [values[j][i] for values in weightvaluestouse],
-                    ext=ext, k=splineorder))
+            is_weight = np.array([value[1][i] >= 0 for value in weight_values])
+            weight_valuestouse = weight_values[is_weight]
+            for j, (splines, ext, order_spline) in enumerate(
+                    [(self.weight_splines, 'zeros', 3), (self.sigma_splines, 'const', 5)]):
+                spline = spinterp.InterpolatedUnivariateSpline(
+                    indices[is_weight], [values[j][i] for values in weight_valuestouse],
+                    ext=ext, k=order_spline)
+                splines.append((spline, spline.derivative()))

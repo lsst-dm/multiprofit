@@ -21,7 +21,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
+#ifndef __MULTIPROFIT_GAUSSIAN_INTEGRATOR_H
 #include "gaussian_integrator.h"
 #endif
 
