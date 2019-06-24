@@ -160,6 +160,11 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
                 params_ellipse_type[param.name] = param
             else:
                 params_other_type.append(param)
+        sigma_x, sigma_y, rho = [params_ellipse_type.get(p) for p in ['sigma_x', 'sigma_y', 'rho']]
+        if any([p is None for p in [sigma_x, sigma_y, rho]]):
+            raise RuntimeError('At least one of sigma_x,sigma_y,rho = {},{},{} is None from values {}'
+                               'and [p.name for p in params]={}'.format(
+                                    sigma_x, sigma_y, rho, values, [p.name for p in params]))
         params_ellipse = mpfobj.EllipseParameters(
             params_ellipse_type['sigma_x'], params_ellipse_type['sigma_y'], params_ellipse_type['rho'])
         if is_multi_gaussian_sersic:
@@ -238,8 +243,9 @@ def get_model(
         exposures = []
         for band in bands:
             for _ in range(n_exposures):
-                exposures.append(mpfobj.Exposure(band, image=np.zeros(shape=size_image),
-                                                 mask_inverse=None, sigma_inverse=None))
+                exposures.append(
+                    mpfobj.Exposure(
+                        band, image=np.zeros(shape=size_image), mask_inverse=None, error_inverse=None))
         data = mpfobj.Data(exposures)
     else:
         data = None
@@ -351,7 +357,7 @@ def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
     return fit, modeller
 
 
-def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, sigma_inverse=None, modellib="scipy",
+def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse=None, modellib="scipy",
             modellibopts=None, plot=False, title='', name_model=None, label=None, do_print_final=True,
             print_step_interval=100, figaxes=(None, None), row_figure=None, redo=True):
     if fits_model_psf is None:
@@ -365,7 +371,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, sigma_inverse
             fits_model_psf[engine] = {}
         if redo or name_model not in fits_model_psf[engine]:
             model = get_psfmodel(engine, engineopts, num_comps, band, modeltype, imgpsf,
-                                 sigma_inverse=sigma_inverse)
+                                 error_inverse=error_inverse)
             fits_model_psf[engine][name_model] = {}
         else:
             model = fits_model_psf[engine][name_model]['modeller'].model
@@ -380,7 +386,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, sigma_inverse
             exposure = model.data.exposures[band][0]
             is_empty = isinstance(exposure.image, ImageEmpty)
             if is_empty:
-                set_exposure(model, band, image=imgpsf, sigma_inverse=sigma_inverse)
+                set_exposure(model, band, image=imgpsf, error_inverse=error_inverse)
             evaluate_model(
                 model, param_values=fits_model_psf[engine][name_model]['fit']['params_best'],
                 plot=plot, title=title, name_model=label, figure=figaxes[0], axes=figaxes[1],
@@ -744,7 +750,7 @@ def fit_galaxy_exposures(
         "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
     }
     figure, axes = (None, None)
-    psfrow = None
+    row_psf = None
     if plot:
         num_psfs = 0
         for modeltype_psf, _ in model_psfs:
@@ -755,45 +761,51 @@ def fit_galaxy_exposures(
             figure, axes = plt.subplots(nrows=min([ncols, num_psfs]), ncols=max([ncols, num_psfs]))
             if num_psfs > ncols:
                 axes = np.transpose(axes)
-            psfrow = 0
+            row_psf = 0
+    any_skipped = False
     for idx, (exposure, psf) in enumerate(exposures_psfs):
         band = exposure.band
-        if idx not in psfs:
-            psfs[idx] = {engine: {}}
-        for modeltype_psf, is_psf_pixelated in model_psfs:
-            name_psf = modeltype_psf + ("_pixelated" if is_psf_pixelated else "")
-            label = modeltype_psf + (" pix." if is_psf_pixelated else "") + " PSF"
-            if modeltype_psf == "empirical":
-                # TODO: Check if this works
-                psfs[idx][engine][name_psf] = {'object': mpfobj.PSF(
-                    band=band, engine=engine, image=psf.image.array)}
-            else:
-                engineopts["drawmethod"] = "no_pixel" if is_psf_pixelated else None
-                refit = redo_psfs or (name_psf not in psfs[idx][engine])
-                if refit or plot:
-                    if refit:
-                        print('Fitting PSF band={} model={} (not in {})'.format(
-                            band, name_psf, psfs[idx][engine]))
-                    psfs[idx] = fit_psf(
-                        modeltype_psf, psf.image.array, {engine: engineopts}, band=band,
-                        fits_model_psf=psfs[idx], plot=plot, name_model=name_psf, label=label, title=name_fit,
-                        figaxes=(figure, axes), row_figure=psfrow, redo=refit, print_step_interval=np.Inf)
-                    if redo or 'object' not in psfs[idx][engine][name_psf]:
-                        psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
-                            band=band, engine=engine,
-                            model=psfs[idx][engine][name_psf]['modeller'].model.sources[0],
-                            is_model_pixelated=is_psf_pixelated)
-                    if plot and psfrow is not None:
-                        psfrow += 1
-        exposures_psfs[idx] = (exposures_psfs[idx][0], psfs[idx])
+        if band in bands:
+            if idx not in psfs:
+                psfs[idx] = {engine: {}}
+            for modeltype_psf, is_psf_pixelated in model_psfs:
+                name_psf = modeltype_psf + ("_pixelated" if is_psf_pixelated else "")
+                label = modeltype_psf + (" pix." if is_psf_pixelated else "") + " PSF"
+                if modeltype_psf == "empirical":
+                    # TODO: Check if this works
+                    psfs[idx][engine][name_psf] = {'object': mpfobj.PSF(
+                        band=band, engine=engine, image=psf.image.array)}
+                else:
+                    engineopts["drawmethod"] = "no_pixel" if is_psf_pixelated else None
+                    do_fit = redo_psfs or (name_psf not in psfs[idx][engine])
+                    if do_fit or plot:
+                        if do_fit:
+                            print('Fitting PSF band={} model={} (not in {})'.format(
+                                band, name_psf, psfs[idx][engine]))
+                        psfs[idx] = fit_psf(
+                            modeltype_psf, psf.image.array if do_fit or plot else None,
+                            {engine: engineopts}, band=band, fits_model_psf=psfs[idx], plot=plot,
+                            name_model=name_psf, label=label, title=name_fit, figaxes=(figure, axes),
+                            row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf)
+                        if do_fit or 'object' not in psfs[idx][engine][name_psf]:
+                            psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
+                                band=band, engine=engine,
+                                model=psfs[idx][engine][name_psf]['modeller'].model.sources[0],
+                                is_model_pixelated=is_psf_pixelated)
+                        if plot and row_psf is not None:
+                            row_psf += 1
+            exposures_psfs[idx] = (exposure, psfs[idx])
+        else:
+            any_skipped = True
     if plot:
         plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
     fits_by_engine = None if 'fits' not in results else results['fits']
     models = None if 'models' not in results else results['models']
     kwargs['redo'] = redo
     fits, models = fit_galaxy(
-        exposures_psfs, modelspecs=modelspecs, name=name_fit, plot=plot, models=models,
-        fits_by_engine=fits_by_engine, **kwargs)
+        exposures_psfs if not any_skipped else [x for x in exposures_psfs if x[0].band in bands],
+        modelspecs=modelspecs, name=name_fit, plot=plot, models=models, fits_by_engine=fits_by_engine,
+        **kwargs)
     if reset_images:
         for idx, psfs_by_engine in psfs.items():
             if engine in psfs_by_engine:
@@ -835,7 +847,7 @@ def get_psfmodel(
         fluxfracs=mpfutil.normalize(2.**(-np.arange(num_comps))), engine=engine, engineopts=engineopts)
     for param in model.get_parameters(fixed=False):
         param.fixed = isinstance(param, mpfobj.FluxParameter) and not param.is_fluxratio
-    set_exposure(model, band, image=image, sigma_inverse=sigma_inverse, factor_sigma=factor_sigma)
+    set_exposure(model, band, image=image, error_inverse=error_inverse, factor_sigma=factor_sigma)
     return model
 
 
@@ -1116,17 +1128,20 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         # TODO: Find a more elegant method to do this
         inittype_mod = fits_engine[inittype]['modeltype'].split('+')
         inittype_split = inittype_mod[0].split(':')
-        modeltype_base = modeltype.split('+')[0]
+        inittype_order = None if not inittype_split[0].startswith('mgsersic') else \
+            np.int(inittype_split[0].split('mgsersic')[1])
+        if inittype_order is not None:
+            if inittype_order not in MultiGaussianApproximationProfile.weights['sersic']:
+                raise RuntimeError('Inittype {} has unimplemented order {} not in {}'.format(
+                    inittype, inittype_order, MultiGaussianApproximationProfile.weights['sersic'].keys()))
+        modeltype_base = modeltype.split('+')[0].split(':')
         is_mg_to_gauss = (
-            len(inittype_split) == 2
-            and modeltype_base in ['gaussian:' + str(order) for order in
-                                   MultiGaussianApproximationProfile.weights['sersic']]
-            and inittype_split[0] in [
-                'mgsersic' + str(order) for order in MultiGaussianApproximationProfile.weights['sersic']]
-            and inittype_split[1].isdecimal()
+                inittype_order is not None and inittype_split[1].isdecimal() and
+                modeltype_base[0] == 'gaussian' and len(modeltype_base) > 1 and modeltype_base[1].isdecimal()
+                and np.int(modeltype_base[1]) == inittype_order*np.int(inittype_split[1])
         )
         if is_mg_to_gauss:
-            num_components = np.repeat(np.int(inittype_split[0].split('mgsersic')[1]), inittype_split[1])
+            num_components = np.repeat(inittype_order, inittype_split[1])
             num_sources = len(model.sources)
             model_new = model
             model = models[fits_engine[inittype]['modeltype']]
@@ -1139,8 +1154,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         for i in range(1+is_mg_to_gauss):
             params_all = model.get_parameters(fixed=True, modifiers=not is_mg_to_gauss)
             if is_mg_to_gauss:
-                print('Paramvaluesinit:', values_param_init)
-                print('Paramnames: ', [x.name for x in params_all])
+                print('Param values init:', values_param_init)
+                print('Param names: ', [x.name for x in params_all])
             if len(values_param_init) != len(params_all):
                 raise RuntimeError('len(values_param_init)={} != len(params)={}, params_all={}'.format(
                     len(values_param_init), len(params_all), [x.name for x in params_all]))
@@ -1167,7 +1182,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                     for modeli in [model, model_new]:
                         modeli.sources[idx_src].modelphotometric.components = []
                     values_param_init = [param.get_value(transformed=False)
-                                     for param in model.get_parameters(fixed=True)]
+                                         for param in model.get_parameters(fixed=True)]
                     model.sources[idx_src].modelphotometric.components = components_old
                 model = model_new
         if is_mg_to_gauss:
@@ -1178,7 +1193,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
 
 # Convenience function to set an exposure object with optional defaults for the sigma (variance) map
 # Can be used to nullify an exposure before saving to disk, for example
-def set_exposure(model, band, index=0, image=None, sigma_inverse=None, psf=None, mask=None, meta=None,
+def set_exposure(model, band, index=0, image=None, error_inverse=None, psf=None, mask=None, meta=None,
                  factor_sigma=1):
     if band not in model.data.exposures:
         model.data.exposures[band] = [mpfobj.Exposure(band=band, image=None)]
@@ -1186,13 +1201,15 @@ def set_exposure(model, band, index=0, image=None, sigma_inverse=None, psf=None,
     is_empty_image = image is "empty"
     exposure.image = image if not is_empty_image else ImageEmpty(exposure.image.shape)
     if is_empty_image:
-        exposure.sigma_inverse = exposure.image
+        exposure.error_inverse = exposure.image
     else:
-        if psf is None and image is not None and sigma_inverse is None:
-            sigmaimg = np.sqrt(np.var(image))
-            exposure.sigma_inverse = 1.0/(factor_sigma*sigmaimg)
+        if psf is None and image is not None and error_inverse is None:
+            img_sigma = np.sqrt(np.var(image))
+            exposure.error_inverse = 1.0/(factor_sigma*img_sigma)
         else:
-            exposure.sigma_inverse = sigma_inverse
+            exposure.error_inverse = error_inverse
+        if np.ndim(exposure.error_inverse) == 0:
+            exposure.error_inverse = np.array([[exposure.error_inverse]])
     exposure.psf = psf
     exposure.mask = mask
     exposure.meta = {} if meta is None else meta
@@ -1219,14 +1236,13 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
             bands.add(band)
     bands = list(bands)
     band_ref = bands[0]
-    params = ['mag', 're', 'axrat', 'ang', 'nser']
+    params = ['mag', 'sigma_x', 'sigma_y', 'rho', 'nser']
     values = {}
     fluxes = {}
     for band in bands:
         # Keep these as lists to make the check against values[band_ref] below easier (no need to call np.all)
         values[band] = {
-            'size' if name == 're' else 'slope' if name == 'nser' else name:
-                [profile[band][name] for profile in profiles]
+            'slope' if name == 'nser' else name: [profile[band][name] for profile in profiles]
             for name in params
         }
         # mag_to_flux needs a numpy array
@@ -1296,7 +1312,7 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
                         # This param will map onto the first component's param
                         param.fixed = True
                         params_inheritees[param.name].inheritors.append(param)
-                    if param.name == 're':
+                    if param.name == 'sigma_x' or param.name == 'sigma_y':
                         param.modifiers += params_modify_comp
             component_init += num_comps_to_add
 

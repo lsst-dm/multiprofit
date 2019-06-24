@@ -77,7 +77,8 @@ def covar_to_ellipse(x, use_method_eigen=True):
         eigenvalues, eigenvecs = np.linalg.eigh(covar)
         index_maj = np.argmax(eigenvalues)
         sigma_maj = np.sqrt(eigenvalues[index_maj])
-        axrat = np.sqrt(eigenvalues[1-index_maj])/sigma_maj
+        axrat = 1 if (sigma_maj == 0 and eigenvalues[1-index_maj] == 0) else \
+            np.sqrt(eigenvalues[1-index_maj])/sigma_maj
         if not 0 <= axrat <= 1:
             raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
                                "eigenvalues={} eigenvecs={}".format(axrat, x, eigenvalues, eigenvecs))

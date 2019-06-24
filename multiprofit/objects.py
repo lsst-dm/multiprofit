@@ -58,27 +58,28 @@ class Exposure:
         A class to hold an image, sigma map, bad pixel mask and reference to a PSF model/image.
         TODO: Decide whether this should be mutable and implement getters/setters if so; or use afw class
     """
-    def __init__(self, band, image, mask_inverse=None, sigma_inverse=None, psf=None, use_mask_inverse=None,
-                 meta=None):
+    def __init__(self, band, image, mask_inverse=None, error_inverse=None, psf=None, use_mask_inverse=None,
+                 meta=None, is_error_sigma=True):
         if psf is not None and not isinstance(psf, PSF):
             raise TypeError("Exposure (band={}) PSF type={:s} not instanceof({:s})".format(
                 band, type(psf), type(PSF)))
         self.band = band
         self.image = image
         args_extra = {
-            'sigma_inverse': sigma_inverse,
+            'error_inverse': error_inverse,
             'mask_inverse': mask_inverse,
         }
         for key, value in args_extra.items():
-            if value is not None and not (value.shape == image.shape or
-                                          (key == 'sigma_inverse' and np.prod(np.shape(value)) == 1)):
-                raise ValueError('Exposure input {:s} shape={} not same as image.shape={}'.format(
-                    key, value.shape, image.shape))
+            is_error = key == 'error_inverse'
+            if value is not None and not (value.shape == image.shape or (is_error and value.shape == (1,1))):
+                raise ValueError('Exposure input {:s} shape={} not same as image.shape={}{}'.format(
+                    key, value.shape, image.shape, ' or == (1, 1)'))
         self.mask_inverse = mask_inverse
-        self.sigma_inverse = sigma_inverse
+        self.error_inverse = error_inverse
         self.psf = psf
         self.use_mask_inverse = use_mask_inverse
         self.meta = dict() if meta is None else meta
+        self.is_error_sigma = is_error_sigma
 
 
 class Data:
@@ -345,8 +346,8 @@ class Model:
         axes[4].plot(x, spstats.norm.pdf(x))
         chisqred = np.sum(chi*chi)/len(chi)
         Model._label_figureaxes(axes, chisqred, name_model=name_model, description_model=description_model,
-                                label_img=band_string, is_first_model=is_first_model, is_last_model=is_last_model,
-                                do_plot_as_column=do_plot_as_column,
+                                label_img=band_string, is_first_model=is_first_model,
+                                is_last_model=is_last_model, do_plot_as_column=do_plot_as_column,
                                 label_diff_postfix=' (lim. +/- {}*max(image)'.format(imgdiffscale),
                                 label_chi_postfix=r' ($\pm 10\sigma$)')
 
@@ -414,6 +415,9 @@ class Model:
                 exposure.meta["index_jacobian_start"] = datasize
                 datasize += exposure.image.size
                 exposure.meta["index_jacobian_end"] = datasize
+                if exposure.is_error_sigma:
+                    exposure.error_inverse = exposure.error_inverse**2
+                    exposure.is_error_sigma = False
             gpmb_indices, gpmb_params = grad_param_maps[band]
             for idx, profile in enumerate(profiles):
                 gpmb_indices_row = gpmb_indices[idx, :]
@@ -529,10 +533,10 @@ class Model:
         if param_values is None:
             param_values = [param.value for param in params]
         else:
-            lenum_params = len(param_values)
-            if not len(params) == lenum_params:
+            num_params = len(param_values)
+            if not len(params) == num_params:
                 raise RuntimeError("Length of parameters[{:d}] != # of free param_values=[{:d}]".format(
-                    len(params), lenum_params
+                    len(params), num_params
                 ))
             for paramobj, value_param in zip(params, param_values):
                 paramobj.set_value(value_param, transformed=params_transformed)
@@ -553,19 +557,24 @@ class Model:
                 for band in bands:
                     num_plots += len(data.exposures[band])
                 num_rows = num_plots + do_plot_multi
+                num_rows_band = {band: num_rows for band in bands}
                 figure, axes = plt.subplots(nrows=num_rows, ncols=5, figsize=(10, 2*num_rows), dpi=100)
                 if num_plots == 1:
                     axes.shape = (1, 5)
                 row_figure = 0
             else:
-                num_rows = axes.shape[0]
+                num_bands = len(bands)
+                num_rows_band = {band: (axes[band] if num_bands > 1 else axes).shape[0] for band in bands}
             figaxes = (figure, axes)
             is_first_model = row_figure is None or row_figure == 0
-            is_last_model = row_figure is None or axes is None or ((row_figure + 1) == num_rows)
+            is_last_model_band = {
+                band: row_figure is None or axes is None or (row_figure + 1) == num_rows_band[band]
+                for band in bands
+            }
         else:
             figaxes = None
             is_first_model = None
-            is_last_model = None
+            is_last_model_band = None
         if plot and (figaxes is None or any(x is None for x in figaxes)):
             raise RuntimeError("Plot is true but there are None figaxes: {}".format(figaxes))
         chis = []
@@ -583,6 +592,7 @@ class Model:
             time_now = time.time()
 
         for band in bands:
+            is_last_model = is_last_model_band[band] if is_last_model_band is not None else None
             # TODO: Check band
             for idx_exposure, exposure in enumerate(data.exposures[band]):
                 profiles, meta_model, times = self._get_image_model_exposure_setup(
@@ -617,7 +627,8 @@ class Model:
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
                                      num_params_gauss*len(profiles)))
                     mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, variance_inv=np.array([[exposure.sigma_inverse**2]]),
+                        data=exposure.image,
+                        variance_inv=exposure.error_inverse**(1 + exposure.is_error_sigma),
                         gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                         to_add=False, grad=grad)
                     dx = 1e-6
@@ -653,7 +664,8 @@ class Model:
                     if image is None:
                         if do_compare_likelihoods and 'jacobian' in exposure.meta:
                             likelihood = mpfgauss.loglike_gaussians_pixel(
-                                data=exposure.image, variance_inv=np.array([[exposure.sigma_inverse**2]]),
+                                data=exposure.image,
+                                variance_inv=exposure.error_inverse**(1 + exposure.is_error_sigma),
                                 gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                                 output=image)
                         else:
@@ -677,7 +689,8 @@ class Model:
                             'get_image_model_exposure vs get_exposure_likelihood likelihoods differ '
                             'significantly ({:5e} vs {:5e})'.format(likelihood_new, likelihood_exposure))
                 elif do_draw_image:
-                    chi = (image - exposure.image)*exposure.sigma_inverse
+                    chi = (image - exposure.image)*exposure.error_inverse**(
+                            2**(-(not exposure.is_error_sigma)))
                 else:
                     chi = None
                 if get_likelihood or plot:
@@ -732,6 +745,7 @@ class Model:
         if likefunc is None:
             likefunc = self.likefunc
         has_mask = exposure.mask_inverse is not None
+        sigma_inv = exposure.error_inverse**(2**(-(not exposure.is_error_sigma)))
         if figaxes is not None:
             if params_postfix_name_model is not None:
                 if description_model is None:
@@ -773,7 +787,7 @@ class Model:
             if has_mask:
                 axes[2].contour(x, y, z)
             # The chi (data-model)/error map
-            chi *= exposure.sigma_inverse
+            chi *= sigma_inv
             chisqred = mpfutil.get_chisqred([chi[exposure.mask_inverse] if has_mask else chi])
             if norm_chi is None:
                 chi_abs_max = np.max(np.abs(chi))
@@ -804,16 +818,16 @@ class Model:
         else:
             if has_mask:
                 chi = (exposure.image[exposure.mask_inverse] - img_model[exposure.mask_inverse]) * \
-                    exposure.sigma_inverse[exposure.mask_inverse]
+                    sigma_inv[exposure.mask_inverse]
             else:
-                chi = (exposure.image - img_model)*exposure.sigma_inverse
+                chi = (exposure.image - img_model)*sigma_inv
         if likefunc == "t":
             variance = chi.var()
             dof = 2. * variance / (variance - 1.)
             dof = max(min(dof, float('inf')), 0)
             likelihood = np.sum(spstats.t.logpdf(chi, dof))
         elif likefunc == "normal":
-            likelihood = np.sum(spstats.norm.logpdf(chi) + np.log(exposure.sigma_inverse))
+            likelihood = np.sum(spstats.norm.logpdf(chi) + np.log(sigma_inv))
         else:
             raise ValueError("Unknown likelihood function {:s}".format(self.likefunc))
 
@@ -1012,17 +1026,14 @@ class Model:
             get_like_only = (get_likelihood or do_jacobian) and profiles_to_draw_now and \
                              not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
             if get_like_only:
-                variance_inv = exposure.sigma_inverse**2
-                is_variance_scalar = np.isscalar(variance_inv)
+                sigma_inv = exposure.error_inverse**(2**(-(not exposure.is_error_sigma)))
+                variance_inv = exposure.error_inverse**(1 + exposure.is_error_sigma)
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                 if 'like_const' not in exposure.meta:
-                    exposure.meta['like_const'] = np.sum(np.log(exposure.sigma_inverse/np.sqrt(2.*np.pi)))
-                    if is_variance_scalar:
+                    exposure.meta['like_const'] = np.sum(np.log(sigma_inv/np.sqrt(2.*np.pi)))
+                    if variance_inv.size == 1:
                         exposure.meta['like_const'] *= np.prod(exposure.image.shape)
                     print('Setting exposure.meta[\'like_const\']=', exposure.meta['like_const'])
-                if is_variance_scalar:
-                    # I think this is the easiest way to reshape it into a 1x1 matrix
-                    variance_inv = np.zeros((1, 1)) + variance_inv
                 do_jacobian_any = do_jacobian or do_fit_leastsq_prep
                 profiles_band_bad = 0
                 profiles_band = []
@@ -1786,7 +1797,7 @@ class Modeller:
                 result = algo.evolve(pop)
                 time_run += time.time() - time_init
                 params_best = result.champion_x
-                # TODO: Increment n_evalues
+                # TODO: Increment n_evals
             else:
                 raise RuntimeError("Unknown optimization library " + self.modellib)
 
@@ -2409,7 +2420,7 @@ class Parameter:
         A parameter with all the info about itself that you would need when fitting.
     """
     def get_transform_derivative(self, return_finite_diff=False, dx=None, verify=False,
-                                 verify_derivative_abs_max=1e7, dx_ratios=None, **kwargs):
+                                 verify_derivative_abs_max=1e6, dx_ratios=None, **kwargs):
         """
         :param return_finite_diff: bool; return a finite difference derivative if the transform doesn't have
             a derivative function.

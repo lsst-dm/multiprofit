@@ -71,7 +71,7 @@ def offset_img_chisq(x, args, return_img=False):
 
 # Fit the transform for a single COSMOS F814W image to match the HSC-I band image
 def fit_cosmos_galaxy_transform(
-        ra, dec, img_hst, imgpsf_gs, cutout_hsc, varhsc, scale_pix_hsc, scale_hst, plot=False):
+        ra, dec, img_hst, imgpsf_gs, cutout_hsc, varhsc, scale_pixel_hsc, scale_hst, plot=False):
     # Use Sophie's code to make our own cutout for comparison to the catalog
     # TODO: Double check the origin of these images; I assume they're the rotated and rescaled v2.0 mosaic
     angle_hst = None
@@ -100,7 +100,7 @@ def fit_cosmos_galaxy_transform(
         "psf": imgpsf_gs,
         "nx": cutout_hsc.shape[1],
         "ny": cutout_hsc.shape[0],
-        "scale": scale_pix_hsc,
+        "scale": scale_pixel_hsc,
     }
     result = spopt.minimize(offset_img_chisq, [np.log10(scale_flux_hst2hsc), 0, 0], method="Nelder-Mead",
                             args=args)
@@ -131,7 +131,8 @@ def get_exposures_hst(id_cosmos_gs, rgcat):
         (
             mpfobj.Exposure(
                 band, np.float64(rgcat.getGalImage(id_cosmos_gs).array),
-                sigma_inverse=np.power(np.float64(rgcat.getNoiseProperties(id_cosmos_gs)[2]), -0.5)),
+                error_inverse=np.array([[np.power(np.float64(
+                    rgcat.getNoiseProperties(id_cosmos_gs)[2]), -0.5)]])),
             rgcat.getPSF(id_cosmos_gs)
         ),
     ]
@@ -139,7 +140,7 @@ def get_exposures_hst(id_cosmos_gs, rgcat):
 
 
 def get_exposures_hst2hsc(
-        cutouts, scale_pix_hsc, radec, img_hst, psf_hst, scale_hst, results, realgalaxy,
+        cutouts, scale_pixel_hsc, radec, img_hst, psf_hst, scale_hst, results, realgalaxy,
         bands=None, typecutout='deblended', bandhst=None, plot=False, model_name_hst2hsc=None
     ):
     """
@@ -147,7 +148,7 @@ def get_exposures_hst2hsc(
 
     :param cutouts: Dict; key=band: value=dict; key=cutout type: value=dict; key=image type: value=image
         As returned by multiprofit.datautils.gethsc.get_cutout_hsc
-    :param scale_pix_hsc: Float; HSC pixel scale in arcseconds (0.168)
+    :param scale_pixel_hsc: Float; HSC pixel scale in arcseconds (0.168)
     :param radec: Iterable/tuple; [0]=right ascension, [1]=declination in degrees
     :param img_hst: ndarray; HST galaxy cutout
     :param psf_hst: ndarray; HST PSF image
@@ -168,18 +169,18 @@ def get_exposures_hst2hsc(
     for band in bands:
         cutouts_band = cutouts[band][typecutout]
         imgpsf = cutouts_band['psf']
-        imgpsf_gs = gs.InterpolatedImage(gs.Image(imgpsf, scale=scale_pix_hsc))
+        imgpsf_gs = gs.InterpolatedImage(gs.Image(imgpsf, scale=scale_pixel_hsc))
         ny, nx = cutouts_band['img'].shape
 
         # The COSMOS GalSim catalog is in the original HST frame, which is rotated by
         # 10-12 degrees from RA/Dec axes; fit for this
         result, angle_hst = fit_cosmos_galaxy_transform(
             radec[0], radec[1], img_hst, imgpsf_gs, cutouts_band['img'],
-            cutouts_band['var'], scale_pix_hsc, scale_hst, plot=plot
+            cutouts_band['var'], scale_pixel_hsc, scale_hst, plot=plot
         )
         fluxscale = (10 ** result.x[0])
         metadata = {
-            "lenhst2hsc": scale_hst/scale_pix_hsc,
+            "lenhst2hsc": scale_hst/scale_pixel_hsc,
             "fluxscale_hst2hsc": fluxscale,
             "angle_hst2hsc": angle_hst,
         }
@@ -188,11 +189,11 @@ def get_exposures_hst2hsc(
         if model_name_hst2hsc is None:
             # TODO: Fix this as it's not working by default
             img = offset_img_chisq(result.x, return_img=True, imgref=cutouts_band['img'],
-                                   psf=imgpsf_gs, nx=nx, ny=ny, scale=scale_pix_hsc)
-            img = gs.Convolve(img, imgpsf_gs).drawImage(nx=nx, ny=ny, scale=scale_pix_hsc)*fluxscale
+                                   psf=imgpsf_gs, nx=nx, ny=ny, scale=scale_pixel_hsc)
+            img = gs.Convolve(img, imgpsf_gs).drawImage(nx=nx, ny=ny, scale=scale_pixel_hsc)*fluxscale
             # The PSF is now HSTPSF*HSCPSF, and "truth" is the deconvolved HST image/model
             psf = gs.Convolve(imgpsf_gs, psf_hst.rotate(angle_hst*gs.degrees)).drawImage(
-                nx=nx, ny=ny, scale=scale_pix_hsc
+                nx=nx, ny=ny, scale=scale_pixel_hsc
             )
             psf /= np.sum(psf.array)
             psf = gs.InterpolatedImage(psf)
@@ -230,7 +231,7 @@ def get_exposures_hst2hsc(
             # Save the GalSim model object
             model_to_use.evaluate(keep_models=True, get_likelihood=False, do_draw_image=False)
             img = np.float64(gs.Convolve(image_model_exposure.meta['model']['galsim'], imgpsf_gs).drawImage(
-                nx=nx, ny=ny, scale=scale_pix_hsc, method='no_pixel').array)*fluxscale
+                nx=nx, ny=ny, scale=scale_pixel_hsc, method='no_pixel').array)*fluxscale
             psf = imgpsf_gs
 
         noisetoadd = np.random.normal(scale=np.sqrt(cutouts_band['var']))
@@ -244,7 +245,7 @@ def get_exposures_hst2hsc(
                 realgalaxy.rotate(angle_hst * gs.radians).shift(
                     result.x[1], result.x[2]
                 ), imgpsf_gs).drawImage(
-                nx=nx, ny=ny, scale=scale_pix_hsc)
+                nx=nx, ny=ny, scale=scale_pixel_hsc)
             img_hst2hsc += noisetoadd
             imgs_to_plot = (img.array, "my naive"), (img_hst2hsc.array, "GS RealGal")
             descpre = "HST {} - {}"
@@ -256,7 +257,7 @@ def get_exposures_hst2hsc(
                     bandhst, desc))
         # TODO: Use the mask in cutouts_band['mask'] (how?)
         exposures_psfs.append(
-            (mpfobj.Exposure(band, img, sigma_inverse=1.0/np.sqrt(cutouts_band['var'])), psf)
+            (mpfobj.Exposure(band, img, error_inverse=1.0/np.sqrt(cutouts_band['var'])), psf)
         )
         metadatas[band] = metadata
     return exposures_psfs, metadatas
@@ -293,12 +294,12 @@ def fit_galaxy_cosmos(
             raise ValueError('Must provide butler and skymap if fitting HSC or HST2HSC')
         import multiprofit.datautils.gethsc as gethsc
         # Determine the approximate HSC cutout size (larger than HST due to bigger PSF)
-        # scale_pix_hsc should always be ~0.168
+        # scale_pixel_hsc should always be ~0.168
         sizeCutoutHSC = np.int(4 + np.ceil(np.max(img_hst.shape)*scale_hst/0.168))
         sizeCutoutHSC += np.int(sizeCutoutHSC % 2)
-        cutouts, spherePoint, scale_pix_hsc, _ = gethsc.get_cutout_hsc(
-            butler, skymap, bands_hsc, radec, sizeinpix=sizeCutoutHSC, deblend=True, bandmatch='HSC-I',
-            distmatchinasec=1.0)
+        cutouts, spherePoint, scale_pixel_hsc, _ = gethsc.get_cutout_hsc(
+            butler, skymap, bands_hsc, radec, size_in_pix=sizeCutoutHSC, do_deblend=True, band_match='HSC-I',
+            dist_match_in_asec=1.0)
 
     results = kwargs['results'] if 'results' in kwargs and kwargs['results'] is not None else {}
     for src in srcs:
@@ -316,12 +317,12 @@ def fit_galaxy_cosmos(
                 if (size > 2.33) & (size > (1.75 + 0.5*flux)):
                     print('Exposure with log flux={} & log size={} ({}x{}) too big; cropping to 30%'.format(
                         flux, size, img_hst.shape[0], img_hst.shape[1]))
-                    for exposurepsf in exposures_psfs:
-                        shape = exposurepsf[0].image.shape
-                        exposurepsf[0].image = exposurepsf[0].image[
+                    for exposure_psf in exposures_psfs:
+                        shape = exposure_psf[0].image.shape
+                        exposure_psf[0].image = exposure_psf[0].image[
                                                    int(np.floor(shape[0]*0.35)):int(np.floor(shape[0]*0.65)),
                                                    int(np.floor(shape[1]*0.35)):int(np.floor(shape[1]*0.65))
-                                               ]
+                                                ]
                     img_hst = exposures_psfs_hst[0][0].image
             if not to_fit:
                 results[src]['error'] = 'Skipping {} fit for {} with unreasonable flux={} size={}'.format(
@@ -330,7 +331,7 @@ def fit_galaxy_cosmos(
         elif src == 'hsc' or src == 'hst2hsc':
             args_exposures = {
                 'cutouts': cutouts,
-                'scale_pix_hsc': scale_pix_hsc,
+                'scale_pixel_hsc': scale_pixel_hsc,
                 'bands': bands_hsc,
             }
 
