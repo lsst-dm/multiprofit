@@ -385,7 +385,7 @@ def main():
         'fithst2hsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
                                                                            'to HSC seeing'},
         'bands_hsc': {'type': str, 'nargs': '*', 'default': ['HSC-I'], 'help': 'HSC Bands to fit'},
-        'hscrepo': {'type': str, 'default': '/datasets/hsc/repo/rerun/RC/w_2019_02/DM-16110/',
+        'hscrepo': {'type': str, 'default': '/datasets/hsc/repo/rerun/RC/w_2019_26/DM-19560/',
                     'help': 'Path to HSC processing repository'},
         'model_name_hst2hsc': {'type': str, 'default': None,
                                'help': 'HST model fit to use for mock HSC image'},
