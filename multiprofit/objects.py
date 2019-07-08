@@ -2585,16 +2585,18 @@ class Parameter:
         return lower, upper
 
     def set_value(self, value, transformed=False):
-        if not transformed and self.limits is not None and not self.limits.transformed:
+        if self.limits is not None and transformed == self.limits.transformed:
             if value < self.limits.lower:
                 value = self.limits.lower
             elif value > self.limits.upper:
                 value = self.limits.upper
         if transformed and not self.transformed:
             value = self.transform.reverse(value)
+            transformed = False
         elif not transformed and self.transformed:
             value = self.transform.transform(value)
-        if transformed and self.limits is not None and self.limits.transformed:
+            transformed = True
+        if self.limits is not None and transformed == self.limits.transformed:
             if value < self.limits.lower:
                 value = self.limits.lower
             elif value > self.limits.upper:
