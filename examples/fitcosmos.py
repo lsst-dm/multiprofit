@@ -280,7 +280,7 @@ def fit_galaxy_cosmos(
     :param model_name_hst2hsc: String; name of the model to use for fitting mock HSC image
     :param bands_hsc: Iterable of strings; list of HSC bands. Default ['HSC-I'].
     :param scale_hst: Float; HST image pixel scale in arcsec
-    :param kwargs: Dict of key string argname: value arg to pass to fit_galaxyexposures
+    :param kwargs: Dict of key string argname: value arg to pass to fit_galaxy_exposures
     :return: dict; key=src: value=dict of fit results, model object, etc.
     """
     need_hsc = "hsc" in srcs or "hst2hsc" in srcs
@@ -400,6 +400,7 @@ def main():
         'nwrite': {'type': int, 'default': 5, 'help': 'Number of galaxies to fit before writing file'},
         #'engines':    {'type': str,   'nargs': '*', 'default': 'galsim', 'help': 'Model generation engines'},
         'plot': {'type': mpfutil.str2bool, 'default': False, 'help': 'Toggle plotting of final fits'},
+        'print_step': {'type': int, 'default': 100, 'help': 'Number of fitting steps before printing'},
         #'seed':       {'type': int,   'nargs': '?', 'default': 1, 'help': 'Numpy random seed'}
         'redo': {'type': mpfutil.str2bool, 'default': True, 'help': 'Redo existing fits'},
         'redo_psfs': {'type': mpfutil.str2bool, 'default': False, 'help': 'Redo existing PSF fits'},
@@ -490,7 +491,8 @@ def main():
                     model_name_hst2hsc=args.model_name_hst2hsc, bands_hsc=args.bands_hsc, scale_hst=scale_hst,
                     modellib=args.modellib, results=data[idnum] if idnum in data else None,
                     img_plot_maxs=args.img_plot_maxs, img_multi_plot_max=args.img_multi_plot_max,
-                    weights_band=args.weights_band, do_fit_fluxfracs=args.do_fit_fluxfracs)
+                    weights_band=args.weights_band, do_fit_fluxfracs=args.do_fit_fluxfracs,
+                    print_step_interval=args.print_step)
                 data[idnum] = fits
             except Exception as e:
                 print("Error fitting id={}:".format(idnum))
