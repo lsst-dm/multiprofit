@@ -359,13 +359,13 @@ class Model:
         if bands is None:
             bands = {}
         description_models = {}
-        descriptionum_params = {'nser': 'n', 'reff': 'r'}
+        description_params = {'nser': 'n', 'reff': 'r'}
         for formatstring, param in modelparamsformat:
             is_flux = isinstance(param, FluxParameter)
             is_fluxratio = is_flux and param.is_fluxratio
             if '=' not in formatstring:
                 name_param = 'f' if is_fluxratio else (
-                    descriptionum_params[param.name] if param.name in descriptionum_params else param.name)
+                    description_params[param.name] if param.name in description_params else param.name)
                 value = formatstring
             else:
                 name_param, value = formatstring.split('=')
@@ -381,7 +381,23 @@ class Model:
              if len(values) <= (1 + 2 * (name_param != 'f'))])
         return description_model
 
-    def _do_fit_leastsq_prep(self, bands):
+    def _do_fit_leastsq_prep(self, bands, engine, engineopts):
+        """
+        Determine if this model can do non-linear least squares fits (currently only for Gaussian mixtures),
+        and if so set up the necessary data structures.
+        :param bands: List[string] of filters. All exposures with these filters will be prepared.
+        :param engine: A valid rendering engine
+        :param engineopts: dict; engine options.
+        :return: tuple[grad_param_maps, sersic_param_maps, can_do_fit_leastsq]:
+            grad_param_maps: A 2D ndarray associating each Gaussian parameter with the index of the
+                free fit parameter controlling its value (if any).
+            sersic_param_maps: As grad_param_maps but specifically for Sersic index parameters.
+            can_do_fit_leastsq: If False, then both param_maps are set to None.
+        """
+        return_none = (None, None, False)
+        if engine == 'galsim' and not (
+                engineopts is not None and engineopts.get("drawmethod") == draw_method_pixel["galsim"]):
+            return return_none
         params = self.get_parameters(fixed=True)
         fixed = np.zeros(len(params))
         num_params_free = 0
