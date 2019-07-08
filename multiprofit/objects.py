@@ -2139,6 +2139,10 @@ class Component(object, metaclass=ABCMeta):
     def is_gaussian(self):
         pass
 
+    @abstractmethod
+    def is_gaussian_mixture(self):
+        pass
+
     def __init__(self, fluxes, name=""):
         for i, param in enumerate(fluxes):
             if not isinstance(param, FluxParameter):
@@ -2223,6 +2227,9 @@ class EllipticalComponent(Component):
     def is_gaussian(self):
         return False
 
+    def is_gaussian_mixture(self):
+        return False
+
     def __init__(self, fluxes, params_ellipse, name=""):
         super().__init__(fluxes, name=name)
         if not isinstance(params_ellipse, EllipseParameters):
@@ -2257,8 +2264,14 @@ class EllipticalParametricComponent(EllipticalComponent):
 
     # TODO: Should the parameters be stored as a dict? This method is the only reason why it's useful now
     def is_gaussian(self):
-        return (self.profile == "sersic" and self.parameters["nser"].get_value() == 0.5) \
+        return (
+            self.profile == "gaussian"
+            or (self.profile == "sersic" and self.parameters["nser"].get_value() == 0.5)
             or (self.profile == "moffat" and np.isinf(self.parameters["con"].get_value()))
+        )
+
+    def is_gaussian_mixture(self):
+        return self.is_gaussian()
 
     def get_parameters(self, free=True, fixed=True):
         return super().get_parameters(free=free, fixed=fixed) + \
@@ -2426,7 +2439,11 @@ class PointSourceProfile(Component):
 
     @classmethod
     def is_gaussian(cls):
-        return False
+        return True
+
+    @classmethod
+    def is_gaussian_mixture(cls):
+        return True
 
     def get_parameters(self, free=True, fixed=True):
         return [value for value in self.fluxes if

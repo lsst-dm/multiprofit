@@ -1558,6 +1558,9 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             raise ValueError("Unknown {:s} rendering engine {:s}".format(type(cls), engine))
 
     def is_gaussian(self):
+        return self.profile == "sersic" and self.parameters["nser"].get_value() == 0.5
+
+    def is_gaussian_mixture(self):
         return True
 
     def get_parameters(self, free=True, fixed=True):
