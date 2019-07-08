@@ -42,7 +42,7 @@ class Ellipse:
 
     @staticmethod
     def _check_all(sigma_x, sigma_y, rho):
-        if not 0 <= sigma_x < np.Inf:
+        if not (0 <= sigma_x < np.Inf) and (0 <= sigma_y < np.Inf) and (-1 < rho < 1):
             raise ValueError("!(0 <= sigma_x,y={},{} < np.Inf) and/or !(-1 < rho ={} < 1)".format(
                 sigma_x, sigma_y, rho))
 
