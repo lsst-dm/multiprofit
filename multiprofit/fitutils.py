@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 from multiprofit.ellipse import Ellipse
 import multiprofit.gaussutils as mpfgauss
 from multiprofit.limits import limits_ref, Limits
-from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationProfile
+from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref, get_logit_limited
 import multiprofit.utils as mpfutil
@@ -168,11 +168,11 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
         params_ellipse = mpfobj.EllipseParameters(
             params_ellipse_type['sigma_x'], params_ellipse_type['sigma_y'], params_ellipse_type['rho'])
         if is_multi_gaussian_sersic:
-            components.append(MultiGaussianApproximationProfile(
+            components.append(MultiGaussianApproximationComponent(
                 param_fluxescomp, params_ellipse=params_ellipse, profile=profile,
                 parameters=params_other_type, order=order))
         else:
-            components.append(mpfobj.EllipticalParametricProfile(
+            components.append(mpfobj.EllipticalParametricComponent(
                 param_fluxescomp, params_ellipse=params_ellipse, profile=profile,
                 parameters=params_other_type))
 
@@ -1131,9 +1131,9 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         inittype_order = None if not inittype_split[0].startswith('mgsersic') else \
             np.int(inittype_split[0].split('mgsersic')[1])
         if inittype_order is not None:
-            if inittype_order not in MultiGaussianApproximationProfile.weights['sersic']:
+            if inittype_order not in MultiGaussianApproximationComponent.weights['sersic']:
                 raise RuntimeError('Inittype {} has unimplemented order {} not in {}'.format(
-                    inittype, inittype_order, MultiGaussianApproximationProfile.weights['sersic'].keys()))
+                    inittype, inittype_order, MultiGaussianApproximationComponent.weights['sersic'].keys()))
         modeltype_base = modeltype.split('+')[0].split(':')
         is_mg_to_gauss = (
                 inittype_order is not None and inittype_split[1].isdecimal() and

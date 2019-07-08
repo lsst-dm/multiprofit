@@ -2156,7 +2156,7 @@ class EllipseParameters(Ellipse):
         self._check()
 
 
-class EllipticalProfile(Component):
+class EllipticalComponent(Component):
     axrat_min = 1e-8
 
     def get_profiles(self, flux_by_band, engine, cenx, ceny, params=None, engineopts=None):
@@ -2187,7 +2187,7 @@ class EllipticalProfile(Component):
         self.params_ellipse = params_ellipse
 
 
-class EllipticalParametricProfile(EllipticalProfile):
+class EllipticalParametricComponent(EllipticalComponent):
     """
         Class for any profile with a (generalized) ellipse shape.
         TODO: implement boxiness for libprofit; not sure if galsim does generalized ellipses?
@@ -2239,7 +2239,7 @@ class EllipticalParametricProfile(EllipticalProfile):
         for band in flux_by_band.keys():
             if band not in flux_param_by_band:
                 raise ValueError(
-                    "Asked for EllipticalProfile (profile={:s}, name={:s}) model for band={:s} not in "
+                    "Asked for EllipticalComponent (profile={:s}, name={:s}) model for band={:s} not in "
                     "bands with fluxes {}".format(self.profile, self.name, band, flux_param_by_band))
 
         profiles = {}
@@ -2336,7 +2336,7 @@ class EllipticalParametricProfile(EllipticalProfile):
 
     @classmethod
     def _checkparameters(cls, parameters, profile):
-        mandatory = {param: False for param in EllipticalParametricProfile.mandatory[profile]}
+        mandatory = {param: False for param in EllipticalParametricComponent.mandatory[profile]}
         name_params_needed = mandatory.keys()
         name_params = [param.name for param in parameters]
         errors = []

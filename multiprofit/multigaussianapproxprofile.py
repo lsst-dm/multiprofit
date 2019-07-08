@@ -31,9 +31,9 @@ import scipy.interpolate as spinterp
 ln10 = np.log(10)
 
 
-class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
-    # TODO: Figure out a better way to split functionality between this and EllipticalProfile
-    # Maybe have a generic EllipticalProfile and SingleEllipticalProfile?
+class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
+    # TODO: Figure out a better way to split functionality between this and EllipticalComponent
+    # Maybe have a generic EllipticalComponent and SingleEllipticalComponent?
     """
         Class for multi-Gaussian profiles with (generalized) ellipse shape(s).
     """
@@ -1575,7 +1575,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
         for band in flux_by_band.keys():
             if band not in flux_param_by_band:
                 raise ValueError(
-                    "Asked for EllipticalProfile (profile={:s}, name={:s}) model for band={:s} not in "
+                    "Asked for EllipticalComponent (profile={:s}, name={:s}) model for band={:s} not in "
                     "bands with fluxes {}".format(self.profile, self.name, band, flux_param_by_band))
 
         profile = {param.name: param.get_value(transformed=False) for param in
@@ -1594,11 +1594,11 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
             profiles = [{}]
         else:
             slope_log10 = np.log10(slope)
-            if slope in MultiGaussianApproximationProfile.weights[self.profile][self.order]:
-                weights, sigmas = MultiGaussianApproximationProfile.weights[self.profile][self.order][slope]
+            if slope in MultiGaussianApproximationComponent.weights[self.profile][self.order]:
+                weights, sigmas = MultiGaussianApproximationComponent.weights[self.profile][self.order][slope]
                 negatives = weights < 0
                 if any(negatives):
-                    raise RuntimeError("MultiGaussianApproximationProfile.weights[{}][{}] = {} "
+                    raise RuntimeError("MultiGaussianApproximationComponent.weights[{}][{}] = {} "
                                        "has negative weights".format(self.profile, self.order, weights))
             else:
                 weights = np.array([f[0](slope_log10) for f in self.weight_splines])
@@ -1693,11 +1693,11 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
 
     @classmethod
     def _checkparameters(cls, parameters, profile, order):
-        if profile != "sersic" and order not in MultiGaussianApproximationProfile.weights[profile]:
+        if profile != "sersic" and order not in MultiGaussianApproximationComponent.weights[profile]:
             raise ValueError("{} profile={} order={} not in supported {}".format(
-                cls.__name__, profile, order, MultiGaussianApproximationProfile.weights[profile].keys()))
+                cls.__name__, profile, order, MultiGaussianApproximationComponent.weights[profile].keys()))
 
-        mandatory = {param: False for param in mpfobj.EllipticalParametricProfile.mandatory[profile]}
+        mandatory = {param: False for param in mpfobj.EllipticalParametricComponent.mandatory[profile]}
         name_params_needed = mandatory.keys()
         name_params = [param.name for param in parameters]
         errors = []
@@ -1713,7 +1713,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
                 mandatory[param.name] = True
                 if param.name == "nser":
                     nser = param.get_value(transformed=False)
-                    nsers = [x for x in MultiGaussianApproximationProfile.weights[profile][order]]
+                    nsers = [x for x in MultiGaussianApproximationComponent.weights[profile][order]]
                     nser_min = min(nsers)
                     nser_max = max(nsers)
                     if nser < nser_min or nser > nser_max:
@@ -1733,9 +1733,9 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
 
     def __init__(self, fluxes, params_ellipse, name="", profile="sersic", parameters=None, order=8,
                  weightvars=None, do_return_all_profiles=False):
-        if profile not in MultiGaussianApproximationProfile.profiles_avail:
+        if profile not in MultiGaussianApproximationComponent.profiles_avail:
             raise ValueError("Profile type={:s} not in available: ".format(profile) + str(
-                MultiGaussianApproximationProfile.profiles_avail))
+                MultiGaussianApproximationComponent.profiles_avail))
         super().__init__(fluxes, params_ellipse, name=name)
         self._checkparameters(parameters, profile, order)
         self.profile = profile
@@ -1746,7 +1746,7 @@ class MultiGaussianApproximationProfile(mpfobj.EllipticalProfile):
         # Also shamelessly modified from Tractor
         # TODO: Update this to raise errors instead of asserting
         if weightvars is None:
-            weightvars = MultiGaussianApproximationProfile.weights[profile][order]
+            weightvars = MultiGaussianApproximationComponent.weights[profile][order]
         self.weight_splines = []
         self.sigma_splines = []
         for index, (weights, variances) in weightvars.items():
