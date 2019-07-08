@@ -477,6 +477,68 @@ class Model:
                 for item in ["jacobian", "residual"]:
                     if item in exposure.meta:
                         del exposure.meta[item]
+        self.jacobian = None
+        self.residuals = None
+
+    def __validate_jacobian_param(
+            self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
+            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=True):
+        value = param.get_value(transformed=True)
+        dx = np.clip(value*dx_ratio, 1e-8, np.Inf)
+        value_new = value + dx
+        param.set_value(value_new, transformed=True)
+        # This might happen if the parameter is near a limit
+        dparam = param.get_transform_derivative()
+        profiles_new, meta_model_new, engine_new, engineopts_new, _ = \
+            self._get_image_model_exposure_setup(
+                exposure, engine=engine, engineopts=engineopts)
+        errmsg = ""
+        for name_item, (item_new, item_old) in {
+            'meta_model': (meta_model_new, meta_model),
+            'engine'    : (engine_new, engine),
+            'engineopts': (engineopts_new, engineopts),
+        }.items():
+            if name_item == "meta_model":
+                if meta_model.keys() != meta_model_new.keys():
+                    errmsg += f"Got different meta_model keys validating jacobian: " \
+                        f"new={meta_model_new.keys()} vs old={meta_model.keys()}"
+                else:
+                    meta_model_diff = {}
+                    for key in meta_model:
+                        if key != "profiles" and meta_model[key] != meta_model_new[key]:
+                            meta_model_diff[key] = (meta_model[key], meta_model_new[key])
+                    if meta_model_diff:
+                        errmsg += f"Got different meta_model entries validating jacobian: " \
+                            f"{meta_model_diff}"
+            elif item_new != item_old:
+                errmsg += f"Got different {name_item} validating jacobian: " \
+                    f"new={item_new} vs old={item_old}"
+        if errmsg != "":
+            raise RuntimeError(errmsg)
+        image_new, model, _, likelihood_new = self.get_image_model_exposure(
+            exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
+            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False)
+        passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3,
+                            atol=1e-5)
+        param.set_value(value, transformed=True)
+        if not np.all(passed):
+            if do_plot_if_failed:
+                fig, axes = plt.subplots(ncols=3, nrows=2)
+                axes[0][0].imshow(image)
+                axes[0][1].imshow(image_new)
+                axes[0][2].imshow(passed+0.)
+                axes[1][0].imshow((image_new-image)/dx)
+                axes[1][1].imshow(jacobian[:, :, idx_param+1])
+                axes[1][2].imshow(jacobian[:, :, idx_param+1]/(image_new-image)*dx)
+                plt.show()
+            if do_raise:
+                raise RuntimeError(
+                    'jacobian verification failed on param {} value_transfo={:.10e} '
+                    'value_true={:.10e} with dx={} idx={} dparam={}'.format(
+                        param.name, value, param.get_value(transformed=False), dx, idx_param+1, dparam,
+                    ))
+            return False
+        return True
 
     def evaluate(self, param_values=None, data=None, bands=None, engine=None, engineopts=None,
                  params_transformed=True, get_likelihood=True, is_likelihood_log=True, keep_likelihood=False,
@@ -600,7 +662,7 @@ class Model:
             weight_per_img = []
         if do_fit_leastsq_prep:
             self.grad_param_maps, self.param_maps['sersic'], self.can_do_fit_leastsq = \
-                self._do_fit_leastsq_prep(bands)
+                self._do_fit_leastsq_prep(bands, engine, engineopts)
             if not self.can_do_fit_leastsq:
                 do_fit_leastsq_prep = False
         if clock:
@@ -611,7 +673,7 @@ class Model:
             is_last_model = is_last_model_band[band] if is_last_model_band is not None else None
             # TODO: Check band
             for idx_exposure, exposure in enumerate(data.exposures[band]):
-                profiles, meta_model, times = self._get_image_model_exposure_setup(
+                profiles, meta_model, engine, engineopts, times = self._get_image_model_exposure_setup(
                     exposure, engine=engine, engineopts=engineopts, clock=clock, times=times)
                 if self.can_do_fit_leastsq and not (
                         'is_all_gaussian' in meta_model and meta_model['is_all_gaussian']):
@@ -647,33 +709,15 @@ class Model:
                         variance_inv=exposure.error_inverse**(1 + exposure.is_error_sigma),
                         gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                         to_add=False, grad=grad)
-                    dx = 1e-6
                     for idx_param, param in enumerate(params):
-                        value = param.get_value(transformed=True)
-                        param.set_value(value + dx, transformed=True)
-                        profiles_new, meta_model_new, _ = self._get_image_model_exposure_setup(
-                            exposure, engine=engine, engineopts=engineopts)
-                        image_new, model, _, likelihood_new = self.get_image_model_exposure(
-                            exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
-                            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False)
-                        passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3,
-                                            atol=1e-5)
-                        if not np.all(passed):
-                            plot = True
-                            if plot:
-                                fig, axes = plt.subplots(ncols=3, nrows=2)
-                                axes[0][0].imshow(image)
-                                axes[0][1].imshow(image_new)
-                                axes[0][2].imshow(passed+0.)
-                                axes[1][0].imshow((image_new-image)/dx)
-                                axes[1][1].imshow(jacobian[:, :, idx_param+1])
-                                axes[1][2].imshow(jacobian[:, :, idx_param+1]/(image_new-image)*dx)
-                                plt.show()
-                            raise RuntimeError(
-                                'jacobian verification failed on param {} value_transfo={:.10e}'
-                                'value_true={:.10e} with dx={}'.format(
-                                    param.name, value, param.get_value(transformed=False), dx))
-                        param.set_value(value, transformed=True)
+                        if not self.__validate_jacobian_param(
+                            param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
+                            meta_model, dx_ratio=1e-6, do_raise=False, do_plot_if_failed=False
+                        ):
+                            self.__validate_jacobian_param(
+                                param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
+                                meta_model, dx_ratio=1e-6, do_raise=False, do_plot_if_failed=False
+                            )
 
                 if plot or (get_likelihood and likelihood_exposure is None) or (
                         do_compare_likelihoods and likelihood_exposure is not None):
