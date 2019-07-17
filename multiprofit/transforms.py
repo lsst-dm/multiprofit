@@ -41,7 +41,17 @@ class Transform:
     def __call__(self, *args, **kwargs):
         return self.transform(*args, **kwargs)
 
-    def __init__(self, transform=None, reverse=None, derivative=None):
+    def __str__(self):
+        attrs = ', '.join([
+            f'{var}={value}' for var, value in dict(
+                transform=self.transform,
+                reverse=self.reverse,
+                derivative=self.derivative
+            ).items()
+        ])
+        return f'Transform(name={self.name})({attrs})'
+
+    def __init__(self, transform=None, reverse=None, derivative=None, name=None):
         if transform is None or reverse is None:
             if transform is not reverse:
                 raise ValueError(
@@ -55,6 +65,7 @@ class Transform:
         self.transform = transform
         self.reverse = reverse
         self.derivative = derivative
+        self.name = name
         # TODO: Verify if forward(reverse(x)) == reverse(forward(x)) +/- error for x in ???
 
 
@@ -81,7 +92,9 @@ def powstretch(x, lower, factor=1.0):
 def get_stretch_log(lower, factor=1.0):
     return Transform(
         transform=functools.partial(logstretch, lower=lower, factor=factor),
-        reverse=functools.partial(powstretch, lower=lower, factor=1./factor))
+        reverse=functools.partial(powstretch, lower=lower, factor=1./factor),
+        name=f"stretch_log_lower={lower}_factor={factor}",
+    )
 
 
 def logitlimited(x, lower, extent, factor=1.0):
@@ -97,23 +110,26 @@ def expitlimited(x, lower, extent, factor=1.0):
     return special.expit(x*factor)*extent + lower
 
 
-def get_logit_limited(lower, upper, factor=1.0):
+def get_logit_limited(lower, upper, factor=1.0, name=None):
     return Transform(
         transform=functools.partial(logitlimited, lower=lower, extent=upper-lower, factor=factor),
         reverse=functools.partial(expitlimited, lower=lower, extent=upper-lower, factor=1./factor),
-        derivative=functools.partial(logitlimiteddx, lower=lower, extent=upper-lower, factor=factor)
+        derivative=functools.partial(logitlimiteddx, lower=lower, extent=upper-lower, factor=factor),
+        name=f"logit_limited_[{lower},{upper}]_factor={factor}" if name is None else None,
     )
 
 
 transforms_ref = {
-    "none": Transform(),
-    "log": Transform(transform=np.log, reverse=np.exp, derivative=np.reciprocal),
-    "log10": Transform(transform=np.log10, reverse=functools.partial(np.power, 10.), derivative=dlog10dx),
-    "inverse": Transform(transform=np.reciprocal, reverse=np.reciprocal, derivative=negativeinversesquare),
-    "logit": Transform(transform=special.logit, reverse=special.expit, derivative=dlogitdx),
-    "logitrho": get_logit_limited(-1, 1),
-    "logitsigned": get_logit_limited(-1, 1),
-    "logitaxrat": get_logit_limited(1e-4, 1),
-    "logitsersic": get_logit_limited(np.nextafter(0.3, 0), np.nextafter(6.0, np.Inf)),
-    "logitmultigausssersic": get_logit_limited(np.nextafter(0.5, 0), np.nextafter(6.0, np.Inf)),
+    "none": Transform(name="ref_None"),
+    "log": Transform(transform=np.log, reverse=np.exp, derivative=np.reciprocal, name="ref_log"),
+    "log10": Transform(transform=np.log10, reverse=functools.partial(np.power, 10.), derivative=dlog10dx,
+                       name="ref_log10"),
+    "inverse": Transform(transform=np.reciprocal, reverse=np.reciprocal, derivative=negativeinversesquare,
+                         name="ref_inverse"),
+    "logit": Transform(transform=special.logit, reverse=special.expit, derivative=dlogitdx, name="ref_logit"),
+    "logitrho": get_logit_limited(-1, 1, name="ref_logitrho[-1,1]"),
+    "logitsigned": get_logit_limited(-1, 1, name="ref_logitsigned[-1,1]"),
+    "logitaxrat": get_logit_limited(1e-4, 1, name="ref_logitaxrat[1e-4,1]"),
+    "logitsersic": get_logit_limited(0.3, 6.0, name="ref_logitsersic[0.3, 6]"),
+    "logitmultigausssersic": get_logit_limited(0.5, 6.0, name="ref_logitmultigausssersic[0.5,6]"),
 }
