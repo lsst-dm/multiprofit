@@ -50,6 +50,12 @@ def get_gsparams(engineopts):
     return gsparams
 
 
+draw_method_pixel = {
+    "galsim": "no_pixel",
+    "libprofit": "rough",
+}
+
+
 # TODO: Implement WCS
 # The smart way for this to work would be to specify sky coordinates and angular sizes for objects. This
 # way you could give a model some exposures with WCS and it would automagically convert to pixel coordinates.
@@ -426,6 +432,8 @@ class Model:
             for band in bands
         }
         datasize = 0
+        order_flux = order_params_gauss['flux']
+        param_flux_added = set()
         for band in bands:
             for exposure in self.data.exposures[band]:
                 exposure.meta["index_jacobian_start"] = datasize
@@ -438,22 +446,33 @@ class Model:
             for idx, profile in enumerate(profiles):
                 gpmb_indices_row = gpmb_indices[idx, :]
                 profile_band = profile[band]
-                if ("profile" not in profile_band or profile_band["profile"] != "sersic"
-                        or "nser" not in profile_band):
-                    return None, None, False
+                if "profile" not in profile_band or not profile_band["can_do_fit_leastsq"]:
+                    return return_none
                 param_flux = profile_band["param_flux"]
-                if param_flux.is_fluxratio:
-                    return None, None, False
                 params_profile = profile_band["params"]
                 params_profile["flux"] = param_flux
                 params_to_append = []
+                param_flux_ratio = profile_band.get("param_flux_ratio")
+                param_flux_ratio_isnt_none = param_flux_ratio is not None
+                if param_flux_ratio_isnt_none and param_flux not in param_flux_added:
+                    param_flux_added.add(param_flux)
+                    num_params_free += 1
+                    idx_params[param_flux] = num_params_free
                 for name_param, idx_param in order_params_gauss.items():
                     param = params_profile[name_param]
+                    if name_param == 'flux' and param_flux_ratio_isnt_none:
+                        if param_flux_ratio.fixed:
+                            gpmb_indices_row[order_flux] = num_params_free
+                        else:
+                            gpmb_indices_row[order_flux] = idx_params[param_flux_ratio]
+                    else:
+                        gpmb_indices_row[idx_param] = idx_params[param]
                     params_to_append.append(param)
-                    gpmb_indices_row[idx_param] = idx_params[param]
                 gpmb_params.append(params_to_append)
-        self.jacobian = np.zeros((datasize, num_params_free+1))
-        self.residuals = np.zeros(datasize)
+        if self.jacobian is None or self.jacobian.shape != (datasize, num_params_free+1):
+            self.jacobian = np.zeros((datasize, num_params_free+1))
+        if self.residuals is None or self.residuals.shape != (datasize,):
+            self.residuals = np.zeros(datasize)
         for band in bands:
             for exposure in self.data.exposures[band]:
                 exposure.meta["jacobian"] = self.jacobian[exposure.meta["index_jacobian_start"]:
@@ -912,37 +931,41 @@ class Model:
                 times = {}
         else:
             times = None
-        profiles = self.get_profiles(bands=[band], engine=engine)
-        if clock:
-            times['get_profiles'] = time.time() - time_now
-            time_now = time.time()
         has_psf = exposure.psf is not None
         is_psf_pixelated = has_psf and exposure.psf.model is not None and exposure.psf.is_model_pixelated
-        is_profiles_gaussian = [comp.is_gaussian()
+        is_profiles_gaussian = [comp.is_gaussian_mixture()
                                 for comps in [src.modelphotometric.components for src in self.sources]
                                 for comp in comps]
         is_all_gaussian = not has_psf or (
             exposure.psf.model is not None and
-            all([comp.is_gaussian() for comp in exposure.psf.model.modelphotometric.components]))
+            all([comp.is_gaussian_mixture() for comp in exposure.psf.model.modelphotometric.components]))
         is_any_gaussian = is_all_gaussian and any(is_profiles_gaussian)
         is_all_gaussian = is_all_gaussian and all(is_profiles_gaussian)
         # Use fast, efficient Gaussian evaluators only if everything's a Gaussian mixture model
-        use_fast_gauss = is_all_gaussian and (
-                is_psf_pixelated or
-                (engine == 'galsim' and self.engineopts is not None and
-                 "drawmethod" in self.engineopts and self.engineopts["drawmethod"] == 'no_pixel') or
-                (engine == 'libprofit' and self.engineopts is not None and
-                 "drawmethod" in self.engineopts and self.engineopts["drawmethod"] == 'rough'))
-        if use_fast_gauss and engine != 'libprofit':
-            engine = 'libprofit'
-            # Down below we'll get the libprofit format profiles anyway, unless not has_psf
-            if not has_psf:
-                profiles = self.get_profiles(bands=[band], engine="libprofit")
+        use_fast_gauss = is_all_gaussian and (is_psf_pixelated or (not has_psf and
+                # Disabling these for fitting with a PSF because we don't want discontinuous likelihoods
+                # in fitting because the drawing method has changed, but it's fine for PSF fitting
+                # or
+                engineopts is not None and (
+                    (engine == 'galsim' or engine == 'libprofit') and
+                    engineopts.get("drawmethod") == draw_method_pixel[engine])
+        ))
+        if use_fast_gauss:
+            if engine != 'libprofit':
+                engine = 'libprofit'
+            engineopts = {"drawmethod": draw_method_pixel[engine]}
+        profiles = self.get_profiles(bands=[band], engine=engine)
+        if clock:
+            times['get_profiles'] = time.time() - time_now
+            time_now = time.time()
 
         if profiles:
             # Do analytic convolution of any Gaussian model with the Gaussian PSF
             # This turns each resolved profile into N_PSF_components Gaussians
-            if is_any_gaussian and has_psf:
+            if is_any_gaussian:
+                is_libprofit = engine == "libprofit"
+                if clock:
+                    times['model_all_gauss_eig'] = 0
                 names_params = names_params_ellipse
                 ellipse_srcs = [
                     (
@@ -950,52 +973,57 @@ class Model:
                         else None,
                         profile[band]
                     )
-                    for profile in self.get_profiles(bands=[band], engine="libprofit")
+                    for profile in (profiles if is_libprofit else self.get_profiles(
+                        bands=[band], engine="libprofit"))
                 ]
-
-                profiles_new = []
-                if clock:
-                    times['model_all_gauss_eig'] = 0
-                for idx_psf, profile_psf in enumerate(exposure.psf.model.get_profiles(
-                        bands=[band], engine="libprofit")):
-                    fluxfrac = 10**(-0.4*profile_psf[band]["mag"])
-                    ellipse_psf = Ellipse(*[profile_psf[band][var] for var in names_params])
-                    for idx_src, (ellipse_src, profile) in enumerate(ellipse_srcs):
-                        if ellipse_src is not None:
-                            if clock:
-                                time_eig = time.time()
-                            convolved = ellipse_src.convolve(ellipse_psf, new=True)
-                            reff, axrat, ang = mpfgauss.covar_to_ellipse(convolved)
-                            reff = mpfgauss.sigma_to_reff(reff)
-                            if clock:
-                                times['model_all_gauss_eig'] += time.time() - time_eig
-                            if engine == "libprofit":
-                                # Needed because each PSF component will loop over the same profile object
-                                profile = copy.copy(profile)
-                                profile["ellipse_src"] = ellipse_src
-                                profile["ellipse_psf"] = ellipse_psf
-                                profile["idx_src"] = idx_src
-                                profile["re"] = reff
-                                profile["axrat"] = axrat
-                                profile["mag"] += mpfutil.flux_to_mag(fluxfrac)
-                                profile["ang"] = ang
+                if not has_psf:
+                    if is_libprofit:
+                        for idx_src, (ellipse_src, profile) in enumerate(ellipse_srcs):
+                            profile["ellipse_src"] = ellipse_src
+                            profile["idx_src"] = idx_src
+                else:
+                    profiles_new = []
+                    for idx_psf, profile_psf in enumerate(exposure.psf.model.get_profiles(
+                            bands=[band], engine="libprofit")):
+                        fluxfrac = 10**(-0.4*profile_psf[band]["mag"])
+                        ellipse_psf = Ellipse(*[profile_psf[band][var] for var in names_params])
+                        for idx_src, (ellipse_src, profile) in enumerate(ellipse_srcs):
+                            if ellipse_src is not None:
+                                if clock:
+                                    time_eig = time.time()
+                                convolved = ellipse_src.convolve(ellipse_psf, new=True)
+                                reff, axrat, ang = mpfgauss.covar_to_ellipse(convolved)
+                                reff = mpfgauss.sigma_to_reff(reff)
+                                if clock:
+                                    times['model_all_gauss_eig'] += time.time() - time_eig
+                                if is_libprofit:
+                                    # Needed because each PSF component will loop over the same profile object
+                                    profile = copy.copy(profile)
+                                    profile["ellipse_src"] = ellipse_src
+                                    profile["ellipse_psf"] = ellipse_psf
+                                    profile["idx_src"] = idx_src
+                                    profile["re"] = reff
+                                    profile["axrat"] = axrat
+                                    profile["mag"] += mpfutil.flux_to_mag(fluxfrac)
+                                    profile["ang"] = ang
+                                else:
+                                    profile = {
+                                        "profile_gs": gs.Gaussian(
+                                            flux=10**(-0.4*profile["mag"])*fluxfrac,
+                                            fwhm=2*reff*np.sqrt(axrat), gsparams=gsparams),
+                                        "shear": gs.Shear(q=axrat, beta=ang*gs.degrees),
+                                        "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
+                                    }
+                                profile["pointsource"] = True
+                                profile["resolved"] = True
+                                profile["fluxfrac_psf"] = fluxfrac
+                                profile = {band: profile}
                             else:
-                                profile = {
-                                    "profile": gs.Gaussian(flux=10**(-0.4*profile["mag"])*fluxfrac,
-                                                           fwhm=2*reff*np.sqrt(axrat), gsparams=gsparams),
-                                    "shear": gs.Shear(q=axrat, beta=ang*gs.degrees),
-                                    "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
-                                }
-                            profile["pointsource"] = True
-                            profile["resolved"] = True
-                            profile["fluxfrac_psf"] = fluxfrac
-                            profile = {band: profile}
-                        else:
-                            profile = profiles[idx_src]
-                        # TODO: Remember what the point of this check is
-                        if ellipse_src is not None or idx_psf == 0:
-                            profiles_new.append(profile)
-                profiles = profiles_new
+                                profile = profiles[idx_src]
+                            # TODO: Remember what the point of this check is
+                            if ellipse_src is not None or idx_psf == 0:
+                                profiles_new.append(profile)
+                    profiles = profiles_new
                 if clock:
                     times['model_all_gauss'] = time.time() - time_now
                     time_now = time.time()
@@ -1010,7 +1038,7 @@ class Model:
             'is_psf_pixelated': is_psf_pixelated,
             'use_fast_gauss': use_fast_gauss,
         }
-        return profiles, meta_model, times
+        return profiles, meta_model, engine, engineopts, times
 
     def get_image_model_exposure(
             self, exposure, profiles=None, meta_model=None, engine=None, engineopts=None, do_draw_image=True,
@@ -1024,7 +1052,7 @@ class Model:
         """
         # TODO: Rewrite this completely at some point as validating inputs is a pain
         if profiles is None or meta_model is None:
-            profiles, meta_model, times = self._get_image_model_exposure_setup(
+            profiles, meta_model, engine, engineopts, times = self._get_image_model_exposure_setup(
                 exposure, engine=engine, engineopts=engineopts, clock=clock, times=times)
         likelihood = None
         ny, nx = exposure.image.shape
@@ -1098,12 +1126,12 @@ class Model:
                 profiles_band_bad = 0
                 profiles_band = []
                 profiles_band_idx = []
-                for idx_p, profile in enumerate(profiles_to_draw_now):
+                for idx_profile, profile in enumerate(profiles_to_draw_now):
                     profile_band = profile[band]
                     if np.isinf(profile_band["mag"]) and not do_jacobian_any:
                         profiles_band_bad += 1
                     else:
-                        profiles_band_idx.append(idx_p)
+                        profiles_band_idx.append(idx_profile)
                         profiles_band.append(profile_band)
                 num_profiles = len(profiles_band)
                 profile_matrix = gaussian_profiles_to_matrix(profiles_band)
@@ -1131,24 +1159,33 @@ class Model:
                         sersic_param_map = exposure.meta['sersic_param_map']
                         sersic_param_factor = exposure.meta['sersic_param_factor']
                     idx_sersic = 0
-                    for idx, profile in enumerate(profiles_band):
+                    param_flux_ratios = {}
+                    for idx_profile, profile in enumerate(profiles_band):
                         flux_profile = mpfutil.mag_to_flux(profile["mag"])
                         # This is a source profile, not a logical source which might have multiple profiles
                         # TODO: Fix nomenclature. profile -> profile_sub?
-                        flux_src = profile["param_flux"].get_value(transformed=False)
+                        param_flux = profile["param_flux"]
+                        flux_src = param_flux.get_value(transformed=False)
                         weight = flux_profile/flux_src
                         idx_src = profile["idx_src"]
-                        grad_param_map[idx, :] = grad_params_indices[idx_src, :]
-                        for idx_array, idx_param in enumerate(grad_param_map[idx, :]):
+                        grad_param_map[idx_profile, :] = grad_params_indices[idx_src, :]
+                        # Special handling of profiles with flux ratios happens on the python side
+                        # ... for better or worse. It could be done in C++ if needed.
+                        param_flux_ratio = profile.get('param_flux_ratio')
+                        param_flux_ratio_is_none = param_flux_ratio is None
+                        for idx_array, idx_param in enumerate(grad_param_map[idx_profile, :]):
                             param = grad_params_obj[idx_src][idx_array]
                             is_sigma = "sigma_factor" in profile and (
                                     param.name == "sigma_x" or param.name == "sigma_y")
                             if idx_param > 0:
-                                weight_grad = weight if isinstance(param, FluxParameter) else 1.
+                                is_flux = isinstance(param, FluxParameter)
+                                weight_grad = weight if is_flux and param_flux_ratio_is_none else 1.
                                 # The function returns df/dg, where g is the Gaussian parameter
                                 # We want df/dp, where p(g) is the fit parameter
                                 # df/dp = df/dg * dg/dp = df/dg / dp/dg
-                                derivative = param.get_transform_derivative(verify=True, rtol=1e-3)
+                                # Skip the derivative if this profile has a flux ratio - it'll be added later
+                                derivative = param.get_transform_derivative(verify=True, rtol=1e-3) if not (
+                                    is_flux and not param_flux_ratio_is_none) else None
                                 if derivative is not None:
                                     weight_grad /= derivative
                                 # TODO: Revisit for fitting rscale
@@ -1156,8 +1193,9 @@ class Model:
                                     weight_grad *= profile["sigma_factor"]
                             else:
                                 weight_grad = 0
-                            grad_param_factor[idx, idx_array] = weight_grad
-                        if 'param_nser' in profile and not profile['param_nser'].fixed:
+                            grad_param_factor[idx_profile, idx_array] = weight_grad
+                        param_nser = profile.get('param_nser')
+                        if param_nser is not None and not param_nser.fixed:
                             dweight_dn = profile.get("dweight_dn")
                             dsigma_dn = profile.get("dsigma_dn")
                             if dweight_dn is not None and dsigma_dn is not None:
@@ -1182,7 +1220,7 @@ class Model:
                                     raise RuntimeError("Sersic param factors: {} not all finite".format(
                                         factors
                                     ))
-                                indices = [idx, sersic_param_indices[idx_src]]
+                                indices = [idx_profile, sersic_param_indices[idx_src]]
                                 if do_fit_leastsq_prep:
                                     sersic_param_map.append(indices)
                                     sersic_param_factor.append(factors)
@@ -1193,6 +1231,11 @@ class Model:
                             else:
                                 # TODO: Compare idx and sersic_param_map[idx_sersic, 0]?
                                 pass
+                        # TODO: Should be done in prep since it won't change
+                        if param_flux_ratio is not None:
+                            if param_flux not in param_flux_ratios:
+                                param_flux_ratios[param_flux] = []
+                            param_flux_ratios[param_flux].append((param_flux_ratio, idx_profile, profile))
                     if do_fit_leastsq_prep:
                         sersic_param_map = np.array(sersic_param_map, dtype=np.uint64)
                         sersic_param_factor = np.array(sersic_param_factor)
@@ -1200,7 +1243,7 @@ class Model:
                         exposure.meta['grad_param_factor'] = grad_param_factor
                         exposure.meta['sersic_param_map'] = sersic_param_map
                         exposure.meta['sersic_param_factor'] = sersic_param_factor
-                        profiles_ref, meta_modelref, _ = self._get_image_model_exposure_setup(
+                        profiles_ref, meta_modelref, _, _, _ = self._get_image_model_exposure_setup(
                             exposure, engine=engine, engineopts=engineopts)
                     if profiles_band_bad > 0:
                         profiles_band_idx = np.array(profiles_band_idx)
@@ -1228,6 +1271,51 @@ class Model:
                 # residual image for fitting
                 if do_jacobian_any or do_fit_leastsq_prep:
                     likelihood = None
+                    order_flux = order_params_gauss['flux']
+                    # Turn all of the gradients w.r.t. Gaussian fluxes into total flux and flux ratio values
+                    if do_fit_leastsq_prep:
+                        grad_param_fixed = []
+                    for param_flux, ratios in param_flux_ratios.items():
+                        flux = param_flux.get_value(transformed=False)
+                        flux_remaining = np.zeros(1+len(ratios))
+                        flux_ratios_neg_p_one = np.zeros(len(ratios))
+                        flux_remaining[0] = flux
+                        is_flux_fixed = param_flux.fixed
+                        for ratio_iter, (param_flux_ratio, idx_ratio, profile) in enumerate(ratios):
+                            idx_component = grad_param_map[idx_ratio, order_flux]
+                            flux_ratio = param_flux_ratio.get_value(transformed=False)
+                            flux_ratios_neg_p_one[ratio_iter] = 1 - flux_ratio
+                            flux_remaining[ratio_iter+1] = flux_remaining[ratio_iter]*(1-flux_ratio)
+                            if not is_flux_fixed:
+                                # Cheat a little and use the extra residual entry in index zero for temp space
+                                # ... I was considering removing it before this
+                                grad[:, :, 0] += 1/grad[:, :, idx_component]
+                            # dFn/dfn = Fn/fn = flux_remaining[n]*fn/fn
+                            grad[:, :, idx_component] *= flux_remaining[ratio_iter]
+                            # The Jacobian of the Nth component contributes to the Jacobian of fluxrats[0:N-1]
+                            for idx_shift in range(ratio_iter):
+                                idx_previous = idx_ratio - idx_shift - 1
+                                idx_grad_previous = grad_param_map[idx_previous, order_flux]
+                                grad[:, :, idx_grad_previous] -= grad[:, :, idx_component] * (
+                                    flux_ratio/flux_ratios_neg_p_one[idx_previous])
+                        # Divide all free parameters by their transform derivatives
+                        for param_flux_ratio, idx_ratio, _ in ratios:
+                            idx_component = grad_param_map[idx_ratio, order_flux]
+                            if not param_flux_ratio.fixed:
+                                grad[:, :, idx_component] /= param_flux_ratio.get_transform_derivative(
+                                    verify=True, rtol=1e-3)
+                        # idx_component is now the one for the final ratio which is always fixed
+                        if is_flux_fixed:
+                            if do_fit_leastsq_prep:
+                                grad_param_fixed.append(idx_component)
+                        else:
+                            grad[:, :, idx_component] = \
+                                1/(grad[:, :, 0]*param_flux.get_transform_derivative(verify=True, rtol=1e-3))
+                            grad[:, :, 0].fill(0)
+                    if do_fit_leastsq_prep:
+                        self.grad_param_free = np.arange(1, grad.shape[2])
+                        if grad_param_fixed:
+                            self.grad_param_free = np.setdiff1d(self.grad_param_free, grad_param_fixed)
                 elif not is_likelihood_log:
                     likelihood = 10**likelihood
             if (not get_like_only) or do_fit_linear_prep or do_fit_leastsq_prep:
@@ -1286,6 +1374,8 @@ class Model:
                         name_old = "cen" + coord
                         profile[coord + "cen"] = profile[name_old]
                         del profile[name_old]
+                    # libprofit uses the irritating GALFIT convention of up = 0 degrees
+                    profile["ang"] -= 90
                     do_linear_profile = do_fit_linear_prep and profile["param_flux"].fixed
                     if do_linear_profile:
                         profiles_free += [{}]
@@ -1333,7 +1423,7 @@ class Model:
             elif engine == "galsim":
                 if clock:
                     time_setup_gs = time.time()
-                    times['model_setupprofile_gs'] = 0
+                    times['model_setup_profile_gs'] = 0
                 model[engine] = None
                 # The logic here is to attempt to avoid GalSim's potentially excessive memory usage when
                 # performing FFT convolution by splitting the profiles up into big and small ones
@@ -1347,7 +1437,7 @@ class Model:
                         raise RuntimeError("Converting small profiles to point sources not implemented yet")
                         # TODO: Finish this
                     else:
-                        profile_gs = profile["profile"].shear(
+                        profile_gs = profile["profile_gs"].shear(
                             profile["shear"]).shift(
                             profile["offset"] - cen_img)
                     # TODO: Revise this when image scales are taken into account
@@ -1368,7 +1458,7 @@ class Model:
                         profiles_psf = None
                         for profile in psf_gs:
                             profile = profile[band]
-                            profile_gs = profile["profile"].shear(profile["shear"])
+                            profile_gs = profile["profile_gs"].shear(profile["shear"])
                             # TODO: Think about whether this would ever be necessary
                             #.shift(profile["offset"] - cen_img)
                             if profiles_psf is None:
@@ -1390,7 +1480,7 @@ class Model:
                     else:
                         method = "fft"
                 if clock:
-                    times['model_setupprofile_gs'] = time.time() - time_setup_gs
+                    times['model_setup_profile_gs'] = time.time() - time_setup_gs
                 has_psfimage = has_psf and psf_gs is None
                 if clock:
                     times['model_setup'] = time.time() - time_now
@@ -1552,9 +1642,12 @@ class Model:
         self.engine = engine
         self.engineopts = engineopts
         self.grad_param_maps = None
+        self.grad_param_free = None
+        self.jacobian = None
         self.param_maps = {'sersic': None}
         self.likefunc = likefunc
         self.name = name
+        self.residuals = None
         self.sources = sources
 
 
@@ -1646,8 +1739,8 @@ class Modeller:
         self.fitinfo["log"] = []
         self.fitinfo["print_step_interval"] = print_step_interval
 
-        self.fitinfo["n_evalfunc"] = 0
-        self.fitinfo["n_evalgrad"] = 0
+        self.fitinfo["n_eval_func"] = 0
+        self.fitinfo["n_eval_grad"] = 0
         self.fitinfo["n_timings"] = 0 if timing is None else len(timing)
 
         params_free = self.model.get_parameters(fixed=False)
@@ -1673,6 +1766,9 @@ class Modeller:
         print("Initial likelihood in t={:.3e}: {}".format(time.time() - time_start, likelihood))
         sys.stdout.flush()
 
+        do_nonlinear = not (do_linear_only or (is_linear and do_linear and self.model.can_do_fit_leastsq))
+
+        time_run = 0.0
         if do_linear:
             # If this isn't a linear problem, fix all free non-flux parameters and do a linear fit first
             if not is_linear:
@@ -1775,22 +1871,24 @@ class Modeller:
                 for param in params_free:
                     param.fixed = False
 
-        time_run = 0.0
-        if not do_linear_only:
+        # Skip non-linear fit if asked to or if it's a linear least squares problem,
+        # for which it's unnecessary
+        # TODO: Review if/when priors are changed - linear fits won't be able to handle non-linear priors
+        # (even if they're Gaussian, e.g. if applied to transforms/non-linear combinations of params)
+        if do_nonlinear:
             limits = self.model.get_limits(fixed=False, transformed=True)
             algo = self.modellibopts["algo"] if "algo" in self.modellibopts else (
                 "neldermead" if self.modellib == "pygmo" else "Nelder-Mead")
             if self.modellib == "scipy":
-                print("Limits are {}".format(limits))
                 if self.model.can_do_fit_leastsq:
                     def residuals(params_i, modeller):
                         modeller.evaluate(params_i, timing=timing, get_likelihood=False, do_jacobian=True)
-                        modeller.fitinfo["n_evalfunc"] += 1
+                        modeller.fitinfo["n_eval_func"] += 1
                         return -modeller.model.residuals
 
                     def jacobian(params_i, modeller):
-                        modeller.fitinfo["n_evalgrad"] += 1
-                        return modeller.model.jacobian[:, 1:]
+                        modeller.fitinfo["n_eval_grad"] += 1
+                        return modeller.model.jacobian[:, modeller.model.grad_param_free]
 
                     time_init = time.time()
                     result = spopt.least_squares(residuals, params_init, jac=jacobian, args=(self,),
@@ -1799,7 +1897,7 @@ class Modeller:
                     params_best = result.x
                 else:
                     def neg_like_model(params_i, modeller):
-                        modeller.fitinfo["n_evalfunc"] += 1
+                        modeller.fitinfo["n_eval_func"] += 1
                         return -modeller.evaluate(params_i, timing=timing, returnlponly=True)
                     time_init = time.time()
                     result = spopt.minimize(neg_like_model, params_init, method=algo, bounds=np.array(limits),
@@ -1865,24 +1963,28 @@ class Modeller:
                 print(
                     "Model '{}' nonlinear fit elapsed time: {:.3e} after {},{} function,gradient "
                     "evaluations ({} logged)".format(
-                        self.model.name, time_run, self.fitinfo["n_evalfunc"],
-                        self.fitinfo["n_evalgrad"],
+                        self.model.name, time_run, self.fitinfo["n_eval_func"],
+                        self.fitinfo["n_eval_grad"],
                         (len(timing) if timing is not None else 0) - self.fitinfo["n_timings"]))
                 print("Final likelihood: {}".format(self.evaluate(params_best)))
                 print("Parameter names:        " + ",".join(["{:11s}".format(i) for i in name_params]))
                 print("Transformed parameters: " + ",".join(["{:+1.4e}".format(i) for i in params_best]))
                 # TODO: Finish this
                 #print("Parameters (linear): " + ",".join(["{:.4e}".format(i) for i in params_transformed]))
+        else:
+            params_best = params_init
+            result = None
+            time_run += time.time() - time_init
 
-            result = {
-                "fitinfo": copy.copy(self.fitinfo),
-                "params": self.model.get_parameters(),
-                "name_params": name_params,
-                "params_best": params_best,
-                "result": result,
-                "time": time_run,
-            }
-            return result
+        result = {
+            "fitinfo": copy.copy(self.fitinfo),
+            "params": self.model.get_parameters(),
+            "name_params": name_params,
+            "params_best": params_best,
+            "result": result,
+            "time": time_run,
+        }
+        return result
 
     # TODO: Should constraints be implemented?
     def __init__(self, model, modellib, modellibopts=None, constraints=None):
@@ -2046,6 +2148,16 @@ class PhotometricModel:
         for comp in self.components:
             profiles += comp.get_profiles(
                 flux_by_band, engine, cenx, ceny, params, engineopts=engineopts)
+        for band, param_flux in self.fluxes.items():
+            params_fluxratio = []
+            for idx, profile in enumerate(profiles):
+                profile_band = profile[band]
+                profile_band["param_flux_ratio"] = profile_band["param_flux"]
+                profile_band["param_flux"] = param_flux
+                if idx > 0:
+                    params_fluxratio.append(profile_band["param_flux"])
+                profile_band["param_flux_ratios"] = params_fluxratio
+                profile_band["param_flux_idx"] = idx
         for flux in comp.fluxes:
             if flux.is_fluxratio and flux.get_value(transformed=False) != 1.:
                 raise RuntimeError('Non-unity flux ratio for final component')
@@ -2243,13 +2355,15 @@ class EllipticalParametricComponent(EllipticalComponent):
         Class for any profile with a (generalized) ellipse shape.
         TODO: implement boxiness for libprofit; not sure if galsim does generalized ellipses?
     """
-    profiles_avail = ["moffat", "sersic"]
+    profiles_avail = ["gaussian", "moffat", "sersic"]
     # TODO: Consider adopting gs's flexible methods of specifying re, fwhm, etc.
     mandatory = {
+        "gaussian": [],
         "moffat": ["con"],
         "sersic": ["nser"],
     }
     sizenames = {
+        "gaussian": "hwhm",
         "moffat": "hwhm",
         "sersic": "re",
     }
@@ -2303,16 +2417,18 @@ class EllipticalParametricComponent(EllipticalComponent):
         profile_base = super().get_profiles(flux_by_band, engine, cenx, ceny, params, engineopts)[0]
         radius, axrat, ang = mpfgauss.covar_to_ellipse(self.params_ellipse)
         for band in flux_by_band.keys():
-            flux = flux_param_by_band[band].get_value(transformed=False)
-            if flux_param_by_band[band].is_fluxratio:
+            flux_param_band = flux_param_by_band[band]
+            profile = profile_base.copy()
+            flux = flux_param_band.get_value(transformed=False)
+            if flux_param_band.is_fluxratio:
                 fluxratio = copy.copy(flux)
                 if not 0 <= fluxratio <= 1:
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
                 flux *= flux_by_band[band]
                 flux_by_band[band] *= (1.0-fluxratio)
-            profile = profile_base.copy()
             profile["axrat"] = axrat
             profile["ang"] = ang
+            profile['can_do_fit_leastsq'] = self.profile == "gaussian"
             for param in self.parameters.values():
                 profile[param.name] = param.get_value(transformed=False)
 
@@ -2326,10 +2442,7 @@ class EllipticalParametricComponent(EllipticalComponent):
 
             # Does this profile have a non-zero size?
             # TODO: Review cutoff - it can't be zero for galsim or it will request huge FFTs
-            resolved = not (
-                (self.profile == "sersic" and radius < 0*(engine == "galsim")) or
-                (self.profile == "moffat" and radius < 0*(engine == "galsim"))
-            )
+            resolved = not radius < 0*(engine == "galsim")
             for key, value in cens.items():
                 if key in profile:
                     profile[key] += value
@@ -2361,8 +2474,8 @@ class EllipticalParametricComponent(EllipticalComponent):
                             gsparams=gsparams
                         )
                     profile = {
-                        "profile": profile_gs,
-                        "shear": gs.Shear(q=axrat, beta=(profile["ang"] + 90.)*gs.degrees),
+                        "profile_gs": profile_gs,
+                        "shear": gs.Shear(q=axrat, beta=profile["ang"]*gs.degrees),
                         "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                     }
                 elif engine == "libprofit":
@@ -2375,9 +2488,9 @@ class EllipticalParametricComponent(EllipticalComponent):
                         profile["nser"] = 0.5
                         if self.profile == "moffat":
                             del profile["con"]
-                        else:
-                            raise RuntimeError("No implentation for turning profile {:s} into gaussian".format(
-                                profile))
+                        elif self.profile != "gaussian":
+                            raise RuntimeError("No implentation for turning profile {} into gaussian".format(
+                                profile["profile"]))
                     else:
                         profile["profile"] = self.profile
                 else:
@@ -2387,7 +2500,7 @@ class EllipticalParametricComponent(EllipticalComponent):
             # This profile is part of a point source *model*
             profile["pointsource"] = False
             profile["resolved"] = resolved
-            profile["param_flux"] = flux_param_by_band[band]
+            profile["param_flux"] = flux_param_band
             profiles[band] = profile
         return [profiles]
 

@@ -25,11 +25,10 @@ import galsim as gs
 import io
 import matplotlib.pyplot as plt
 from multiprofit.ellipse import Ellipse
-import multiprofit.gaussutils as mpfgauss
 from multiprofit.limits import limits_ref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
-from multiprofit.transforms import transforms_ref, get_logit_limited
+from multiprofit.transforms import transforms_ref
 import multiprofit.utils as mpfutil
 import numpy as np
 from scipy import stats
@@ -134,7 +133,6 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
     is_multi_gaussian_sersic = profile.startswith('mgsersic')
     if is_multi_gaussian_sersic:
         order = np.int(profile.split('mgsersic')[1])
-    if is_gaussian or is_multi_gaussian_sersic:
         profile = "sersic"
         if 'nser' in values:
             values['nser'] = np.zeros_like(values['nser'])
@@ -150,9 +148,10 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
         ]
         params = [
             get_param_default(
-                param, valueslice[compi], profile, fixed=param == "slope" and is_gaussian,
+                param, valueslice[compi], profile, fixed=False,
                 is_value_transformed=is_values_transformed, is_multigauss=is_multi_gaussian_sersic)
-            for param, valueslice in values.items()]
+            for param, valueslice in values.items() if not ((param == "slope") and is_gaussian)
+        ]
         params_ellipse_type = {}
         params_other_type = []
         for param in params:
@@ -477,7 +476,7 @@ def fit_galaxy(
     }
     values_min = {}
     for band in bands:
-        values_min["flux_" + band] = 0 #* fluxes[band]
+        values_min["flux_" + band] = 1e-6 * fluxes[band]
         values_max["flux_" + band] = 100 * fluxes[band]
     models = {} if (models is None) else models
     params_fixed_default = {}
@@ -521,14 +520,26 @@ def fit_galaxy(
                 engine=engine, engineopts=engineopts, convertfluxfracs=not do_fit_fluxfracs,
                 repeat_ellipse=True, name_model=name_model
             )
-            params_fixed_default[modeltype] = [param.fixed for param in
-                                             model_default.get_parameters(fixed=True)]
+            params_fixed_default[modeltype] = [
+                param.fixed for param in model_default.get_parameters(fixed=True)]
             exists_model = modeltype in models
             model = model_default if not exists_model else models[modeltype]
             if not exists_model:
                 models[modeltype] = model
-            name_psf = modelinfo["psfmodel"] + ("_pixelated" if mpfutil.str2bool(
-                modelinfo["psfpixel"]) else "")
+            is_psf_pixelated = mpfutil.str2bool(modelinfo["psfpixel"])
+            name_psf = modelinfo["psfmodel"] + ("_pixelated" if is_psf_pixelated else "")
+            if is_psf_pixelated:
+                can_do_no_pixel = True
+                for source in model.sources:
+                    if can_do_no_pixel:
+                        for component in source.modelphotometric.components:
+                            if not component.is_gaussian_mixture():
+                                can_do_no_pixel = False
+                                break
+                    else:
+                        break
+                if can_do_no_pixel:
+                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine]
             model.data.exposures = {band: [] for band in bands}
             for exposure, psfs in exposures_psfs:
                 exposure.psf = psfs[engine][name_psf]['object']
@@ -624,23 +635,10 @@ def fit_galaxy(
                     if name_param in values_max:
                         value_min = 0 if name_param not in values_min else values_min[name_param]
                         value_max = values_max[name_param]
-                        # Most scipy algos ignore limits, so we need to restrict the range manually
-                        if modellib == 'scipy':
-                            # TODO: Review this. It seems to go very slowly when factor is not set for fluxes
-                            # ... but the square root is arbitrary and leaving it as 1/flux restricts the
-                            # range of values too much
-                            # Alternatively,
-                            factor = 1/np.sqrt(fluxes[param.band]) if is_flux else 1
-                            value = np.max([np.min([param.get_value(transformed=False), value_max]),
-                                            value_min])
-                            param.transform = get_logit_limited(value_min, value_max, factor=factor)
-                            param.limits = mpfobj.Limits(lower=value_min, upper=value_max, transformed=False)
-                            param.set_value(value, transformed=False)
-                        else:
-                            transform = param.transform.transform
-                            param.limits = mpfobj.Limits(
-                                lower=transform(value_min), upper=transform(value_max),
-                                transformed=True)
+                        transform = param.transform.transform
+                        param.limits = mpfobj.Limits(
+                            lower=transform(value_min), upper=transform(value_max),
+                            transformed=True)
                     # Reset non-finite free param values
                     # This occurs e.g. at the limits of a logit transformed param
                     if not param.fixed:
@@ -688,7 +686,7 @@ def fit_galaxy(
                         weights_band=weights_band,
                     )
                     fits.append(fit1)
-                    if do_second:
+                    if do_second and not model.can_do_fit_leastsq:
                         if use_modellib_default:
                             modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
                                 "Nelder-Mead"
@@ -776,12 +774,12 @@ def fit_galaxy_exposures(
                     psfs[idx][engine][name_psf] = {'object': mpfobj.PSF(
                         band=band, engine=engine, image=psf.image.array)}
                 else:
-                    engineopts["drawmethod"] = "no_pixel" if is_psf_pixelated else None
+                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine] if is_psf_pixelated else None
                     do_fit = redo_psfs or (name_psf not in psfs[idx][engine])
                     if do_fit or plot:
                         if do_fit:
                             print('Fitting PSF band={} model={} (not in {})'.format(
-                                band, name_psf, psfs[idx][engine]))
+                                band, name_psf, psfs[idx][engine].keys()))
                         psfs[idx] = fit_psf(
                             modeltype_psf, psf.image.array if do_fit or plot else None,
                             {engine: engineopts}, band=band, fits_model_psf=psfs[idx], plot=plot,
@@ -828,19 +826,19 @@ def fit_galaxy_exposures(
 
 
 def get_psfmodel(
-        engine, engineopts, num_comps, band, model, image, sigma_inverse=None, factor_sigma=1,
-        size_in_pixels=8.0, axrat=0.92):
-    sizes = size_in_pixels*10**((np.arange(num_comps) - num_comps/2)/num_comps)
-    axrats = np.repeat(axrat, num_comps)
-    angs = np.linspace(start=0, stop=180, num=num_comps + 2)[1:(num_comps + 1)]
+        engine, engineopts, num_comps, band, model, image, error_inverse=None, ratios_size=None,
+        factor_sigma=1):
+    sigma_x, sigma_y, rho = Ellipse.covar_matrix_as(mpfutil.estimate_ellipse(image), params=True)
+    sigma_xs = np.repeat(sigma_x, num_comps)
+    sigma_ys = np.repeat(sigma_y, num_comps)
+    rhos = np.repeat(rho, num_comps)
 
-    sigma_xs = np.zeros(num_comps)
-    sigma_ys = np.zeros(num_comps)
-    rhos = np.zeros(num_comps)
-
-    for idx, (sizei, axrati, angi) in enumerate(zip(sizes, axrats, angs)):
-        sigma_xs[idx], sigma_ys[idx], rhos[idx] = mpfgauss.ellipse_to_covar(
-            sizei, axrati, angi, return_as_matrix=False, return_as_params=True)
+    if ratios_size is None and num_comps > 1:
+        log_ratio = np.log(np.sqrt(num_comps))
+        ratios_size = np.exp(np.linspace(-log_ratio, log_ratio, num_comps))
+    if num_comps > 1:
+        for idx, (ratio, sigma_x, sigma_y) in enumerate(zip(ratios_size, sigma_xs, sigma_ys)):
+            sigma_xs[idx], sigma_ys[idx] = ratio*sigma_x, ratio*sigma_y
 
     model = get_model(
         {band: 1}, model, np.flip(image.shape, axis=0), sigma_xs, sigma_ys, rhos,
@@ -1093,7 +1091,6 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         else:
             # TODO: Check this more thoroughly
             name_modelcomps = inittype.split(":")[1].split(";")
-            print(name_modelcomps)
         chisqreds = [fits_engine[name_modelcomp]["fits"][-1]["chisqred"]
                      for name_modelcomp in name_modelcomps]
         inittype = name_modelcomps[np.argmin(chisqreds)]

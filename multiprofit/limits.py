@@ -27,8 +27,24 @@ class Limits:
     """
         Limits for a Parameter.
     """
+    def clip(self, value):
+        if self.within(value):
+            return value
+        else:
+            return np.clip(value, self.lower, self.upper)
+
     def within(self, value):
         return self.lower <= value <= self.upper
+
+    def __str__(self):
+        attrs = ', '.join([
+            f'{var}={value}' for var, value in dict(
+                lower=self.lower,
+                upper=self.upper,
+                transformed=self.transformed,
+            ).items()
+        ])
+        return f'Limits({attrs})'
 
     def __init__(self, lower=-np.inf, upper=np.inf, is_lower_inclusive=True, is_upper_inclusive=True,
                  transformed=True):

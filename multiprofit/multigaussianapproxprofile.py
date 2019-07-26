@@ -1626,6 +1626,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
         sigma, axrat, ang = mpfgauss.covar_to_ellipse(self.params_ellipse)
         reff = mpfgauss.sigma_to_reff(sigma)
         profile_base['nser'] = 0.5
+        profile_base['can_do_fit_leastsq'] = True
         for band in flux_by_band.keys():
             flux = flux_param_by_band[band].get_value(transformed=False)
             profile = profile_base.copy()
@@ -1680,8 +1681,8 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
                 if engine == "galsim":
                     profile_gs = gs.Gaussian(flux=weight*flux, sigma=sigma*size*axrat_sqrt, gsparams=gsparams)
                     profile_sub.update({
-                        "profile": profile_gs,
-                        "shear": gs.Shear(q=axrat, beta=(profile["ang"] + 90.)*gs.degrees),
+                        "profile_gs": profile_gs,
+                        "shear": gs.Shear(q=axrat, beta=profile["ang"]*gs.degrees),
                         "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                     })
                 elif engine == "libprofit":

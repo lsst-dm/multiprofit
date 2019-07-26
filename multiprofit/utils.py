@@ -79,7 +79,11 @@ def mag_to_flux(ndarray):
 # TODO: compare with galsim's convenient calculateHLR/FWHM
 # TODO: replace with the stack's method (in meas_?)
 def estimate_ellipse(
-        img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0, do_recenter=True):
+        img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0, do_recenter=True,
+        return_cens=False):
+    sum_img = np.sum(img)
+    if not sum_img > 0:
+        raise RuntimeError(f"Tried to estimate ellipse for img={img} with sum={sum_img}")
     imgmeas = absconservetotal(np.copy(img)) if denoise else img
     if cenx is None:
         cenx = imgmeas.shape[1]/2.
@@ -116,6 +120,8 @@ def estimate_ellipse(
         inertia[0, 0] = np.clip(inertia[0, 0], sigma_sq_min, np.Inf)
         inertia[1, 1] = np.clip(inertia[1, 1], sigma_sq_min, np.Inf)
     inertia[1, 0] = inertia[0, 1]
+    if return_cens:
+        return inertia, cenx, ceny
     return inertia
 
 
