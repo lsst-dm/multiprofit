@@ -26,6 +26,7 @@ import io
 import matplotlib.pyplot as plt
 from multiprofit.ellipse import Ellipse
 from multiprofit.limits import limits_ref, Limits
+from multiprofit.logger import Logger
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref
@@ -182,7 +183,7 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
 def get_model(
     fluxes_by_band, model_string, size_image, sigma_xs=None, sigma_ys=None, rhos=None, slopes=None,
     fluxfracs=None, offset_xy=None, name_model="", namesrc="", n_exposures=1, engine="galsim",
-    engineopts=None, is_values_transformed=False, convertfluxfracs=False, repeat_ellipse=False
+    engineopts=None, is_values_transformed=False, convertfluxfracs=False, repeat_ellipse=False, logger=None
 ):
     """
     Convenience function to get a multiprofit.objects.model with a single source with components with
@@ -207,6 +208,7 @@ def get_model(
     :param convertfluxfracs: Boolean; should the model have absolute fluxes per component instead of ratios?
     :param repeat_ellipse: Boolean; is there only one set of values in sigma_xs, sigma_ys, rhos?
         If so, re-use the provided value for each component.
+    :param logger: mpf.objects.Logger; a logger to print messages
     :return:
     """
     bands = list(fluxes_by_band.keys())
@@ -293,7 +295,7 @@ def get_model(
         modelphoto.convert_param_fluxes(
             use_fluxfracs=False, transform=transforms_ref['log10'], limits=limits_ref["none"])
     source = mpfobj.Source(modelastro, modelphoto, namesrc)
-    model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts, name=name_model)
+    model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts, name=name_model, logger=logger)
     return model
 
 
@@ -318,7 +320,8 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
 
 # Convenience function to fit a model. kwargs are passed on to evaluate_model
 def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
-              do_print_final=True, print_step_interval=100, plot=False, do_linear=True, **kwargs):
+              do_print_final=True, print_step_interval=100, plot=False, do_linear=True,
+              logger=None, logger_modeller=None, **kwargs):
     """
     Convenience function to fit a model with reasonable defaults.
     :param model: multiprofit.Model
@@ -329,17 +332,22 @@ def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
     :param print_step_interval: Integer; step interval between printing.
     :param plot: Boolean; plot final fit?
     :param do_linear: Boolean; do linear fit?
+    :param logger; mpfobj.Logger for this function's output
+    :param logger_modeller; mpfobj.Logger for the modeller if it is None
     :param kwargs: Dict; passed to evaluate_model() after fitting is complete (e.g. plotting options).
     :return: Tuple of modeller.fit and modeller.
     """
+    if logger is None:
+        logger = Logger()
     if modeller is None:
-        modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
+        modeller = mpfobj.Modeller(
+            model=model, modellib=modellib, modellibopts=modellibopts, logger=logger_modeller)
     fit = modeller.fit(
         do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear)
     if do_print_final:
         params_all = model.get_parameters(fixed=True)
-        print("Param names:" + ",".join(["{:11s}".format(p.name) for p in params_all]))
-        print("All params: " + ",".join([
+        logger.print("Param names:" + ",".join(["{:11s}".format(p.name) for p in params_all]))
+        logger.print("All params: " + ",".join([
             "{:+.4e}".format(p.get_value(transformed=False)) for p in params_all]))
     # Conveniently sets the parameters to the right values too
     # TODO: Find a better way to ensure chis are returned than setting do_draw_image=True
@@ -358,7 +366,7 @@ def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
 
 def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse=None, modellib="scipy",
             modellibopts=None, plot=False, title='', name_model=None, label=None, do_print_final=True,
-            print_step_interval=100, figaxes=(None, None), row_figure=None, redo=True):
+            print_step_interval=100, figaxes=(None, None), row_figure=None, redo=True, logger=None):
     if fits_model_psf is None:
         fits_model_psf = {}
     if name_model is None:
@@ -370,7 +378,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
             fits_model_psf[engine] = {}
         if redo or name_model not in fits_model_psf[engine]:
             model = get_psfmodel(engine, engineopts, num_comps, band, modeltype, imgpsf,
-                                 error_inverse=error_inverse)
+                                 error_inverse=error_inverse, logger=logger)
             fits_model_psf[engine][name_model] = {}
         else:
             model = fits_model_psf[engine][name_model]['modeller'].model
@@ -380,7 +388,9 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
                 fit_model(
                     model, modellib=modellib, modellibopts=modellibopts, do_print_final=do_print_final,
                     print_step_interval=print_step_interval, plot=plot, title=title, name_model=label,
-                    figure=figaxes[0], axes=figaxes[1], row_figure=row_figure, do_linear=False)
+                    figure=figaxes[0], axes=figaxes[1], row_figure=row_figure, do_linear=False,
+                    logger=logger, logger_modeller=logger
+                )
         elif plot:
             exposure = model.data.exposures[band][0]
             is_empty = isinstance(exposure.image, ImageEmpty)
@@ -418,7 +428,8 @@ def fit_galaxy(
     :param img_multi_plot_max: float; Maximum value of summed images when plotting multi-band.
     :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB).
     :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
-    :param print_step_interval: int; number of steps to run before printing output.
+    :param print_step_interval: int; number of steps to run before printing output
+    :param logger: mpf.objects.Logger; a logger to print messages and be passed to model(ler)s
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
         key='fits': value=array of fit results, key='modeltype': value =
@@ -429,6 +440,8 @@ def fit_galaxy(
         models: dict; key=model name: value=mpfobj.Model
         psfmodels: dict: TBD
     """
+    if logger is None:
+        logger = Logger()
     bands = OrderedDict()
     fluxes = {}
     num_pix_img = None
@@ -458,7 +471,7 @@ def fit_galaxy(
     moments_by_name = {name_param: value for name_param, value in zip(
         name_params_moments_init,
         Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
-    print('Bands:', bands, 'Moment init.:', moments_by_name)
+    logger.print('Bands:', bands, 'Moment init.:', moments_by_name)
     engine = 'galsim'
     engines = {
         engine: {
@@ -518,7 +531,7 @@ def fit_galaxy(
                 fluxes, modeltype, num_pix_img, [moments_by_name["sigma_x"]],
                 [moments_by_name["sigma_y"]], [moments_by_name["rho"]],
                 engine=engine, engineopts=engineopts, convertfluxfracs=not do_fit_fluxfracs,
-                repeat_ellipse=True, name_model=name_model
+                repeat_ellipse=True, name_model=name_model, logger=logger
             )
             params_fixed_default[modeltype] = [
                 param.fixed for param in model_default.get_parameters(fixed=True)]
@@ -589,7 +602,7 @@ def fit_galaxy(
                 inittype = modelinfo['inittype']
                 guesstype = None
                 if inittype == 'moments':
-                    print('Initializing from moments')
+                    logger.print('Initializing from moments')
                     for param in model.get_parameters(fixed=False):
                         if param.name in moments_by_name:
                             param.set_value(moments_by_name[param.name], transformed=False)
@@ -659,7 +672,7 @@ def fit_galaxy(
                 if not all(np.isfinite(values_param)):
                     raise RuntimeError('Not all params finite for model {}:'.format(name_model), values_param)
 
-                print("Fitting model {:s} of type {:s} using engine {:s}".format(
+                logger.print("Fitting model {:s} of type {:s} using engine {:s}".format(
                     name_model, modeltype, engine))
                 model.name = name_model
                 sys.stdout.flush()
@@ -683,7 +696,7 @@ def fit_galaxy(
                         do_plot_as_column=do_plot_as_column, name_model=name_model,
                         params_postfix_name_model=params_postfix_name_model,
                         img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                        weights_band=weights_band,
+                        weights_band=weights_band, logger=logger, logger_modeller=logger
                     )
                     fits.append(fit1)
                     if do_second and not model.can_do_fit_leastsq:
@@ -719,7 +732,7 @@ def fit_galaxy(
 
 def fit_galaxy_exposures(
         exposures_psfs, bands, modelspecs, results=None, plot=False, name_fit=None, redo=False,
-        redo_psfs=False, reset_images=False, **kwargs
+        redo_psfs=False, reset_images=False, loggerPsf=None, **kwargs
 ):
     """
     Fit a set of exposures and accompanying PSF images in the given bands with the requested model
@@ -733,10 +746,13 @@ def fit_galaxy_exposures(
     :param name_fit: String; name of the galaxy/image to use as a title in plots
     :param redo: bool; Redo any pre-existing fits in fits_by_engine?
     :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
-    :param reset_images: Boolean; reset all images in data structures to EmptyImages before returning results?
+    :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
+    :param loggerPsf: mpf.objects.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return:
     """
+    if loggerPsf is None:
+        loggerPsf = Logger()
     if results is None:
         results = {}
     metadata = {"bands": bands}
@@ -778,13 +794,13 @@ def fit_galaxy_exposures(
                     do_fit = redo_psfs or (name_psf not in psfs[idx][engine])
                     if do_fit or plot:
                         if do_fit:
-                            print('Fitting PSF band={} model={} (not in {})'.format(
+                            loggerPsf.print('Fitting PSF band={} model={} (not in {})'.format(
                                 band, name_psf, psfs[idx][engine].keys()))
                         psfs[idx] = fit_psf(
                             modeltype_psf, psf.image.array if do_fit or plot else None,
                             {engine: engineopts}, band=band, fits_model_psf=psfs[idx], plot=plot,
                             name_model=name_psf, label=label, title=name_fit, figaxes=(figure, axes),
-                            row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf)
+                            row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf, logger=loggerPsf)
                         if do_fit or 'object' not in psfs[idx][engine][name_psf]:
                             psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
                                 band=band, engine=engine,
@@ -827,7 +843,7 @@ def fit_galaxy_exposures(
 
 def get_psfmodel(
         engine, engineopts, num_comps, band, model, image, error_inverse=None, ratios_size=None,
-        factor_sigma=1):
+        factor_sigma=1, logger=None):
     sigma_x, sigma_y, rho = Ellipse.covar_matrix_as(mpfutil.estimate_ellipse(image), params=True)
     sigma_xs = np.repeat(sigma_x, num_comps)
     sigma_ys = np.repeat(sigma_y, num_comps)
@@ -842,7 +858,8 @@ def get_psfmodel(
 
     model = get_model(
         {band: 1}, model, np.flip(image.shape, axis=0), sigma_xs, sigma_ys, rhos,
-        fluxfracs=mpfutil.normalize(2.**(-np.arange(num_comps))), engine=engine, engineopts=engineopts)
+        fluxfracs=mpfutil.normalize(2.**(-np.arange(num_comps))), engine=engine, engineopts=engineopts,
+        logger=logger)
     for param in model.get_parameters(fixed=False):
         param.fixed = isinstance(param, mpfobj.FluxParameter) and not param.is_fluxratio
     set_exposure(model, band, image=image, error_inverse=error_inverse, factor_sigma=factor_sigma)
@@ -889,7 +906,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
             fluxfracs[i] = frac/total
             total -= frac
         fluxfracs[-1] = 1.0
-    print('Initializing from best model={} w/fluxfracs: {}'.format(modelfits[model_best]['name'], fluxfracs))
+    model.logger.print('Initializing from best model={} w/fluxfracs: {}'.format(
+        modelfits[model_best]['name'], fluxfracs))
     paramtree_best = modelfits[model_best]['paramtree']
     fluxcens_init = paramtree_best[0][1][0] + paramtree_best[0][0]
     # Get fluxes and components for init
@@ -1052,7 +1070,7 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
         if values_best:
             for param, value in values_best.items():
                 param.set_value(value, transformed=True)
-        print("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
+        model.logger.print("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
             model.name, guesstype_init, time.time() - time_init, like_init, like_best))
 
 
@@ -1075,6 +1093,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
     :return: A multiprofit.objects.Model initialized as requested; it may be the original model or a new one.
     """
     # TODO: Refactor into function
+    logger = model.logger
     guesstype = None
     if inittype.startswith("guess"):
         guesstype = inittype.split(':')
@@ -1119,7 +1138,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                 raise RuntimeError("Model={} can't find reference={} "
                                    "to initialize from".format(modeltype, inittype))
     has_fit_init = inittype and 'fits' in fits_engine[inittype]
-    print('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
+    logger.print('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
     if has_fit_init:
         values_param_init = fits_engine[inittype]["fits"][-1]["params_bestall"]
         # TODO: Find a more elegant method to do this
@@ -1143,7 +1162,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
             model_new = model
             model = models[fits_engine[inittype]['modeltype']]
             components_new = []
-        print('Initializing from best model=' + inittype +
+        logger.print('Initializing from best model=' + inittype +
               (' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''))
         # For mgtogauss, first we turn the mgsersic model into a true GMM
         # Then we take the old model and get the parameters that don't depend on components (mostly source
@@ -1151,8 +1170,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         for i in range(1+is_mg_to_gauss):
             params_all = model.get_parameters(fixed=True, modifiers=not is_mg_to_gauss)
             if is_mg_to_gauss:
-                print('Param values init:', values_param_init)
-                print('Param names: ', [x.name for x in params_all])
+                logger.print('Param values init:', values_param_init)
+                logger.print('Param names: ', [x.name for x in params_all])
             if len(values_param_init) != len(params_all):
                 raise RuntimeError('len(values_param_init)={} != len(params)={}, params_all={}'.format(
                     len(values_param_init), len(params_all), [x.name for x in params_all]))
@@ -1165,7 +1184,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                     value = 0.55
                 param.set_value(value, transformed=False)
             if is_mg_to_gauss:
-                print('Param values:', [param.get_value(transformed=False)
+                logger.print('Param values:', [param.get_value(transformed=False)
                                         for param in model.get_parameters()])
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
