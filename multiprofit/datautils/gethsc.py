@@ -7,6 +7,16 @@ from modelling_research import make_cutout
 
 
 def find_hsc_match(spherePoint, measCat, dist_match_in_asec=None, radius_nearby_objects=0):
+    """
+    Find the nearest match(es) to a given sky coordinate within a catalog.
+    :param spherePoint: lsst.afw.geom.SpherePoint instance
+    :param measCat: lsst.afw.table.SourceCatalog instance
+    :param dist_match_in_asec: Float; maximum distance allowed for matching; will raise if none found
+    :param radius_nearby_objects: Float; maximum distance in arcseconds of sources to retrieve records for
+    :return:
+        id: Int; id of nearest matched source
+        rows_nearby: lsst.afw.table.SourceRecord[] of sources within radius_nearby_objects
+    """
     if dist_match_in_asec is None:
         dist_match_in_asec = 1.0
     # Get and verify match
@@ -32,7 +42,28 @@ def find_hsc_match(spherePoint, measCat, dist_match_in_asec=None, radius_nearby_
 
 def get_cutout_hsc(butler, skymap, bands, radec, tract=9813, size_in_pix=60,
                    do_deblend=False, band_match=None, dist_match_in_asec=None, radius_nearby_objects=0,
-                   do_keep_wcs=False):
+                   do_keep_wcs=False, min_good_pixel_frac=0.5):
+    """
+    Get square cutouts around a given location covered by data in a Butler.
+    :param butler: lsst.daf.persistence.Butler instance
+    :param skymap: lsst.skymap.BaseSkyMap (or derived) instance
+    :param bands: String[]; names of filters to retrieve
+    :param radec: Float[2]; ra/dec in degrees
+    :param tract: Int; Tract number
+    :param size_in_pix: Float; side length of cutout in pixels
+    :param do_deblend: Boolean; whether to match the nearest source and replace all other objects with noise
+    :param band_match: String; name of filter to performing matching on/with
+    :param dist_match_in_asec: Float; maximum distance allowed for matching
+    :param radius_nearby_objects: Float; maximum distance in arcseconds of sources to retrieve records for
+    :param do_keep_wcs: Boolean; whether to return the WCS and bbox for each cutout
+    :param min_good_pixel_frac: Float; minimum acceptable fraction of good pixels. Will raise if any band's
+        cutout is lower than this fraction (default 0.5)
+    :return:
+        cutouts: Dict[band] of dict[do_blend] of dict of cutout outputs
+        spherePoint: afw.geom.SpherePoint built from radec
+        scale_pixel: Float; pixel scale in arcsec/pixel
+        radecs_nearby: Tuple[] of ra/dec for sources within radius_nearby_objects of radec
+    """
     if do_deblend:
         from lsst.meas.base.measurementInvestigationLib import rebuildNoiseReplacer
     spherePoint = geom.SpherePoint(radec[0], radec[1], geom.degrees)
@@ -59,7 +90,15 @@ def get_cutout_hsc(butler, skymap, bands, radec, tract=9813, size_in_pix=60,
         # Get the coadd
         coadd = dataRef.get("deepCoadd_calexp")
         pixel = coadd.getWcs().skyToPixel(spherePoint)
+        mask = coadd.getMaskedImage().getMask()
         cutout = make_cutout.make_cutout_lsst(spherePoint, coadd, size=np.floor_divide(size_in_pix, 2))
+        ids_hsc = cutout[4]
+        image_mask = mask.array[ids_hsc[3]: ids_hsc[2], ids_hsc[1]: ids_hsc[0]]
+        detected = np.any(np.bitwise_and(2**mask.getMaskPlane('DETECTED'), image_mask))
+        no_data_ratio = np.sum(np.bitwise_and(2**mask.getMaskPlane('NO_DATA'), image_mask) > 0)/cutout[0].size
+        if not detected or no_data_ratio > min_good_pixel_frac:
+            raise RuntimeError(f'Cutout at coord {spherePoint} has detected={detected} and/or fraction of '
+                               f'NO_DATA mask={no_data_ratio} > {min_good_pixel_frac}')
         cutouts[band]['blended']['img'] = np.copy(cutout[0])
         scale_pixel_band = coadd.getWcs().getPixelScale().asArcseconds()
         if scale_pixel is None:
@@ -68,10 +107,8 @@ def get_cutout_hsc(butler, skymap, bands, radec, tract=9813, size_in_pix=60,
             raise RuntimeError('Inconsistent pixel scale for band {} ({} != {})'.format(
                 band, scale_pixel_band, scale_pixel
             ))
-        ids_hsc = cutout[4]
         cutouts[band]['blended']['psf'] = coadd.getPsf().computeKernelImage(pixel).array
-        cutouts[band]['blended']['mask'] = coadd.getMaskedImage().getMask().array[
-                                            ids_hsc[3]: ids_hsc[2], ids_hsc[1]: ids_hsc[0]]
+        cutouts[band]['blended']['mask'] = np.copy(image_mask)
         cutouts[band]['blended']['var'] = np.copy(coadd.getMaskedImage().getVariance().array[
                                             ids_hsc[3]: ids_hsc[2], ids_hsc[1]: ids_hsc[0]])
 
