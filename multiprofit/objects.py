@@ -2729,7 +2729,19 @@ class Parameter:
             raise e
 
     def __str__(self):
-        return self.__name__ + ', '.join(['{}={}'.format(var, value) for var, value in vars(self)])
+        attrs = ', '.join([
+            f'{var}={value}' for var, value in dict(
+                fixed=self.fixed,
+                limits=self.limits,
+                inheritors=self.inheritors,
+                modifiers=self.modifiers,
+                prior=self.prior,
+                transform=self.transform,
+                transformed=self.transformed,
+                value=self.value,
+            ).items()
+        ])
+        return f'Parameter (name={self.name}):({attrs})'
 
     def __call__(self, *args, **kwargs):
         return self.get_value(*args, **kwargs)
