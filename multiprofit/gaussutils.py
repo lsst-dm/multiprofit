@@ -63,7 +63,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
     else:
         if not isinstance(x, np.ndarray):
             raise TypeError("x must be ndarray or Ellipse, not {}".format(type(x)))
-        is_matrix = x.shape != (2, 2)
+        is_matrix = x.shape == (2, 2)
         if is_matrix:
             covar = x
         else:
@@ -128,7 +128,8 @@ def ellipse_to_covar(sigma, axrat, ang, return_as_matrix=True, return_as_params=
     sigma_x_sq = maj_sq*cos_ang_sq + min_sq*sin_ang_sq
     sigma_y_sq = maj_sq*sin_ang_sq + min_sq*cos_ang_sq
     covar = (maj_sq-min_sq)*cos_ang*sin_ang
-    return Ellipse.covar_terms_as(sigma_x_sq, sigma_y_sq, covar, matrix=return_as_matrix, params=return_as_params)
+    return Ellipse.covar_terms_as(
+        sigma_x_sq, sigma_y_sq, covar, matrix=return_as_matrix, params=return_as_params)
 
 
 # https://www.wolframalpha.com/input/?i=Integrate+2*pi*x*exp(-x%5E2%2F(2*s%5E2))%2F(s*sqrt(2*pi))+dx+from+0+to+r
