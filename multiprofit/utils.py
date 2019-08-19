@@ -42,7 +42,7 @@ def absconservetotal(ndarray):
             ndarray[indices[idx_indices]] = 0
             idx_indices += 1
         ndarray[indices[idx_indices-1]] = sum_neg
-        if idx_indices == ndarray.shape[0]:
+        if idx_indices == ndarray.shape[0] and sum_neg < 0:
             raise RuntimeError("absconservetotal failed for array with sum {}".format(np.sum(ndarray)))
     ndarray.shape = shape
     return ndarray
@@ -80,10 +80,11 @@ def mag_to_flux(ndarray):
 # TODO: replace with the stack's method (in meas_?)
 def estimate_ellipse(
         img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0, do_recenter=True,
-        return_cens=False):
-    sum_img = np.sum(img)
-    if not sum_img > 0:
-        raise RuntimeError(f"Tried to estimate ellipse for img={img} with sum={sum_img}")
+        return_cens=False, validate=True):
+    if validate:
+        sum_img = np.sum(img)
+        if not sum_img > 0:
+            raise RuntimeError(f"Tried to estimate ellipse for img(shape={img.shape}, sum={sum_img})")
     imgmeas = absconservetotal(np.copy(img)) if denoise else img
     if cenx is None:
         cenx = imgmeas.shape[1]/2.
