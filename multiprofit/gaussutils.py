@@ -26,14 +26,37 @@ from _multiprofit import loglike_gaussians_pixel as loglike_gaussians_pixel_pb
 
 
 def sigma_to_reff(sigma):
+    """
+    Convert a Gaussian dispersion sigma to a Sersic profile effective (half-light) radius.
+
+    The constant is np.sqrt(2*np.log(2)) - the conversion from sigma to HWHM - since Gaussian r_50 = HWHM
+
+    :param sigma: Float; Gaussian dispersion sigma.
+    :return: r_eff: Float; the Sersic effective (half-light) radius.
+    """
     return sigma*1.1774100225154746635070068805362097918987
 
 
-def reff_to_sigma(reff):
-    return reff/1.1774100225154746635070068805362097918987
+def reff_to_sigma(r_eff):
+    """
+    Convert a Gaussian dispersion sigma to a Sersic profile effective (half-light) radius.
+
+    :param r_eff: Float; the Sersic effective (half-light) radius.
+    :return: sigma: Float; Gaussian dispersion sigma.
+    """
+    return r_eff/1.1774100225154746635070068805362097918987
 
 
 def covar_to_ellipse(x, use_method_eigen=True):
+    """
+    Convert a covariance matrix or parameter array to ellipse parameters sigma_maj, axrat, ang.
+
+    :param x: A 2x2 covariance matrix or a length[3] array of sigma_x_sq, sigma_y_sq, covariance.
+    :param use_method_eigen: Use an eigenvalue method to get the principal axes.
+        This is slower but usually more accurate.
+    :return: sigma_maj, axrat, ang: Floats of the major axis sigma, axis ratio, and position angle in degrees
+        following the usual convention of countner-clockwise from the +x axis.
+    """
     if isinstance(x, Ellipse):
         is_matrix = True
         covar = x.get_covariance(matrix=True)
@@ -86,6 +109,15 @@ def covar_to_ellipse(x, use_method_eigen=True):
 
 
 def ellipse_to_covar(sigma, axrat, ang, return_as_matrix=True, return_as_params=False):
+    """
+    Convert ellipse parameters to a covariance matrix/array or correlation array.
+    :param sigma: Float; major-axis sigma of the normal distribution.
+    :param axrat: Float; minor-to-major axis ratio.
+    :param ang: Float; position angle in degrees, measured as standard (counter-clockwise from +x).
+    :param return_as_matrix: Bool; return a covariance matrix?
+    :param return_as_params: Bool; return correlation parameter array instead of covariance?
+    :return: Covariance matrix/array or correlation array, as requested.
+    """
     ang = np.radians(ang)
     sin_ang = np.sin(ang)
     cos_ang = np.cos(ang)
@@ -153,6 +185,32 @@ def loglike_gaussians_pixel(
         to_add=False, output=None, grad=None, grad_param_map=None, grad_param_factor=None,
         sersic_param_map=None, sersic_param_factor=None,
 ):
+    """
+    A wrapper for the pybind11 loglike_gaussians_pixel function with reasonable default values for all of the
+    arguments, since most of them don't accept None (nullptr)/
+    :param data: np.array, ndim=2; image data if computing likelihood.
+    :param variance_inv: np.array, shape==data.shape; inverse variance image if computing likelihood.
+    :param gaussians: np.array, shape=(6|9, N): Parameters for N Gaussians:
+        cenx, ceny, flux, sigma_x, sigma_y, rho.
+        Optionally include PSF sigma_x, sigma_y, rho.
+    :param x_min: Float; the x-coordinate of the left edge of the image.
+    :param x_max: Float; the x-coordinate of the right edge of the image.
+    :param y_min: Float; the y-coordinate of the bottom edge of the image.
+    :param y_max: Float; the y-coordinate of the top edge of the image.
+    :param to_add: Bool; if outputting the model, should it add to the output image or overwrite it?
+    :param output: np.array, shape==data.shape; output image for model or residual (if computing Jacobian).
+    :param grad: np.array, shape~gaussians.shape to output likelihood gradient;
+        shape==(data.shape[0],data.shape[1], N~gaussians.size) to output Jacobian
+    :param grad_param_map: np.array[int], shape==gaussian.shape; optional indices of where each Gaussian
+        parameter gradient/Jacobian should enter into grad.
+    :param grad_param_factor: np.array[float], shape==gaussian.shape; optional multiplicative factor
+        as grad_param_map.
+    :param sersic_param_map: np.array[int], shape==gaussian.shape[1]; indices as grad_param_map but for the
+        Sersic index of multi-Gaussian profiles.
+    :param sersic_param_factor: np.array[float], shape==gaussian.shape[1]; as grad_param_factor but for the
+        Sersic index of multi-Gaussian profiles.
+    :return: the log-likelihood of the model, or zero for Jacobian (the residuals are output instead).
+    """
     if output is None:
         output = zeros_double
     if grad is None:

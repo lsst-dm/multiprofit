@@ -419,14 +419,14 @@ def fit_galaxy(
     :param modelspecs: Model specifications as returned by get_modelspecs
     :param modellib: string; Model fitting library
     :param modellibopts: dict; Model fitting library options
-    :param plot: bool; Make plots?
+    :param plot: bool; whether to plot
     :param name: string; Name of the model for plot labelling
     :param models: dict; key=model name: value=mpfobj.Model
-    :param fits_by_engine: dict; same format as return value.
-    :param redo: bool; Redo any pre-existing fits in fits_by_engine?
+    :param fits_by_engine: dict; same format as return value
+    :param redo: bool; Redo any pre-existing fits in fits_by_engine
     :param img_plot_maxs: dict; key=band: value=float (Maximum value when plotting images in this band)
     :param img_multi_plot_max: float; Maximum value of summed images when plotting multi-band.
-    :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB).
+    :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB)
     :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
     :param print_step_interval: int; number of steps to run before printing output
     :param logger: mpf.objects.Logger; a logger to print messages and be passed to model(ler)s
