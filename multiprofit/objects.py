@@ -30,6 +30,7 @@ import multiprofit.asinhstretchsigned as mpfasinh
 from multiprofit.ellipse import Ellipse
 import multiprofit.gaussutils as mpfgauss
 from multiprofit.limits import Limits
+from multiprofit.logger import Logger
 from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
 import numpy as np
@@ -189,7 +190,8 @@ class PSF:
             if use_model:
                 raise ValueError("PSF use_model==True but no model specified")
             if (engine == "galsim") and (isinstance(image, gs.InterpolatedImage) or
-                                         isinstance(image, gs.Image)):
+                                         isinstance(image, gs.Image) or (
+                                            hasattr(image, "array") and isinstance(image.array, np.ndarray))):
                 self.engine = engine
             else:
                 if not isinstance(image, np.ndarray):
@@ -501,7 +503,7 @@ class Model:
 
     def __validate_jacobian_param(
             self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
-            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=True):
+            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=False):
         value = param.get_value(transformed=True)
         dx = np.clip(value*dx_ratio, 1e-8, np.Inf)
         value_new = value + dx
@@ -942,14 +944,19 @@ class Model:
         is_any_gaussian = is_all_gaussian and any(is_profiles_gaussian)
         is_all_gaussian = is_all_gaussian and all(is_profiles_gaussian)
         # Use fast, efficient Gaussian evaluators only if everything's a Gaussian mixture model
-        use_fast_gauss = is_all_gaussian and (is_psf_pixelated or (not has_psf and
+        use_fast_gauss = (engineopts is None or (engineopts.get("use_fast_gauss") is not False)) and (
+            is_all_gaussian and (
+                is_psf_pixelated or (
+                    not has_psf and
                 # Disabling these for fitting with a PSF because we don't want discontinuous likelihoods
                 # in fitting because the drawing method has changed, but it's fine for PSF fitting
-                # or
-                engineopts is not None and (
-                    (engine == 'galsim' or engine == 'libprofit') and
-                    engineopts.get("drawmethod") == draw_method_pixel[engine])
-        ))
+                    engineopts is not None and (
+                        (engine == 'galsim' or engine == 'libprofit') and
+                        engineopts.get("drawmethod") == draw_method_pixel[engine]
+                    )
+                )
+            )
+        )
         if use_fast_gauss:
             if engine != 'libprofit':
                 engine = 'libprofit'
@@ -962,7 +969,8 @@ class Model:
         if profiles:
             # Do analytic convolution of any Gaussian model with the Gaussian PSF
             # This turns each resolved profile into N_PSF_components Gaussians
-            if is_any_gaussian:
+            if is_any_gaussian and (engineopts is None or
+                                    (engineopts.get("do_analytic_convolution") is not False)):
                 is_libprofit = engine == "libprofit"
                 if clock:
                     times['model_all_gauss_eig'] = 0
@@ -996,9 +1004,9 @@ class Model:
                                 reff = mpfgauss.sigma_to_reff(reff)
                                 if clock:
                                     times['model_all_gauss_eig'] += time.time() - time_eig
+                                profile = copy.copy(profile)
                                 if is_libprofit:
                                     # Needed because each PSF component will loop over the same profile object
-                                    profile = copy.copy(profile)
                                     profile["ellipse_src"] = ellipse_src
                                     profile["ellipse_psf"] = ellipse_psf
                                     profile["idx_src"] = idx_src
@@ -1007,13 +1015,11 @@ class Model:
                                     profile["mag"] += mpfutil.flux_to_mag(fluxfrac)
                                     profile["ang"] = ang
                                 else:
-                                    profile = {
-                                        "profile_gs": gs.Gaussian(
-                                            flux=10**(-0.4*profile["mag"])*fluxfrac,
-                                            fwhm=2*reff*np.sqrt(axrat), gsparams=gsparams),
-                                        "shear": gs.Shear(q=axrat, beta=ang*gs.degrees),
-                                        "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
-                                    }
+                                    profile["profile_gs"] = gs.Gaussian(
+                                        flux=10**(-0.4*profile["mag"])*fluxfrac,
+                                        fwhm=2*reff*np.sqrt(axrat), gsparams=gsparams)
+                                    profile["shear"] = gs.Shear(q=axrat, beta=ang*gs.degrees)
+                                    profile["offset"] = gs.PositionD(profile["cenx"], profile["ceny"])
                                 profile["pointsource"] = True
                                 profile["resolved"] = True
                                 profile["fluxfrac_psf"] = fluxfrac
@@ -1121,7 +1127,7 @@ class Model:
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv/np.sqrt(2.*np.pi)))
                     if variance_inv.size == 1:
                         exposure.meta['like_const'] *= np.prod(exposure.image.shape)
-                    print('Setting exposure.meta[\'like_const\']=', exposure.meta['like_const'])
+                    self.logger.print('Setting exposure.meta[\'like_const\']=', exposure.meta['like_const'])
                 do_jacobian_any = do_jacobian or do_fit_leastsq_prep
                 profiles_band_bad = 0
                 profiles_band = []
@@ -1760,10 +1766,28 @@ class Modeller:
         # TODO: The mechanism here is TBD
         do_linear_only = do_linear and do_linear_only
 
+        # If fitting with GalSim, ensure that the fast gaussian code is not used to avoid inconsistent
+        # likelihoods at n=0.5
+        if self.model.engine == "galsim" and (self.model.engineopts.get("use_fast_gauss") is not False):
+            any_not_gauss = False
+            for source in self.model.sources:
+                if not any_not_gauss:
+                    for comp in source.modelphotometric.components:
+                        if not (comp.is_gaussian_mixture() and not (
+                                isinstance(comp, EllipticalParametricComponent) and
+                                comp.profile == "sersic" and not comp.parameters["nser"].fixed)
+                        ):
+                            any_not_gauss = True
+                            break
+            if any_not_gauss:
+                self.model.engineopts["use_fast_gauss"] = False
+                self.model.engineopts["do_analytic_convolution"] = False
+
         time_start = time.time()
         likelihood = self.evaluate(
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_verify_jacobian=True,
             do_compare_likelihoods=True)
+        likelihood_init = likelihood
         self.logger.print("Param names   : {}".format(name_params))
         self.logger.print("Initial params: {}".format(params_init))
         self.logger.print("Initial likelihood in t={:.3e}: {}".format(time.time() - time_start, likelihood))
@@ -1961,7 +1985,7 @@ class Modeller:
                 # TODO: Increment n_evals
             else:
                 raise RuntimeError("Unknown optimization library " + self.modellib)
-
+            likelihood = self.evaluate(params_best)
             if do_print_final:
                 self.logger.print(
                     "Model '{}' nonlinear fit elapsed time: {:.3e} after {},{} function,gradient "
@@ -1969,7 +1993,7 @@ class Modeller:
                         self.model.name, time_run, self.fitinfo["n_eval_func"],
                         self.fitinfo["n_eval_grad"],
                         (len(timing) if timing is not None else 0) - self.fitinfo["n_timings"]))
-                self.logger.print("Final likelihood: {}".format(self.evaluate(params_best)))
+                self.logger.print("Final likelihood: {}".format(likelihood))
                 self.logger.print("Parameter names:        " + ",".join(["{:11s}".format(i) for i in name_params]))
                 self.logger.print("Transformed parameters: " + ",".join(["{:+1.4e}".format(i) for i in params_best]))
                 # TODO: Finish this
@@ -1984,6 +2008,10 @@ class Modeller:
             "fitinfo": copy.copy(self.fitinfo),
             "params": self.model.get_parameters(),
             "name_params": name_params,
+            "likelihood": likelihood,
+            "likelihood_init": likelihood_init,
+            "n_eval_func": self.fitinfo["n_eval_func"],
+            "n_eval_grad": self.fitinfo["n_eval_grad"],
             "params_best": params_best,
             "result": result,
             "time": time_run,

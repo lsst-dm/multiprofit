@@ -1,0 +1,3 @@
+name,model,fixedparams,initparams,inittype,psfmodel,psfpixel
+sermpx,sersic:1,,nser=1,moments,gaussian:2,T
+serb,sersic:1,,,sermpx,gaussian:2,F

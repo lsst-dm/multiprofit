@@ -144,7 +144,7 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
         param_fluxescomp = [
             mpfobj.FluxParameter(
                 band, "flux", transform.transform(fluxes[band][compi]), None, limits=limits_ref["none"],
-                transform=transform, fixed=is_last, is_fluxratio=is_fluxes_fracs)
+                transform=transform, fixed=is_last, is_fluxratio=is_fluxes_fracs, transformed=True)
             for band in bands
         ]
         params = [
@@ -285,9 +285,8 @@ def get_model(
                 len(components), num_profiles))
         compnum += num_profiles
     param_fluxes = [mpfobj.FluxParameter(
-            band, "flux", np.log10(fluxes_by_band[band]), None, limits=limits_ref["none"],
-            transform=transforms_ref["log10"], transformed=True, prior=None, fixed=False,
-            is_fluxratio=False)
+        band, "flux", np.log10(np.clip(fluxes_by_band[band], 1e-16, np.Inf)), None, limits=limits_ref["none"],
+        transform=transforms_ref["log10"], transformed=True, prior=None, fixed=False, is_fluxratio=False)
         for bandi, band in enumerate(bands)
     ]
     modelphoto = mpfobj.PhotometricModel(components, param_fluxes)
@@ -410,7 +409,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
 def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
-        do_fit_fluxfracs=False, print_step_interval=100,
+        do_fit_fluxfracs=False, print_step_interval=100, logger=None, flux_min=1e-3
 ):
     """
     Convenience function to fit a galaxy given some exposures with PSFs.
@@ -446,7 +445,9 @@ def fit_galaxy(
     fluxes = {}
     num_pix_img = None
     name_params_moments_init = mpfobj.names_params_ellipse
+    cens = dict(cenx=0, ceny=0)
     moments_by_name = {name_param: 0 for name_param in name_params_moments_init}
+    num_exposures_measured = 0
     for exposure, _ in exposures_psfs:
         band = exposure.band
         img_exp = exposure.image
@@ -456,18 +457,24 @@ def fit_galaxy(
         elif num_pix_img_exp != num_pix_img:
             'fit_galaxy exposure image shape={} not same as first={}'.format(num_pix_img_exp, num_pix_img)
         if band not in bands:
-            moments = mpfutil.estimate_ellipse(img_exp)
-            # TODO: subtract PSF moments from object
-            for name_param, value in zip(name_params_moments_init,
-                                         Ellipse.covar_matrix_as(moments, params=False)):
-                moments_by_name[name_param] += value
+            if np.sum(img_exp) > 0:
+                moments, cenx, ceny = mpfutil.estimate_ellipse(img_exp, return_cens=True, validate=False)
+                cens['cenx'] += cenx
+                cens['ceny'] += ceny
+                # TODO: subtract PSF moments from object
+                for name_param, value in zip(name_params_moments_init,
+                                             Ellipse.covar_matrix_as(moments, params=False)):
+                    moments_by_name[name_param] += value
+                num_exposures_measured += 1
             bands[exposure.band] = None
         # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
-        fluxes[band] = np.sum(
-            img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp)
+        fluxes[band] = np.clip(np.sum(
+            img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp), flux_min,
+            np.Inf)
     num_pix_img = np.flip(num_pix_img, axis=0)
-    for name_param in moments_by_name:
-        moments_by_name[name_param] /= len(bands)
+    for params in [cens, moments_by_name]:
+        for name_param in params:
+            params[name_param] /= num_exposures_measured
     moments_by_name = {name_param: value for name_param, value in zip(
         name_params_moments_init,
         Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
@@ -604,8 +611,11 @@ def fit_galaxy(
                 if inittype == 'moments':
                     logger.print('Initializing from moments')
                     for param in model.get_parameters(fixed=False):
-                        if param.name in moments_by_name:
-                            param.set_value(moments_by_name[param.name], transformed=False)
+                        value = moments_by_name.get(param.name)
+                        if value is None:
+                            value = cens.get(param.name)
+                        if value is not None:
+                            param.set_value(value, transformed=False)
                 else:
                     model, guesstype = init_model(
                         model, modeltype, inittype, models, modelspecs[0:modelidx], fits_engine, bands=bands,
@@ -791,13 +801,16 @@ def fit_galaxy_exposures(
                         band=band, engine=engine, image=psf.image.array)}
                 else:
                     engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine] if is_psf_pixelated else None
-                    do_fit = redo_psfs or (name_psf not in psfs[idx][engine])
+                    has_fit = name_psf in psfs[idx][engine]
+                    do_fit = redo_psfs or not has_fit
                     if do_fit or plot:
                         if do_fit:
                             loggerPsf.print('Fitting PSF band={} model={} (not in {})'.format(
                                 band, name_psf, psfs[idx][engine].keys()))
                         psfs[idx] = fit_psf(
-                            modeltype_psf, psf.image.array if do_fit or plot else None,
+                            modeltype_psf, psf.image.array if (
+                                    hasattr(psf, "image") and hasattr(psf.image, "array")) else (
+                                psf if isinstance(psf, np.ndarray) else None),
                             {engine: engineopts}, band=band, fits_model_psf=psfs[idx], plot=plot,
                             name_model=name_psf, label=label, title=name_fit, figaxes=(figure, axes),
                             row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf, logger=loggerPsf)

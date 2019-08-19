@@ -1,0 +1,5 @@
+name,model,fixedparams,initparams,inittype,psfmodel,psfpixel
+mg8sermpx,mgsersic8:1,,nser=1,moments,gaussian:2,T
+mg8devexptpx,mgsersic8:2,"cenx;ceny;flux;nser","nser=4,1",mg8sermpx;mg8sermpx,gaussian:2,T
+mg8devexp2px,mgsersic8:2,nser,"nser=4,1",mg8devexptpx,gaussian:2,T
+mg8serserbpx,mgsersic8:2,,,best,gaussian:2,T
