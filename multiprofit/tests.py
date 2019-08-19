@@ -30,11 +30,33 @@ import timeit
 
 
 # Example usage:
-# test = testgaussian(nbenchmark=1000)
+# test = gaussian_test(nbenchmark=1000)
 # for x in test:
 #   print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
 def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchmark=0, nsub=1,
-                  do_like=True, do_grad=False, do_jac=False):
+                  do_like=True, do_grad=False, do_jac=False, do_meas_modelfit=False):
+    """
+    Test and/or benchmark different gaussian evaluation methods.
+
+    Example usage:
+
+    test = gaussian_test(nbenchmark=1000)
+    for x in test:
+        print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
+
+    :param xdim: int; x dimension of image
+    :param ydim: int; y dimension of image
+    :param reffs: float[]; iterable of effective radii
+    :param angs: float[]; iterable of position angles in degrees CCW from +x
+    :param axrats: float[]; iterable of major-to-minor axis ratios
+    :param nbenchmark: int; number of times to repeat function evaluation for benchmarking
+    :param nsub: int; number of (identical) Gaussians to evaluate (as for a GMM)
+    :param do_like: bool; whether to evaluate the likelihood
+    :param do_grad: bool; whether to evaluate the likelihood gradient
+    :param do_jac: bool; whether to evaluate the model Jacobian
+    :param do_meas_modelfit: bool; whether to test meas_modelfit's code
+    :return: results: list of dicts with results for each combination of parameters
+    """
     if reffs is None:
         reffs = [2.0, 5.0]
     if angs is None:
@@ -85,7 +107,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                     if do_jac:
                         functions['jac'] = 'mpfg.loglike_gaussians_pixel(data, data, ' \
                                            'np.array([{}]), grad=grads)'.format(gaussarrays)
-                    timesmpf = {
+                    times = {
                         key: np.min(timeit.repeat(
                             callstr,
                             setup='import multiprofit as mpf; import multiprofit.gaussutils as mpfg;' + (
@@ -100,18 +122,33 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                             repeat=nbenchmark, number=1))
                         for key, callstr in functions.items()
                     }
+                    if do_meas_modelfit:
+                        sigma_x_sq, sigma_y_sq, cov = mpfgauss.ellipse_to_covar(
+                            mpfgauss.reff_to_sigma(reff), axrat, ang, return_as_matrix=False)
+                        for key in ("dev", "exp"):
+                            times[f"mmf-{key}"] = np.min(timeit.repeat(
+                                f"shapelet.evaluate().addToImage(img)",
+                                setup=(
+                                    f"from lsst.meas.modelfit.cmodel.cmodelContinued "
+                                    f"import CModelForcedConfig; import numpy as np;"
+                                    f"control = CModelForcedConfig().makeControl();"
+                                    f"model=control.{key}.getModel();"
+                                    f"free, amp, fixed = np.array([{sigma_x_sq}, {sigma_y_sq}, {cov}]),"
+                                    f"np.array([1.]), np.array([{xdim/2}, {ydim/2}]);"
+                                    f"shapelet = model.makeShapeletFunction(free, amp, fixed);"
+                                    f"img=np.zeros(({ydim}, {xdim}))"),
+                                repeat=nbenchmark, number=1,
+                            ))
                     if hasgs:
-                        time_gs = np.min(timeit.repeat(
+                        times['GalSim'] = np.min(timeit.repeat(
                             'x=gs.Gaussian(flux=1, half_light_radius={}).shear(q={}, beta={}*gs.degrees)'
                             '.drawImage(nx={}, ny={}, scale=1, method="no_pixel").array'.format(
                                 reff*np.sqrt(axrat), axrat, ang, xdim, ydim
                             ),
                             setup='import galsim as gs', repeat=nbenchmark, number=1
                         ))
-                    mpffuncs = list(timesmpf.keys())
-                    times = [timesmpf[x] for x in mpffuncs] + [time_gs] if hasgs else []
-                    result += ';' + '/'.join(mpffuncs) + ('/GalSim' if hasgs else '') + ' times=(' + \
-                              ','.join(['{:.3e}'.format(x) for x in times]) + ')'
+                    result += f";{'/'.join(times.keys())} times=(" \
+                        f"{','.join(['{:.3e}'.format(x) for x in times.values()])})"
                 results.append({
                     'string': result,
                     'xdim': xdim,
