@@ -32,6 +32,7 @@ import time
 import traceback
 
 import multiprofit.fitutils as mpffit
+import multiprofit.gaussutils as mpfgauss
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 
@@ -188,8 +189,9 @@ def get_exposures_hst2hsc(
         # Assuming that these images match, add HSC noise back in
         if model_name_hst2hsc is None:
             # TODO: Fix this as it's not working by default
-            img = offset_img_chisq(result.x, return_img=True, imgref=cutouts_band['img'],
-                                   psf=imgpsf_gs, nx=nx, ny=ny, scale=scale_pixel_hsc)
+            img = offset_img_chisq(
+                result.x, return_img=True, imgref=cutouts_band['img'], psf=imgpsf_gs,
+                nx=nx, ny=ny, scale=scale_pixel_hsc)
             img = gs.Convolve(img, imgpsf_gs).drawImage(nx=nx, ny=ny, scale=scale_pixel_hsc)*fluxscale
             # The PSF is now HSTPSF*HSCPSF, and "truth" is the deconvolved HST image/model
             psf = gs.Convolve(imgpsf_gs, psf_hst.rotate(angle_hst*gs.degrees)).drawImage(
@@ -214,6 +216,8 @@ def get_exposures_hst2hsc(
             img_hst_shape = img_hst.shape
             # I'm pretty sure that these should all be converted to arcsec units
             # TODO: Verify above
+            params_ell = {}
+            names_param_ell = ["sigma_x", "sigma_y", "rho"]
             for param, value in zip(model_to_use.get_parameters(fixed=True), params_best):
                 param.set_value(value, transformed=True)
                 value_to_set = param.get_value(transformed=False)
@@ -221,15 +225,32 @@ def get_exposures_hst2hsc(
                     value_to_set = (scale_hst*(value_to_set - img_hst_shape[1]/2) + result.x[1] + nx/2)
                 elif param.name == "ceny":
                     value_to_set = (scale_hst*(value_to_set - img_hst_shape[0]/2) + result.x[2] + ny/2)
-                elif param.name == "ang":
-                    value_to_set += angle_hst/gs.degrees
-                elif param.name == "re":
+                elif param.name == "rho":
+                    params_ell[param.name] = param
+                elif param.name == "sigma_x" or param.name == "sigma_y":
+                    params_ell[param.name] = param
                     value_to_set *= scale_hst
                 param.set_value(value_to_set, transformed=False)
+            covar = np.array([
+                p.get_value(transformed=False) for p in [params_ell[x] for x in names_param_ell]
+            ])
+            covar[2] *= covar[0]*covar[1]
+            covar[1] *= covar[1]
+            covar[0] *= covar[0]
+            sigma, axrat, ang = mpfgauss.covar_to_ellipse(covar)
+            ang += angle_hst/gs.degrees
+            sigma_x, sigma_y, rho = mpfgauss.ellipse_to_covar(
+                sigma, axrat, ang, return_as_matrix=False, return_as_params=True)
+            for param, value in zip([params_ell[x] for x in names_param_ell], [sigma_x, sigma_y, rho]):
+                param.set_value(value, transformed=False)
             image_model_exposure = model_to_use.data.exposures[bandhst][0]
             image_model_exposure.image = mpffit.ImageEmpty((ny, nx))
             # Save the GalSim model object
-            model_to_use.evaluate(keep_models=True, get_likelihood=False, do_draw_image=False)
+            # We pass engineopts to ensure that use_fast_gauss=False and null gsparams since those are
+            # irrelevant here (they're used in the next line to actually draw the convolved model)
+            model_to_use.evaluate(
+                keep_models=True, get_likelihood=False, do_draw_image=False, engine='galsim',
+                engineopts={'use_fast_gauss': False, "gsparams": None})
             img = np.float64(gs.Convolve(image_model_exposure.meta['model']['galsim'], imgpsf_gs).drawImage(
                 nx=nx, ny=ny, scale=scale_pixel_hsc, method='no_pixel').array)*fluxscale
             psf = imgpsf_gs
@@ -302,6 +323,8 @@ def fit_galaxy_cosmos(
             dist_match_in_asec=1.0)
 
     results = kwargs['results'] if 'results' in kwargs and kwargs['results'] is not None else {}
+    fluxes = {}
+    sizes = {}
     for src in srcs:
         metadatas = None
         to_fit = True
@@ -324,10 +347,8 @@ def fit_galaxy_cosmos(
                                                    int(np.floor(shape[1]*0.35)):int(np.floor(shape[1]*0.65))
                                                 ]
                     img_hst = exposures_psfs_hst[0][0].image
-            if not to_fit:
-                results[src]['error'] = 'Skipping {} fit for {} with unreasonable flux={} size={}'.format(
-                    src, id_cosmos_gs, flux, size
-                )
+            fluxes['F814W'] = flux
+            sizes['F814W'] = size
         elif src == 'hsc' or src == 'hst2hsc':
             args_exposures = {
                 'cutouts': cutouts,
@@ -349,6 +370,11 @@ def fit_galaxy_cosmos(
                 exposures_psfs, metadatas = get_exposures_hst2hsc(**args_exposures)
             else:
                 raise RuntimeError('Unknown HSC galaxy data source {}'.format(src))
+            for exposure, _ in exposures_psfs:
+                flux = np.sum(exposure.image)
+                to_fit = to_fit and flux > 0
+                fluxes[exposure.band] = flux
+                sizes[exposure.band] = np.log10(np.sqrt(exposure.image.shape[0]*exposure.image.shape[1]))
         else:
             raise RuntimeError('Unknown galaxy data source {}'.format(src))
         if to_fit:
@@ -368,6 +394,11 @@ def fit_galaxy_cosmos(
                     results[src]['metadata'] = metadatas
                 else:
                     results[src]['metadata'].update(metadatas)
+        else:
+            if src not in results:
+                results[src] = {}
+            results[src]['error'] = 'Skipping {} fit for {} with unreasonable fluxes={} sizes={}'.format(
+                src, id_cosmos_gs, fluxes, sizes)
     return results
 
 
@@ -379,7 +410,7 @@ def main():
         'catalogfile': {'type': str, 'nargs': '?', 'default': None, 'help': 'GalSim catalog filename'},
         'file': {'type': str, 'nargs': '?', 'default': None, 'help': 'Filename for input/output'},
         'do_fit_fluxfracs': {'type': mpfutil.str2bool, 'default': False,
-                         'help': 'Fit component flux fractions for galaxies instead of fluxes'},
+                             'help': 'Fit component flux fractions for galaxies instead of fluxes'},
         'fithsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HSC I band image'},
         'fithst': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image'},
         'fithst2hsc': {'type': mpfutil.str2bool, 'default': False, 'help': 'Fit HST F814W image convolved '
@@ -390,8 +421,8 @@ def main():
         'model_name_hst2hsc': {'type': str, 'default': None,
                                'help': 'HST model fit to use for mock HSC image'},
         'img_plot_maxs': {'type': float, 'nargs': '*', 'default': None,
-                        'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
-                                'then HSC bands.'},
+                          'help': 'Max. flux for scaling single-band images. F814W first if fitting HST, '
+                                  'then HSC bands.'},
         'img_multi_plot_max': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
         'indices': {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
         'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
@@ -495,11 +526,14 @@ def main():
                     print_step_interval=args.print_step)
                 data[idnum] = fits
             except Exception as e:
-                print("Error fitting id={}:".format(idnum))
-                print(e)
+                print(f"Error fitting id={idnum}: {e}")
                 trace = traceback.format_exc()
                 print(trace)
                 if idnum not in data:
+                    try:
+                        pickle.loads(pickle.dumps(e))
+                    except Exception as te:
+                        e = RuntimeError(str(type(e)) + str(e) + "; pickling error:" + str(te))
                     data[idnum] = {'error': e, 'trace': trace}
             print("Finished fitting COSMOS galaxy with ID: {} in total time of {:.2f} seconds".format(
                 idnum, time.time() - time_now
