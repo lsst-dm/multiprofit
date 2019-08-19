@@ -2705,28 +2705,28 @@ class Parameter:
         return lower, upper
 
     def set_value(self, value, transformed=False):
-        if self.limits is not None and transformed == self.limits.transformed:
-            if value < self.limits.lower:
-                value = self.limits.lower
-            elif value > self.limits.upper:
-                value = self.limits.upper
-        if transformed and not self.transformed:
-            value = self.transform.reverse(value)
-            transformed = False
-        elif not transformed and self.transformed:
-            value = self.transform.transform(value)
-            transformed = True
-        if self.limits is not None and transformed == self.limits.transformed:
-            if value < self.limits.lower:
-                value = self.limits.lower
-            elif value > self.limits.upper:
-                value = self.limits.upper
-        if np.isnan(value):
-            raise RuntimeError("Tried to set Parameter {} to nan".format(self))
-        self.value = value
-        # TODO: Error checking, etc. There are probably better ways to do this
-        for param in self.inheritors:
-            param.value = self.value
+        if value is None:
+            raise RuntimeError(f"Tried to set Parameter {self} to None")
+        if transformed == self.limits.transformed:
+            if self.limits is not None:
+                value = self.limits.clip(value)
+        else:
+            if transformed:
+                value = self.transform.reverse(value)
+            else:
+                value = self.transform.transform(value)
+            if self.limits is not None:
+                value = self.limits.clip(value)
+        try:
+            if np.isnan(value):
+                raise RuntimeError(f"Tried to set Parameter {self} to nan")
+            self.value = value
+            # TODO: Error checking, etc. There are probably better ways to do this
+            for param in self.inheritors:
+                param.value = self.value
+        except Exception as e:
+            print(f"Failed to set {self} to value={value}")
+            raise e
 
     def __str__(self):
         return self.__name__ + ', '.join(['{}={}'.format(var, value) for var, value in vars(self)])
@@ -2748,7 +2748,6 @@ class Parameter:
             ))
         self.fixed = fixed
         self.name = name
-        self.value = value
         self.unit = unit
         self.limits = limits
         self.transform = transform
@@ -2758,6 +2757,8 @@ class Parameter:
         self.inheritors = [] if inheritors is None else inheritors
         # List of parameters that can modify this parameter's value - user decides what to do with them
         self.modifiers = [] if modifiers is None else modifiers
+        self.value = None
+        self.set_value(value, transformed=transformed)
 
 
 class FluxParameter(Parameter):
