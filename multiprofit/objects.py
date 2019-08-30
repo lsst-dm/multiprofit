@@ -23,6 +23,7 @@ from abc import ABCMeta, abstractmethod
 import astropy.visualization as apvis
 import copy
 import galsim as gs
+import logging
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
@@ -30,7 +31,6 @@ import multiprofit.asinhstretchsigned as mpfasinh
 from multiprofit.ellipse import Ellipse
 import multiprofit.gaussutils as mpfgauss
 from multiprofit.limits import Limits
-from multiprofit.logger import Logger
 from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
 import numpy as np
@@ -814,7 +814,7 @@ class Model:
                         max_img=img_multi_plot_max, weight_per_img=weight_per_img)
                 row_figure += 1
         if clock:
-            self.logger.print(','.join(['{}={:.2e}'.format(name, value) for name, value in times.items()]))
+            self.logger.info(','.join(['{}={:.2e}'.format(name, value) for name, value in times.items()]))
         return likelihood, param_values, chis, times
 
     def get_exposure_likelihood(
@@ -1127,7 +1127,7 @@ class Model:
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv/np.sqrt(2.*np.pi)))
                     if variance_inv.size == 1:
                         exposure.meta['like_const'] *= np.prod(exposure.image.shape)
-                    self.logger.print('Setting exposure.meta[\'like_const\']=', exposure.meta['like_const'])
+                    self.logger.info(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
                 do_jacobian_any = do_jacobian or do_fit_leastsq_prep
                 profiles_band_bad = 0
                 profiles_band = []
@@ -1644,7 +1644,7 @@ class Model:
             )
         Model._checkengine(engine)
         if logger is None:
-            logger = Logger()
+            logger = logging.getLogger(__name__)
         self.can_do_fit_leastsq = False
         self.data = data
         self.engine = engine
@@ -1739,7 +1739,7 @@ class Modeller:
                 self.fitinfo["print_step_interval"] is not None):
             stepnum = len(self.fitinfo["log"])
             if stepnum % self.fitinfo["print_step_interval"] == 0:
-                self.logger.print(stepnum, rv, loginfo, flush=True)
+                self.logger.info(f"Step {stepnum}: {rv}, {loginfo}")
         return rv
 
     def fit(self, params_init=None, do_print_final=True, timing=None, walltime_max=np.Inf,
@@ -1788,9 +1788,9 @@ class Modeller:
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_verify_jacobian=True,
             do_compare_likelihoods=True)
         likelihood_init = likelihood
-        self.logger.print("Param names   : {}".format(name_params))
-        self.logger.print("Initial params: {}".format(params_init))
-        self.logger.print("Initial likelihood in t={:.3e}: {}".format(time.time() - time_start, likelihood))
+        self.logger.info("Param names   : {}".format(name_params))
+        self.logger.info("Initial params: {}".format(params_init))
+        self.logger.info("Initial likelihood in t={:.3e}: {}".format(time.time() - time_start, likelihood))
         sys.stdout.flush()
 
         do_nonlinear = not (do_linear_only or (is_linear and do_linear and self.model.can_do_fit_leastsq))
@@ -1802,7 +1802,7 @@ class Modeller:
                 for param in params_free:
                     if not isinstance(param, FluxParameter):
                         param.fixed = True
-            self.logger.print("Beginning linear fit")
+            self.logger.info("Beginning linear fit")
             time_init = time.time()
             datasizes = []
             # TODO: This should be an input argument
@@ -1883,17 +1883,18 @@ class Modeller:
                     else:
                         for valueinit, param in zip(values_init, params):
                             param.set_value(valueinit, transformed=False)
-            self.logger.print("Model '{}' linear fit elapsed time: {:.3e}".format(
+            self.logger.info("Model '{}' linear fit elapsed time: {:.3e}".format(
                 self.model.name, time.time() - time_init))
             if fluxratios_to_print is None:
-                self.logger.print("Linear fit failed to improve on initial parameters")
+                self.logger.info("Linear fit failed to improve on initial parameters")
             else:
                 params_init = np.array([param.get_value(transformed=True) for param in params_free])
                 params_init_true = np.array([param.get_value(transformed=False) for param in params_free])
-                self.logger.print("Final likelihood: {}".format(likelihood))
-                self.logger.print("New initial parameters from method {}:\n".format(method_best), params_init)
-                self.logger.print("New initial parameter values from method {}:\n".format(method_best), params_init_true)
-                self.logger.print("Linear flux ratios: {}".format(fluxratios_to_print))
+                self.logger.info(f"Final likelihood: {likelihood}")
+                self.logger.info(f"New initial parameters from method {method_best}: {params_init}")
+                self.logger.info(f"New initial parameter values from method {method_best}: "
+                                 f"{params_init_true}")
+                self.logger.info(f"Linear flux ratios: {fluxratios_to_print}")
             if not is_linear:
                 for param in params_free:
                     param.fixed = False
@@ -1987,17 +1988,19 @@ class Modeller:
                 raise RuntimeError("Unknown optimization library " + self.modellib)
             likelihood = self.evaluate(params_best)
             if do_print_final:
-                self.logger.print(
+                self.logger.info(
                     "Model '{}' nonlinear fit elapsed time: {:.3e} after {},{} function,gradient "
                     "evaluations ({} logged)".format(
                         self.model.name, time_run, self.fitinfo["n_eval_func"],
                         self.fitinfo["n_eval_grad"],
                         (len(timing) if timing is not None else 0) - self.fitinfo["n_timings"]))
-                self.logger.print("Final likelihood: {}".format(likelihood))
-                self.logger.print("Parameter names:        " + ",".join(["{:11s}".format(i) for i in name_params]))
-                self.logger.print("Transformed parameters: " + ",".join(["{:+1.4e}".format(i) for i in params_best]))
+                self.logger.info(f"Final likelihood: {likelihood}")
+                self.logger.info(f"Parameter names:        "
+                                 f"{','.join(['{:11s}'.format(i) for i in name_params])}")
+                self.logger.info(f"Transformed parameters: " 
+                                 f"{','.join(['{:+1.4e}'.format(i) for i in params_best])}")
                 # TODO: Finish this
-                #self.logger.print("Parameters (linear): " + ",".join(["{:.4e}".format(i)
+                #self.logger.info("Parameters (linear): " + ",".join(["{:.4e}".format(i)
                 #                                                      for i in params_transformed]))
         else:
             params_best = params_init
@@ -2025,7 +2028,7 @@ class Modeller:
         self.modellibopts = modellibopts if modellibopts is not None else {}
         self.constraints = constraints
         if logger is None:
-            logger = Logger()
+            logger = logging.getLogger(__name__)
         self.logger = logger
 
         # Scratch space, I guess...
@@ -2495,8 +2498,8 @@ class EllipticalParametricComponent(EllipticalComponent):
                         )
                     elif self.profile == "sersic":
                         if profile["nser"] < 0.3 or profile["nser"] > 6.2:
-                            self.logger.print("Warning: Sersic n {:.3f} not >= 0.3 and <= 6.2; "
-                                              "GalSim could fail.".format(profile["nser"]))
+                            self.logger.warning("Sersic n {:.3f} not >= 0.3 and <= 6.2; "
+                                                "GalSim could fail.".format(profile["nser"]))
                         profile_gs = gs.Sersic(
                             flux=flux, n=profile["nser"],
                             half_light_radius=radius*axrat_sqrt,

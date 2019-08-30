@@ -23,10 +23,10 @@ from collections import OrderedDict
 import csv
 import galsim as gs
 import io
+import logging
 import matplotlib.pyplot as plt
 from multiprofit.ellipse import Ellipse
 from multiprofit.limits import limits_ref, Limits
-from multiprofit.logger import Logger
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref
@@ -208,7 +208,7 @@ def get_model(
     :param convertfluxfracs: Boolean; should the model have absolute fluxes per component instead of ratios?
     :param repeat_ellipse: Boolean; is there only one set of values in sigma_xs, sigma_ys, rhos?
         If so, re-use the provided value for each component.
-    :param logger: mpf.objects.Logger; a logger to print messages
+    :param logger: logging.Logger; a logger to print messages
     :return:
     """
     bands = list(fluxes_by_band.keys())
@@ -331,13 +331,13 @@ def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
     :param print_step_interval: Integer; step interval between printing.
     :param plot: Boolean; plot final fit?
     :param do_linear: Boolean; do linear fit?
-    :param logger; mpfobj.Logger for this function's output
-    :param logger_modeller; mpfobj.Logger for the modeller if it is None
+    :param logger; logging.Logger for this function's output
+    :param logger_modeller; logging.Logger for the modeller if it is None
     :param kwargs: Dict; passed to evaluate_model() after fitting is complete (e.g. plotting options).
     :return: Tuple of modeller.fit and modeller.
     """
     if logger is None:
-        logger = Logger()
+        logger = logging.getLogger(__name__)
     if modeller is None:
         modeller = mpfobj.Modeller(
             model=model, modellib=modellib, modellibopts=modellibopts, logger=logger_modeller)
@@ -345,9 +345,9 @@ def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
         do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear)
     if do_print_final:
         params_all = model.get_parameters(fixed=True)
-        logger.print("Param names:" + ",".join(["{:11s}".format(p.name) for p in params_all]))
-        logger.print("All params: " + ",".join([
-            "{:+.4e}".format(p.get_value(transformed=False)) for p in params_all]))
+        logger.info(f"Param names: {','.join(['{:11s}'.format(p.name) for p in params_all])}")
+        logger.info(f"All params: "
+                    f"{','.join(['{:+.4e}'.format(p.get_value(transformed=False)) for p in params_all])}")
     # Conveniently sets the parameters to the right values too
     # TODO: Find a better way to ensure chis are returned than setting do_draw_image=True
     chis = evaluate_model(model, plot=plot, param_values=fit["params_best"], do_draw_image=True, **kwargs)
@@ -428,7 +428,7 @@ def fit_galaxy(
     :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB)
     :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
     :param print_step_interval: int; number of steps to run before printing output
-    :param logger: mpf.objects.Logger; a logger to print messages and be passed to model(ler)s
+    :param logger: logging.Logger; a logger to print messages and be passed to model(ler)s
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
         key='fits': value=array of fit results, key='modeltype': value =
@@ -440,7 +440,7 @@ def fit_galaxy(
         psfmodels: dict: TBD
     """
     if logger is None:
-        logger = Logger()
+        logger = logging.getLogger(__name__)
     bands = OrderedDict()
     fluxes = {}
     num_pix_img = None
@@ -478,7 +478,7 @@ def fit_galaxy(
     moments_by_name = {name_param: value for name_param, value in zip(
         name_params_moments_init,
         Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
-    logger.print('Bands:', bands, 'Moment init.:', moments_by_name)
+    logger.info(f"Bands: {bands}; Moment init.: {moments_by_name}")
     engine = 'galsim'
     engines = {
         engine: {
@@ -609,7 +609,7 @@ def fit_galaxy(
                 inittype = modelinfo['inittype']
                 guesstype = None
                 if inittype == 'moments':
-                    logger.print('Initializing from moments')
+                    logger.info('Initializing from moments')
                     for param in model.get_parameters(fixed=False):
                         value = moments_by_name.get(param.name)
                         if value is None:
@@ -682,7 +682,7 @@ def fit_galaxy(
                 if not all(np.isfinite(values_param)):
                     raise RuntimeError('Not all params finite for model {}:'.format(name_model), values_param)
 
-                logger.print("Fitting model {:s} of type {:s} using engine {:s}".format(
+                logger.info("Fitting model {:s} of type {:s} using engine {:s}".format(
                     name_model, modeltype, engine))
                 model.name = name_model
                 sys.stdout.flush()
@@ -757,12 +757,12 @@ def fit_galaxy_exposures(
     :param redo: bool; Redo any pre-existing fits in fits_by_engine?
     :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
     :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
-    :param loggerPsf: mpf.objects.Logger; a logger to print messages for PSF fitting
+    :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return:
     """
     if loggerPsf is None:
-        loggerPsf = Logger()
+        loggerPsf = logging.getLogger(__name__)
     if results is None:
         results = {}
     metadata = {"bands": bands}
@@ -805,7 +805,7 @@ def fit_galaxy_exposures(
                     do_fit = redo_psfs or not has_fit
                     if do_fit or plot:
                         if do_fit:
-                            loggerPsf.print('Fitting PSF band={} model={} (not in {})'.format(
+                            loggerPsf.info('Fitting PSF band={} model={} (not in {})'.format(
                                 band, name_psf, psfs[idx][engine].keys()))
                         psfs[idx] = fit_psf(
                             modeltype_psf, psf.image.array if (
@@ -919,7 +919,7 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
             fluxfracs[i] = frac/total
             total -= frac
         fluxfracs[-1] = 1.0
-    model.logger.print('Initializing from best model={} w/fluxfracs: {}'.format(
+    model.logger.info('Initializing from best model={} w/fluxfracs: {}'.format(
         modelfits[model_best]['name'], fluxfracs))
     paramtree_best = modelfits[model_best]['paramtree']
     fluxcens_init = paramtree_best[0][1][0] + paramtree_best[0][0]
@@ -1083,7 +1083,7 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
         if values_best:
             for param, value in values_best.items():
                 param.set_value(value, transformed=True)
-        model.logger.print("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
+        model.logger.info("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
             model.name, guesstype_init, time.time() - time_init, like_init, like_best))
 
 
@@ -1151,7 +1151,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                 raise RuntimeError("Model={} can't find reference={} "
                                    "to initialize from".format(modeltype, inittype))
     has_fit_init = inittype and 'fits' in fits_engine[inittype]
-    logger.print('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
+    logger.info('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
     if has_fit_init:
         values_param_init = fits_engine[inittype]["fits"][-1]["params_bestall"]
         # TODO: Find a more elegant method to do this
@@ -1175,16 +1175,16 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
             model_new = model
             model = models[fits_engine[inittype]['modeltype']]
             components_new = []
-        logger.print('Initializing from best model=' + inittype +
-              (' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''))
+        logger.info(f"Initializing from best model={inittype}"
+                    f"{' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''}")
         # For mgtogauss, first we turn the mgsersic model into a true GMM
         # Then we take the old model and get the parameters that don't depend on components (mostly source
         # centers) and set those as appropriate
         for i in range(1+is_mg_to_gauss):
             params_all = model.get_parameters(fixed=True, modifiers=not is_mg_to_gauss)
             if is_mg_to_gauss:
-                logger.print('Param values init:', values_param_init)
-                logger.print('Param names: ', [x.name for x in params_all])
+                logger.info(f"Param values init: {values_param_init}")
+                logger.info(f"Param names:       {[x.name for x in params_all]}")
             if len(values_param_init) != len(params_all):
                 raise RuntimeError('len(values_param_init)={} != len(params)={}, params_all={}'.format(
                     len(values_param_init), len(params_all), [x.name for x in params_all]))
@@ -1197,8 +1197,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                     value = 0.55
                 param.set_value(value, transformed=False)
             if is_mg_to_gauss:
-                logger.print('Param values:', [param.get_value(transformed=False)
-                                        for param in model.get_parameters()])
+                logger.info(f"Param values: "
+                            f"{[param.get_value(transformed=False)for param in model.get_parameters()]}")
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if is_mg_to_gauss and i == 0:

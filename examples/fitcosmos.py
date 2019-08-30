@@ -22,12 +22,14 @@
 import argparse
 import astropy as ap
 import galsim as gs
+import logging
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pickle
 import scipy.optimize as spopt
+import sys
 import time
 import traceback
 
@@ -425,6 +427,7 @@ def main():
                                   'then HSC bands.'},
         'img_multi_plot_max': {'type': float, 'default': None, 'help': 'Max. flux for scaling color images'},
         'indices': {'type': str, 'nargs': '*', 'default': None, 'help': 'Galaxy catalog index'},
+        'loglevel': {'type': int, 'nargs': '?', 'default': 20, 'help': 'logging.Logger default level'},
         'modelspecfile': {'type': str, 'default': None, 'help': 'Model specification file'},
         'modellib': {'type': str, 'nargs': '?', 'default': 'scipy', 'help': 'Optimization libraries'},
         'modellibopts': {'type': str, 'nargs': '?', 'default': None, 'help': 'Model fitting options'},
@@ -452,6 +455,7 @@ def main():
 
     args = parser.parse_args()
     args.catalogpath = os.path.expanduser(args.catalogpath)
+    logging.basicConfig(stream=sys.stdout, level=args.loglevel)
 
     modelspecs = mpffit.get_modelspecs(
         None if args.modelspecfile is None else os.path.expanduser(args.modelspecfile))
@@ -459,8 +463,8 @@ def main():
     if args.file is not None:
         args.file = os.path.expanduser(args.file)
     if args.file is not None and os.path.isfile(args.file):
-            with open(args.file, 'rb') as f:
-                data = pickle.load(f)
+        with open(args.file, 'rb') as f:
+            data = pickle.load(f)
     else:
         data = {}
 
