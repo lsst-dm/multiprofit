@@ -24,12 +24,10 @@ models convolved with arbitrary PSFs images or models.
 currently limited to pixel-matched images of identical dimensions. Unlike ProFit, Bayesian MCMC is not
 available (yet).
 
-*multiprofit* requires `Eigen3 <https://bitbucket.org/eigen/eigen>`_ and `pybind11 <https://github
-.com/pybind/pybind11>`_ for its python bindings and can be installed from setup.py like so:
+*multiprofit* requires Python 3, along with `pybind11 <https://github.com/pybind/pybind11>`_ for C++ bindings.
+It can be installed using setup.py like so:
 
-CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:$EIGEN_DIR  python setup.py install --user
-
-The CMAKE_PREFIX_PATH may be unnecessary if using CMake 3.0+.
+python3 setup.py install --user
 
 .. todo *multiprofit* is available in `PyPI <https://pypi.python.org/pypi/multiprofit>`_
    .. and thus can be easily installed via::
