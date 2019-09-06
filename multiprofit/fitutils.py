@@ -319,35 +319,24 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
 
 # Convenience function to fit a model. kwargs are passed on to evaluate_model
 def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
-              do_print_final=True, print_step_interval=100, plot=False, do_linear=True,
-              logger=None, logger_modeller=None, **kwargs):
+              do_print_final=True, print_step_interval=100, plot=False, do_linear=True, **kwargs):
     """
     Convenience function to fit a model with reasonable defaults.
     :param model: multiprofit.Model
     :param modeller: multiprofit.Modeller; default: new Modeller.
     :param modellib: String; the modelling library to use if modeller is None.
     :param modellibopts: Dict; options to pass to the modeller if modeller is None.
-    :param do_print_final: Boolean; print the final parameter value?
+    :param do_print_final: Boolean; print the final parameter values?
     :param print_step_interval: Integer; step interval between printing.
     :param plot: Boolean; plot final fit?
     :param do_linear: Boolean; do linear fit?
-    :param logger; logging.Logger for this function's output
-    :param logger_modeller; logging.Logger for the modeller if it is None
     :param kwargs: Dict; passed to evaluate_model() after fitting is complete (e.g. plotting options).
     :return: Tuple of modeller.fit and modeller.
     """
-    if logger is None:
-        logger = logging.getLogger(__name__)
     if modeller is None:
-        modeller = mpfobj.Modeller(
-            model=model, modellib=modellib, modellibopts=modellibopts, logger=logger_modeller)
+        modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
     fit = modeller.fit(
         do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear)
-    if do_print_final:
-        params_all = model.get_parameters(fixed=True)
-        logger.info(f"Param names: {','.join(['{:11s}'.format(p.name) for p in params_all])}")
-        logger.info(f"All params: "
-                    f"{','.join(['{:+.4e}'.format(p.get_value(transformed=False)) for p in params_all])}")
     # Conveniently sets the parameters to the right values too
     # TODO: Find a better way to ensure chis are returned than setting do_draw_image=True
     chis = evaluate_model(model, plot=plot, param_values=fit["params_best"], do_draw_image=True, **kwargs)
@@ -387,8 +376,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
                 fit_model(
                     model, modellib=modellib, modellibopts=modellibopts, do_print_final=do_print_final,
                     print_step_interval=print_step_interval, plot=plot, title=title, name_model=label,
-                    figure=figaxes[0], axes=figaxes[1], row_figure=row_figure, do_linear=False,
-                    logger=logger, logger_modeller=logger
+                    figure=figaxes[0], axes=figaxes[1], row_figure=row_figure, do_linear=False
                 )
         elif plot:
             exposure = model.data.exposures[band][0]
@@ -706,7 +694,7 @@ def fit_galaxy(
                         do_plot_as_column=do_plot_as_column, name_model=name_model,
                         params_postfix_name_model=params_postfix_name_model,
                         img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                        weights_band=weights_band, logger=logger, logger_modeller=logger
+                        weights_band=weights_band
                     )
                     fits.append(fit1)
                     if do_second and not model.can_do_fit_leastsq:
@@ -759,7 +747,11 @@ def fit_galaxy_exposures(
     :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
     :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
-    :return:
+    :return: results: dict containing the following values:
+        fits: dict by modelspec name of fit results
+        models: dict by model type name of mpfobj.Model
+        psfs: dict by PSF model name containing similar model/fit info
+        metadata: dict containing general, model-independent metadata such as the filters used in the fit
     """
     if loggerPsf is None:
         loggerPsf = logging.getLogger(__name__)

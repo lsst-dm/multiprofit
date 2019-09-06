@@ -1995,13 +1995,15 @@ class Modeller:
                         self.fitinfo["n_eval_grad"],
                         (len(timing) if timing is not None else 0) - self.fitinfo["n_timings"]))
                 self.logger.info(f"Final likelihood: {likelihood}")
-                self.logger.info(f"Parameter names:        "
+                self.logger.info(f"Param names (fit): "
                                  f"{','.join(['{:11s}'.format(i) for i in name_params])}")
-                self.logger.info(f"Transformed parameters: " 
+                self.logger.info(f"Values transfo.:   " 
                                  f"{','.join(['{:+1.4e}'.format(i) for i in params_best])}")
-                # TODO: Finish this
-                #self.logger.info("Parameters (linear): " + ",".join(["{:.4e}".format(i)
-                #                                                      for i in params_transformed]))
+                params_all = self.model.get_parameters(fixed=True)
+                self.logger.info(f"Param names (all): "
+                                 f"{','.join(['{:11s}'.format(p.name) for p in params_all])}")
+                values_all = ','.join(['{:+.4e}'.format(p.get_value(transformed=False)) for p in params_all])
+                self.logger.info(f"Values untransfo.: {values_all}")
         else:
             params_best = params_init
             result = None
