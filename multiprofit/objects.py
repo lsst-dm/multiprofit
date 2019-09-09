@@ -538,7 +538,8 @@ class Model:
             raise RuntimeError(errmsg)
         image_new, model, _, likelihood_new = self.get_image_model_exposure(
             exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
-            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False)
+            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False,
+            verify_derivative=True)
         passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3,
                             atol=1e-5)
         param.set_value(value, transformed=True)
@@ -1049,7 +1050,7 @@ class Model:
     def get_image_model_exposure(
             self, exposure, profiles=None, meta_model=None, engine=None, engineopts=None, do_draw_image=True,
             scale=1, clock=False, times=None, do_fit_linear_prep=False, do_fit_leastsq_prep=False,
-            do_jacobian=False, get_likelihood=False, is_likelihood_log=True):
+            do_jacobian=False, get_likelihood=False, is_likelihood_log=True, verify_derivative=False):
         """
             Draw model image for one exposure with one PSF
 
@@ -1190,7 +1191,8 @@ class Model:
                                 # We want df/dp, where p(g) is the fit parameter
                                 # df/dp = df/dg * dg/dp = df/dg / dp/dg
                                 # Skip the derivative if this profile has a flux ratio - it'll be added later
-                                derivative = param.get_transform_derivative(verify=True, rtol=1e-3) if not (
+                                derivative = param.get_transform_derivative(
+                                    verify=verify_derivative, rtol=1e-3) if not (
                                     is_flux and not param_flux_ratio_is_none) else None
                                 if derivative is not None:
                                     weight_grad /= derivative
