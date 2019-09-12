@@ -687,6 +687,7 @@ def fit_galaxy(
                         }
                         if modellib == "scipy":
                             modellibopts['options'] = {'maxfun': 1e4}
+                    do_second = do_second and not model.can_do_fit_leastsq
                     fit1, modeller = fit_model(
                         model, modellib=modellib, modellibopts=modellibopts, do_print_final=True,
                         print_step_interval=print_step_interval, plot=plot and not do_second,
@@ -697,7 +698,7 @@ def fit_galaxy(
                         weights_band=weights_band
                     )
                     fits.append(fit1)
-                    if do_second and not model.can_do_fit_leastsq:
+                    if do_second:
                         if use_modellib_default:
                             modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
                                 "Nelder-Mead"

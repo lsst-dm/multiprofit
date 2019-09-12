@@ -770,7 +770,7 @@ class Model:
                         raise RuntimeError(
                             'get_image_model_exposure vs get_exposure_likelihood likelihoods differ '
                             'significantly ({:5e} vs {:5e})'.format(likelihood_new, likelihood_exposure))
-                elif do_draw_image:
+                elif do_draw_image and exposure.error_inverse is not None:
                     chi = (image - exposure.image)*exposure.error_inverse**(
                             2**(-(not exposure.is_error_sigma)))
                 else:
