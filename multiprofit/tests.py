@@ -248,3 +248,52 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                 names_params_gauss[i], llnew, llnew-ll, dxi))
         dlls[i] = (llnew - ll)/dxi
     return grads, dlls, diffabs
+
+
+def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss=True, mgsersic_order=8,
+                  do_meas_modelfit=False, flux=1.):
+    if dimy is None:
+        dimy = dimx
+    engineopts = {"use_fast_gauss": True} if use_fast_gauss else None
+    band = 'i'
+    is_gauss = nser == 0.5
+    keys = ("gaussian:1" if is_gauss else "sersic:1", f"mgsersic{mgsersic_order}:1")
+    models = {
+        key[0:3]: get_model({band: flux}, key, (dimx, dimy), sigma_xs=[reff], sigma_ys=[reff], slopes=[nser])
+        for key in keys
+    }
+    keys = list(models.keys())
+    imgs = {}
+    for key, model in models.items():
+        model.evaluate(get_likelihood=False, keep_images=True, do_draw_image=True, engineopts=engineopts)
+        imgs[key] = model.data.exposures[band][0].meta['img_model']
+    if do_meas_modelfit:
+        is_exp = nser == 1
+        model = "lux" if is_exp else ("luv" if nser == 4 else None)
+        if model is None:
+            do_meas_modelfit = False
+        else:
+            from lsst.shapelet import RadialProfile
+            from lsst.afw.geom.ellipses import Ellipse, Axes
+            from lsst.geom import Point2D
+            basis = RadialProfile.get(model).getBasis(6 if is_exp else 8, 4 if is_exp else 8)
+            xc, yc, = dimx/2 - 0.5, dimy/2. - 0.5
+            ellipse = Ellipse(Axes(a=reff, b=reff), Point2D(xc, yc))
+            msf = basis.makeFunction(ellipse, np.array([flux]))
+            img_mmf = np.zeros((dimy, dimx))
+            msf.evaluate().addToImage(img_mmf)
+            imgs["mmf"] = img_mmf
+            keys.append("mmf")
+    if plot:
+        fig, axes = plt.subplots(nrows=1, ncols=3+2*do_meas_modelfit)
+        for idx, (key, img) in enumerate(imgs.items()):
+            axes[idx].imshow(img)
+            axes[idx].set_title(key)
+        idx += 1
+        axes[idx].imshow(imgs[keys[1]] - imgs[keys[0]])
+        axes[idx].set_title(f"{keys[1]}-{keys[0]}")
+        if do_meas_modelfit:
+            idx += 1
+            axes[idx].imshow(imgs[keys[2]] - imgs[keys[0]])
+            axes[idx].set_title(f"{keys[2]}-{keys[0]}")
+        plt.show()
