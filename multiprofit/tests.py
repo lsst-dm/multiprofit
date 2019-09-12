@@ -21,8 +21,10 @@
 
 from importlib.util import find_spec
 import numpy as np
+import matplotlib.pyplot as plt
 import multiprofit as mpf
 from multiprofit.ellipse import Ellipse
+from multiprofit.fitutils import get_model
 import multiprofit.gaussutils as mpfgauss
 from multiprofit.objects import names_params_gauss
 from multiprofit.utils import estimate_ellipse
@@ -123,20 +125,24 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                         for key, callstr in functions.items()
                     }
                     if do_meas_modelfit:
-                        sigma_x_sq, sigma_y_sq, cov = mpfgauss.ellipse_to_covar(
-                            mpfgauss.reff_to_sigma(reff), axrat, ang, return_as_matrix=False)
+                        ang_rad = np.deg2rad(ang)
                         for key in ("dev", "exp"):
                             times[f"mmf-{key}"] = np.min(timeit.repeat(
-                                f"shapelet.evaluate().addToImage(img)",
+                                f"msf.evaluate().addToImage(img)",
                                 setup=(
-                                    f"from lsst.meas.modelfit.cmodel.cmodelContinued "
-                                    f"import CModelForcedConfig; import numpy as np;"
-                                    f"control = CModelForcedConfig().makeControl();"
-                                    f"model=control.{key}.getModel();"
-                                    f"free, amp, fixed = np.array([{sigma_x_sq}, {sigma_y_sq}, {cov}]),"
-                                    f"np.array([1.]), np.array([{xdim/2}, {ydim/2}]);"
-                                    f"shapelet = model.makeShapeletFunction(free, amp, fixed);"
-                                    f"img=np.zeros(({ydim}, {xdim}))"),
+                                    f"import numpy as np;"
+                                    f"from lsst.shapelet import RadialProfile;"
+                                    f"from lsst.afw.geom.ellipses import Ellipse, Axes;"
+                                    f"from lsst.geom import Point2D;"
+                                    f"is_exp = '{key}' == 'exp';"
+                                    f"profile = RadialProfile.get('lux' if is_exp else 'luv');"
+                                    f"basis = profile.getBasis(6 if is_exp else 8, 4 if is_exp else 8);"
+                                    f"xc, yc = {xdim/2} - 0.5, {ydim}/2. - 0.5;"
+                                    f"ellipse = Ellipse("
+                                    f"Axes(a={reff}, b={reff*axrat}, theta={ang_rad}), Point2D(xc, yc));"
+                                    f"msf = basis.makeFunction(ellipse, np.array([1.]));"
+                                    f"img=np.zeros(({ydim}, {xdim}))"
+                                ),
                                 repeat=nbenchmark, number=1,
                             ))
                     if hasgs:
@@ -222,7 +228,6 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         jacparam = jacobian[:, :, i]
         diffabs[i] = np.sum(np.abs(findiff - jacparam))
         if plot:
-            import matplotlib.pyplot as plt
             fig, axes = plt.subplots(nrows=2, ncols=3)
             fig.suptitle(names_params_gauss[i] + ' gradients sx={:.2e} sy={:.2e} ')
             axes[0][0].imshow(model)
