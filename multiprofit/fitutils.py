@@ -26,6 +26,7 @@ import io
 import logging
 import matplotlib.pyplot as plt
 from multiprofit.ellipse import Ellipse
+from multiprofit.gaussutils import sigma_to_reff
 from multiprofit.limits import limits_ref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
@@ -851,6 +852,8 @@ def get_psfmodel(
         engine, engineopts, num_comps, band, model, image, error_inverse=None, ratios_size=None,
         factor_sigma=1, logger=None):
     sigma_x, sigma_y, rho = Ellipse.covar_matrix_as(mpfutil.estimate_ellipse(image), params=True)
+    sigma_x = sigma_to_reff(sigma_x)
+    sigma_y = sigma_to_reff(sigma_y)
     sigma_xs = np.repeat(sigma_x, num_comps)
     sigma_ys = np.repeat(sigma_y, num_comps)
     rhos = np.repeat(rho, num_comps)
@@ -1258,7 +1261,7 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
             bands.add(band)
     bands = list(bands)
     band_ref = bands[0]
-    params = ['mag', 'sigma_x', 'sigma_y', 'rho', 'nser']
+    params = ['flux', 'sigma_x', 'sigma_y', 'rho', 'nser']
     values = {}
     fluxes = {}
     for band in bands:
@@ -1268,9 +1271,9 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
             for name in params
         }
         # mag_to_flux needs a numpy array
-        fluxes[band] = mpfutil.mag_to_flux(np.array(values[band]['mag']))
+        fluxes[band] = np.array(values[band]['flux'])
         # Ensure that only band-independent parameters are compared
-        del values[band]['mag']
+        del values[band]['flux']
         if not values[band] == values[band_ref]:
             raise RuntimeError('values[{}]={} != values[{}]={}; band-dependent values unsupported'.format(
                 band, values[band], band_ref, values[band_ref]))

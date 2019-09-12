@@ -1593,56 +1593,58 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             not self.do_return_all_profiles or self.parameters["nser"].fixed) and not get_derivatives
         if can_return_gauss:
             weights = [1]
-            sigmas = [1]
+            reffs = [1]
             profiles = [{}]
         else:
             slope_log10 = np.log10(slope)
             if slope in MultiGaussianApproximationComponent.weights[self.profile][self.order]:
-                weights, sigmas = MultiGaussianApproximationComponent.weights[self.profile][self.order][slope]
+                weights, reffs = MultiGaussianApproximationComponent.weights[self.profile][self.order][slope]
                 negatives = weights < 0
                 if any(negatives):
                     raise RuntimeError("MultiGaussianApproximationComponent.weights[{}][{}] = {} "
                                        "has negative weights".format(self.profile, self.order, weights))
             else:
                 weights = np.array([f[0](slope_log10) for f in self.weight_splines])
-                sigmas = np.array([f[0](slope_log10) for f in self.sigma_splines])
+                reffs = np.array([f[0](slope_log10) for f in self.reff_splines])
                 negatives = weights < 0
             weights[negatives] = 0
-            if not all([0 <= w <= 1 and (s > 0 or s > 0) for w, s in zip(weights, sigmas)]):
-                raise RuntimeError('Weights {} not all >= 0 and <= 1 and/or sigmas {} not all >=0 for slope '
-                                   '{:.4e} log10(slope)={:.4e}'.format(weights, sigmas, slope, slope_log10))
+            if not all([0 <= w <= 1 and (s > 0 or s > 0) for w, s in zip(weights, reffs)]):
+                raise RuntimeError('Weights {} not all >= 0 and <= 1 and/or reffs {} not all >=0 for slope '
+                                   '{:.4e} log10(slope)={:.4e}'.format(weights, reffs, slope, slope_log10))
             weights, total = mpfutil.normalize(weights, return_sum=True)
             if get_derivatives:
                 try:
                     # Return dy/dn_ser, not dy/d(log10(nser))
                     dweights = np.array([f[1](slope_log10)/(slope*ln10) for f in self.weight_splines])
-                    dsigmas = np.array([f[1](slope_log10)/(slope*ln10) for f in self.sigma_splines])
+                    dreffs = np.array([f[1](slope_log10)/(slope*ln10) for f in self.reff_splines])
                 except Exception as e:
                     raise e
                 dweights[negatives] = 0
             profiles = [{} for _ in range(self.order)]
 
         profile_base = super().get_profiles(flux_by_band, engine, cenx, ceny, params, engineopts)[0]
-        sigma, axrat, ang = mpfgauss.covar_to_ellipse(self.params_ellipse)
-        reff = mpfgauss.sigma_to_reff(sigma)
+        skip_covar = engineopts is not None and engineopts.get("get_profile_skip_covar", False)
+        reff, axrat, ang = (np.Inf, None, None) if skip_covar else \
+            mpfgauss.covar_to_ellipse(self.params_ellipse)
         profile_base['nser'] = 0.5
         profile_base['can_do_fit_leastsq'] = True
         for band in flux_by_band.keys():
             flux = flux_param_by_band[band].get_value(transformed=False)
             profile = profile_base.copy()
-            profile["axrat"] = axrat
-            profile["ang"] = ang
             if flux_param_by_band[band].is_fluxratio:
                 fluxratio = np.float(flux)
                 if not 0 <= fluxratio <= 1:
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
                 flux *= flux_by_band[band]
                 flux_by_band[band] *= (1.0-fluxratio)
-            if not 0 < profile["axrat"] <= 1:
-                if profile["axrat"] <= __class__.axrat_min:
-                    profile["axrat"] = __class__.axrat_min
-                else:
-                    raise ValueError("axrat {} ! >0 and <=1".format(profile["axrat"]))
+            if not skip_covar:
+                profile["axrat"] = axrat
+                profile["ang"] = ang
+                if not 0 < profile["axrat"] <= 1:
+                    if profile["axrat"] <= __class__.axrat_min:
+                        profile["axrat"] = __class__.axrat_min
+                    else:
+                        raise ValueError("axrat {} ! >0 and <=1".format(profile["axrat"]))
 
             cens = {"cenx": cenx, "ceny": ceny}
             for key, value in cens.items():
@@ -1664,7 +1666,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             if is_sersic:
                 profile["param_nser"] = param_nser
 
-            for subcomp, (weight, size) in enumerate(zip(weights, sigmas)):
+            for subcomp, (weight, size) in enumerate(zip(weights, reffs)):
                 profile_sub = copy.copy(profile)
                 # Not needed right now. Maybe later?
                 #profile_sub["fluxfrac_sub"] = weight
@@ -1675,22 +1677,23 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
                 if not fluxsub >= 0:
                     print(np.array([f[0](slope_log10) for f in self.weight_splines]))
                     print(weights)
-                    print(sigmas)
-                    print(weight, sigma, slope_log10, profile_sub)
+                    print(reffs)
+                    print(weight, reff, slope_log10, profile_sub)
                     raise RuntimeError('MGA {} fluxsub={} !>=0'.format(self.profile, fluxsub))
                 if engine == "galsim":
-                    profile_gs = gs.Gaussian(flux=weight*flux, sigma=sigma*size*axrat_sqrt, gsparams=gsparams)
+                    profile_gs = gs.Gaussian(flux=weight*flux, half_light_radius=reff*size*axrat_sqrt,
+                                             gsparams=gsparams)
                     profile_sub.update({
                         "profile_gs": profile_gs,
                         "shear": gs.Shear(q=axrat, beta=profile["ang"]*gs.degrees),
                         "offset": gs.PositionD(profile["cenx"], profile["ceny"]),
                     })
                 elif engine == "libprofit":
-                    profile_sub["mag"] = mpfutil.flux_to_mag(weight * flux)
-                    profile_sub["re"] = reff*size
+                    profile_sub["flux"] = weight * flux
+                    profile_sub["re"] = reff * size
                 if get_derivatives:
                     profile_sub["dweight_dn"] = dweights[subcomp]
-                    profile_sub["dsigma_dn"] = dsigmas[subcomp]
+                    profile_sub["dreff_dn"] = dreffs[subcomp]
                 profiles[subcomp][band] = profile_sub
 
         return profiles
@@ -1752,7 +1755,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
         if weightvars is None:
             weightvars = MultiGaussianApproximationComponent.weights[profile][order]
         self.weight_splines = []
-        self.sigma_splines = []
+        self.reff_splines = []
         for index, (weights, variances) in weightvars.items():
             assert (len(weights) == order), 'len(n={})={}'.format(index, len(weights))
             assert (len(variances) == order), 'len(n={})={}'.format(index, len(variances))
@@ -1764,7 +1767,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             is_weight = np.array([value[1][i] >= 0 for value in weight_values])
             weight_valuestouse = weight_values[is_weight]
             for j, (splines, ext, order_spline) in enumerate(
-                    [(self.weight_splines, 'zeros', 3), (self.sigma_splines, 'const', 5)]):
+                    [(self.weight_splines, 'zeros', 3), (self.reff_splines, 'const', 5)]):
                 spline = spinterp.InterpolatedUnivariateSpline(
                     indices[is_weight], [values[j][i] for values in weight_valuestouse],
                     ext=ext, k=order_spline)
