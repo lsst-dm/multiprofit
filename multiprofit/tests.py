@@ -26,7 +26,7 @@ import multiprofit as mpf
 from multiprofit.ellipse import Ellipse
 from multiprofit.fitutils import get_model
 import multiprofit.gaussutils as mpfgauss
-from multiprofit.objects import names_params_gauss
+from multiprofit.objects import get_gsparams, names_params_gauss
 from multiprofit.utils import estimate_ellipse
 import timeit
 
@@ -252,6 +252,22 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
 
 def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss=True, mgsersic_order=8,
                   do_meas_modelfit=False, flux=1.):
+    """
+    Test multi-Gaussian Sersic approximations compared to the 'true' Sersic profile in 2D.
+    :param reff: float; the circular effective radius in pixels.
+    :param nser: float; the Sersic index. Must be >=0.5 and should be <= 6.3.
+    :param dimx: int; image x dimensions in pixels.
+    :param dimy: int; image y dimensions in pixels.
+    :param plot: bool; whether to plot images and residuals.
+    :param use_fast_gauss: bool; whether to use the built-in fast Gaussian evaluation. If False, the default
+        rendering engine will be used (likely GalSim).
+    :param mgsersic_order: int; the order of the Gaussian approximation.
+        See MultiGaussianApproximationComponent for supported values.
+    :param do_meas_modelfit: bool; whether to test meas_modelfit's Tractor-based (Hogg & Lang '13) profiles.
+        Only n=1 and n=4 are supported.
+    :param flux: float; the total flux of the source.
+    :return: No return; diagnostics are printed.
+    """
     if dimy is None:
         dimy = dimx
     engineopts = {"use_fast_gauss": True} if use_fast_gauss else None
@@ -263,10 +279,12 @@ def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss
         for key in keys
     }
     keys = list(models.keys())
+    models[keys[0]].engineopts = {"gsparams": get_gsparams(None), "drawmethod": "no_pixel"}
     imgs = {}
     for key, model in models.items():
         model.evaluate(get_likelihood=False, keep_images=True, do_draw_image=True, engineopts=engineopts)
         imgs[key] = model.data.exposures[band][0].meta['img_model']
+    img_ref = imgs[keys[0]]
     if do_meas_modelfit:
         is_exp = nser == 1
         model = "lux" if is_exp else ("luv" if nser == 4 else None)
@@ -284,16 +302,19 @@ def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss
             msf.evaluate().addToImage(img_mmf)
             imgs["mmf"] = img_mmf
             keys.append("mmf")
+    diffs = {key: imgs[key] - img_ref for key in keys[1:]}
     if plot:
-        fig, axes = plt.subplots(nrows=1, ncols=3+2*do_meas_modelfit)
-        for idx, (key, img) in enumerate(imgs.items()):
-            axes[idx].imshow(img)
-            axes[idx].set_title(key)
-        idx += 1
-        axes[idx].imshow(imgs[keys[1]] - imgs[keys[0]])
-        axes[idx].set_title(f"{keys[1]}-{keys[0]}")
-        if do_meas_modelfit:
-            idx += 1
-            axes[idx].imshow(imgs[keys[2]] - imgs[keys[0]])
-            axes[idx].set_title(f"{keys[2]}-{keys[0]}")
+        nrows = 1+do_meas_modelfit
+        fig, axes = plt.subplots(nrows=nrows, ncols=4)
+        for idx in range(1, nrows+1):
+            axes_row = axes[idx-1] if nrows > 1 else axes
+            for col, idx_key in enumerate([0, idx]):
+                key = keys[idx_key]
+                axes_row[col].imshow(np.log10(imgs[key]))
+                axes_row[col].set_title(f"log10({key})")
+            diff = diffs[key]
+            axes_row[2].imshow(diff)
+            axes_row[2].set_title(f"{keys[idx]}-{keys[0]}")
+            axes_row[3].imshow(diff/img_ref)
+            axes_row[3].set_title(f"({keys[idx]}-{keys[0]})/{keys[0]}")
         plt.show()
