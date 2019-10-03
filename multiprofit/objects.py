@@ -43,7 +43,7 @@ import time
 
 
 # TODO: Make this a class?
-def get_gsparams(engineopts):
+def get_gsparams(engineopts=None):
     return engineopts.get("gsparams", gs.GSParams()) if engineopts is not None else gs.GSParams()
 
 
@@ -1817,10 +1817,10 @@ class Modeller:
         likelihood = self.evaluate(
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_verify_jacobian=True,
             do_compare_likelihoods=True)
-        likelihood_init = likelihood
-        self.logger.info("Param names   : {}".format(name_params))
-        self.logger.info("Initial params: {}".format(params_init))
-        self.logger.info("Initial likelihood in t={:.3e}: {}".format(time.time() - time_start, likelihood))
+        likelihood_init = likelihood[0]
+        self.logger.info(f"Param names   : {name_params}")
+        self.logger.info(f"Initial params: {params_init}")
+        self.logger.info(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
         sys.stdout.flush()
 
         do_nonlinear = not (do_linear_only or (is_linear and do_linear and self.model.can_do_fit_leastsq))
@@ -1878,7 +1878,6 @@ class Modeller:
                     idx_exposure += 1
                 if exposures:
                     idx_param += idx_free + 1
-            likelihood = likelihood[0]
             fluxratios_to_print = None
             fitmethods = {
                 'scipy.optimize.nnls': [None],
@@ -1905,8 +1904,8 @@ class Modeller:
                             param.set_value(valueinit*(frac*ratio + 1-frac), transformed=False)
                             if np.isfinite(param.get_value(transformed=False)):
                                 break
-                    likelihood_new = self.evaluate(returnlponly=True)
-                    if likelihood_new > likelihood:
+                    likelihood_new = self.evaluate()
+                    if likelihood_new[0] > likelihood[0]:
                         fluxratios_to_print = fluxratios
                         method_best = method
                         likelihood = likelihood_new
@@ -1920,7 +1919,7 @@ class Modeller:
             else:
                 params_init = np.array([param.get_value(transformed=True) for param in params_free])
                 params_init_true = np.array([param.get_value(transformed=False) for param in params_free])
-                self.logger.info(f"Final likelihood: {likelihood}")
+                self.logger.info(f"Final loglike, logprior: {likelihood}")
                 self.logger.info(f"New initial parameters from method {method_best}: {params_init}")
                 self.logger.info(f"New initial parameter values from method {method_best}: "
                                  f"{params_init_true}")
@@ -2024,7 +2023,7 @@ class Modeller:
                         self.model.name, time_run, self.fitinfo["n_eval_func"],
                         self.fitinfo["n_eval_grad"],
                         (len(timing) if timing is not None else 0) - self.fitinfo["n_timings"]))
-                self.logger.info(f"Final likelihood: {likelihood}")
+                self.logger.info(f"Final loglike, logprior: {likelihood}")
                 self.logger.info(f"Param names (fit): "
                                  f"{','.join(['{:11s}'.format(i) for i in name_params])}")
                 self.logger.info(f"Values transfo.:   " 
