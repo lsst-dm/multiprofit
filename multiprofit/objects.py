@@ -702,6 +702,8 @@ class Model:
                 if self.can_do_fit_leastsq and not (
                         'is_all_gaussian' in meta_model and meta_model['is_all_gaussian']):
                     raise RuntimeError('Model should be able to do least-squares fit but is not gauss mix.')
+
+                # Get the model image and/or likelihood for this exposure only
                 image, model, times_model, likelihood_exposure = self.get_image_model_exposure(
                     exposure, profiles=profiles, meta_model=meta_model, engine=engine,
                     engineopts=engineopts, do_draw_image=do_draw_image or plot or do_compare_likelihoods,
@@ -724,6 +726,7 @@ class Model:
                     else:
                         figaxes = (figure, axes[row_figure])
 
+                # Validate the Jacobian by comparing to finite differencing if requested
                 if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian' in exposure.meta:
                     jacobian = exposure.meta['jacobian']
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
@@ -756,6 +759,9 @@ class Model:
                             raise RuntimeError("Unexpected None image for do_compare_likelihoods={}, "
                                                "'jacobian' in exposure.meta={}".format(
                                                    do_compare_likelihoods, "jacobian" in exposure.meta))
+
+                    # Get the likelihood if it was not already computed by get_image_model_exposure
+                    # Also generate chi and clipped images for plotting
                     likelihood_new, chi, img_clip, model_clip = \
                         self.get_exposure_likelihood(
                             exposure, image, log=is_likelihood_log, figaxes=figaxes,
@@ -1754,6 +1760,20 @@ class Modeller:
 
     def fit(self, params_init=None, do_print_final=True, timing=None, walltime_max=np.Inf,
             print_step_interval=None, do_linear=True, do_linear_only=False):
+        """
+        Fit the Model to the data and return a dict with assorted fit information.
+
+        :param params_init: iterable of floats; initial transformed parameter values.
+            Default None (existing values will be used).
+        :param do_print_final: bool; whether to print status messages when finished.
+        :param timing: bool; whether to track and return elapsed time.
+        :param walltime_max: float; maximum allowed walltime for fit in seconds. Only supported by some
+            pygmo algorithms.
+        :param print_step_interval: int; number of steps to run before printing another status message.
+        :param do_linear: bool; whether to do a linear fit for free component amplitudes first.
+        :param do_linear_only: bool; whether to skip the non-linear fit for non-linear problems.
+        :return: dict with output.
+        """
         self.fitinfo["priorLogfixed"] = self.model.get_prior_value(free=False, fixed=True, log=True)
         self.fitinfo["log"] = []
         self.fitinfo["print_step_interval"] = print_step_interval
