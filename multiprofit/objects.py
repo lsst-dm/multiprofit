@@ -505,11 +505,21 @@ class Model:
 
     def __validate_jacobian_param(
             self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
-            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=False):
+            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=False, dx_min=1e-8, dx_max=10):
         value = param.get_value(transformed=True)
-        dx = np.clip(value*dx_ratio, 1e-8, np.Inf)
-        value_new = value + dx
-        param.set_value(value_new, transformed=True)
+        dx = np.clip(value*dx_ratio, dx_min, dx_max)
+        # Allow for roundoff errors - it need not be such a strict limit
+        dx_min_allowed = 0.99*dx_min
+        for sign in [1, -1]:
+            value_new = value + dx*sign
+            param.set_value(value_new, transformed=True)
+            dx_actual = param.get_value(transformed=True) - value
+            if sign*dx_actual >= sign*dx_min_allowed:
+                break
+        if sign*dx_actual < dx_min_allowed:
+            raise RuntimeError(f"Failed to get param {param} |dx={dx_actual}| within "
+                               f"({dx_min_allowed}, {dx_max}) for validating jacobian (sign={sign})")
+        dx = dx_actual
         # This might happen if the parameter is near a limit
         dparam = param.get_transform_derivative()
         profiles_new, meta_model_new, engine_new, engineopts_new, _ = \
@@ -557,10 +567,10 @@ class Model:
                 plt.show()
             if do_raise:
                 raise RuntimeError(
-                    'jacobian verification failed on param {} value_transfo={:.10e} '
-                    'value_true={:.10e} with dx={} idx={} dparam={}'.format(
-                        param.name, value, param.get_value(transformed=False), dx, idx_param+1, dparam,
-                    ))
+                    f'jacobian verification failed on param {param} value_new={value_new:.6e} and '
+                    f'value_true={param.get_value(transformed=False):.6e} with dx={dx} idx={idx_param+1} '
+                    f'dparam={dparam}'
+                )
             return False
         return True
 
@@ -739,11 +749,11 @@ class Model:
                     for idx_param, param in enumerate(params):
                         if not self.__validate_jacobian_param(
                             param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                            meta_model, dx_ratio=1e-6, do_raise=False, do_plot_if_failed=False
+                            meta_model, dx_ratio=1e-6, do_raise=False, do_plot_if_failed=plot
                         ):
                             self.__validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                                meta_model, dx_ratio=1e-6, do_raise=False, do_plot_if_failed=False
+                                meta_model, dx_ratio=1e-8, do_raise=True, do_plot_if_failed=plot
                             )
 
                 if plot or (get_likelihood and likelihood_exposure is None) or (
@@ -1196,8 +1206,7 @@ class Model:
                         param_flux_ratio_is_none = param_flux_ratio is None
                         for idx_array, idx_param in enumerate(grad_param_map[idx_profile, :]):
                             param = grad_params_obj[idx_src][idx_array]
-                            is_sigma = "sigma_factor" in profile and (
-                                    param.name == "sigma_x" or param.name == "sigma_y")
+                            is_sigma = param.name == "sigma_x" or param.name == "sigma_y"
                             if idx_param > 0:
                                 is_flux = isinstance(param, FluxParameter)
                                 weight_grad = weight if is_flux and param_flux_ratio_is_none else 1.
@@ -1212,7 +1221,7 @@ class Model:
                                     weight_grad /= derivative
                                 # TODO: Revisit for fitting rscale
                                 if is_sigma:
-                                    weight_grad *= profile["sigma_factor"]
+                                    weight_grad *= mpfgauss.reff_to_sigma(profile.get("sigma_factor", 1))
                             else:
                                 weight_grad = 0
                             grad_param_factor[idx_profile, idx_array] = weight_grad
@@ -1228,7 +1237,7 @@ class Model:
                                 # sig = sig_src*sigma_factor
                                 # dsig/dn = dsig/dsigma_factor * dsigma_factor/dn = sig_src*dsigma_factor/dn
                                 # sig_src = sig_profile/sigma_factor
-                                dreff_dn /= profile["sigma_factor"]
+                                dreff_dn /= mpfgauss.sigma_to_reff(profile["sigma_factor"])
                                 derivative = profile["param_nser"].get_transform_derivative(
                                     verify=True, rtol=1e-3)
                                 if derivative is not None:
