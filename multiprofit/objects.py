@@ -1020,12 +1020,7 @@ class Model:
                         ellipse_psf = Ellipse(*[profile_psf[band][var] for var in names_params])
                         for idx_src, (ellipse_src, profile) in enumerate(ellipse_srcs):
                             if ellipse_src is not None:
-                                if clock:
-                                    time_eig = time.time()
                                 profile = copy.copy(profile)
-                                if clock:
-                                    times['model_all_gauss_eig'] += time.time() - time_eig
-                                profile = profile.copy()
                                 if is_all_fast_gauss or is_libprofit:
                                     # Needed because each PSF component will loop over the same profile object
                                     profile["flux"] *= fluxfrac
