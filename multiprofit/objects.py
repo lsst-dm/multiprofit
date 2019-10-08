@@ -1377,6 +1377,10 @@ class Model:
                     else:
                         image += imgprofiles
 
+        # If there are any profiles left, render them with libprofit/galsim
+        # In principle one could evaluate Gaussian mixtures with multiprofit code and render other models
+        # with the specified engine, although it's really best to just stick to Gaussian mixtures
+        # (unless you really want to use an empirical PSF model)
         if profiles:
             if engine == 'libprofit':
                 if do_fit_linear_prep:
@@ -1512,6 +1516,8 @@ class Model:
                 if clock:
                     times['model_setup'] = time.time() - time_now
                     time_now = time.time()
+                # GalSim has special profile objects which can be added together for efficient simultaneous
+                # evaluation and convolution
                 for profile_type, profiles_of_type in profiles_gs.items():
                     for convolve, profiles_gs_bin in profiles_of_type.items():
                         if profiles_gs_bin:
@@ -1906,7 +1912,7 @@ class Modeller:
                         # TODO: See if there is a better alternative to setting values outside transform range
                         # Perhaps leave an option to change the transform to log10?
                         for frac in np.linspace(1, 0, 10+1):
-                            param.set_value(valueinit*(frac*ratio + 1-frac), transformed=False)
+                            param.set_value(valueinit*(frac*ratio + 1 - frac), transformed=False)
                             if np.isfinite(param.get_value(transformed=False)):
                                 break
                     likelihood_new = self.evaluate()
