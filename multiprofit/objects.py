@@ -2738,8 +2738,7 @@ class Parameter:
             is_close = np.abs(derivative) > verify_derivative_abs_max
             if not is_close:
                 if dx_ratios is None:
-                    dx_ratios = [1e-4, -1e-4, 1e-6, 1e-6, 1e-8, -1e-8, 1e-10, -1e-10, 1e-12, -1e-12,
-                                 1e-14, -1e-14]
+                    dx_ratios = [1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 1e-14]
                 for ratio in dx_ratios:
                     dx = value*ratio
                     fin_diff = (self.transform(value + dx) - value_transformed)/dx
