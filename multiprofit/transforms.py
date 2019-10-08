@@ -20,6 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import functools
+import math
 import numpy as np
 from scipy import special
 
@@ -70,7 +71,7 @@ class Transform:
 
 
 def dlog10dx(x):
-    return 0.434294481903251827651128918916605082294397005803666566*np.reciprocal(x)
+    return 0.434294481903251827651128918916605082294397005803666566/x
 
 
 def dlogitdx(x):
@@ -97,17 +98,43 @@ def get_stretch_log(lower, factor=1.0):
     )
 
 
-def logitlimited(x, lower, extent, factor=1.0):
-    return special.logit((x-lower)/extent)*factor
+def logitlimited(x, lower, extent, factor=1.0, validate=False):
+    y = (x-lower)/extent
+    if y > 1:
+        if validate:
+            raise ValueError(f"logitlimited passed x={x}, lower={lower}, extent={extent}, factor={factor}"
+                             f" yielding y={y}>1, which will return nan")
+        return np.nan
+    elif y == 1:
+        return np.Inf
+    elif y > 0:
+        return math.log(y/(1-y))*factor
+    elif y == 0:
+        return -np.Inf
+    else:
+        if validate:
+            raise ValueError(f"logitlimited passed x={x}, lower={lower}, extent={extent}, factor={factor}"
+                             f" yielding y={y}!>=0, which will return nan")
+        return np.nan
 
 
 def logitlimiteddx(x, lower, extent, factor=1.0):
     y = (x - lower)/extent
+    if y == 1 or y == 0:
+        return np.Inf
     return (1/y + 1/(1-y))*factor/extent
 
 
 def expitlimited(x, lower, extent, factor=1.0):
-    return special.expit(x*factor)*extent + lower
+    y = -x*factor
+    # math.log(np.finfo(np.float64) = 709.782712893384
+    # things will go badly well before then
+    if y > 709.7827:
+        return lower
+    y = 1+math.exp(y)
+    if y == 0:
+        return np.Inf
+    return extent/y + lower
 
 
 def get_logit_limited(lower, upper, factor=1.0, name=None):
