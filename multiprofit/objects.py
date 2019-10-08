@@ -1025,6 +1025,7 @@ class Model:
                                 profile = copy.copy(profile)
                                 if clock:
                                     times['model_all_gauss_eig'] += time.time() - time_eig
+                                profile = profile.copy()
                                 if is_all_fast_gauss or is_libprofit:
                                     # Needed because each PSF component will loop over the same profile object
                                     profile["flux"] *= fluxfrac
@@ -2048,7 +2049,7 @@ class Modeller:
             time_run += time.time() - time_init
 
         result = {
-            "fitinfo": copy.copy(self.fitinfo),
+            "fitinfo": self.fitinfo.copy(),
             "params": self.model.get_parameters(),
             "name_params": name_params,
             "likelihood": likelihood,
@@ -2532,7 +2533,7 @@ class EllipticalParametricComponent(EllipticalComponent):
                 if key in profile:
                     profile[key] += value
                 else:
-                    profile[key] = copy.copy(value)
+                    profile[key] = np.copy(value)
             if resolved:
                 if engine == "galsim":
                     axrat = profile["axrat"]
@@ -2755,12 +2756,11 @@ class Parameter:
         return derivative
 
     def get_value(self, transformed=False):
-        value = copy.copy(self.value)
         if transformed and not self.transformed:
-            value = self.transform.transform(value)
+            return self.transform.transform(self.value)
         elif not transformed and self.transformed:
-            value = self.transform.reverse(value)
-        return value
+            return self.transform.reverse(self.value)
+        return np.float64(self.value)
 
     def get_prior(self, log=True):
         if self.prior is None:
