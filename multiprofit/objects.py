@@ -2505,11 +2505,11 @@ class EllipticalParametricComponent(EllipticalComponent):
             profile = profile_base.copy()
             flux = flux_param_band.get_value(transformed=False)
             if flux_param_band.is_fluxratio:
-                fluxratio = copy.copy(flux)
-                if not 0 <= fluxratio <= 1:
-                    raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
-                flux *= flux_by_band[band]
-                flux_by_band[band] *= (1.0-fluxratio)
+                if not 0 <= flux <= 1:
+                    raise ValueError(f"flux ratio not 0 <= {flux} <= 1")
+                flux_value = flux*flux_by_band[band]
+                flux_by_band[band] *= (1.0-flux)
+                flux = flux_value
             if not skip_covar:
                 profile["axrat"] = axrat
                 profile["ang"] = ang
@@ -2517,6 +2517,8 @@ class EllipticalParametricComponent(EllipticalComponent):
             for param in self.parameters.values():
                 profile[param.name] = param.get_value(transformed=False)
 
+            if not flux >= 0:
+                raise ValueError(f"flux {flux}!>=0")
             if not skip_covar:
                 if not 0 < profile["axrat"] <= 1:
                     if profile["axrat"] <= __class__.axrat_min:
