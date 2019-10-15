@@ -466,15 +466,13 @@ class Model:
                 param_flux_ratio_isnt_none = param_flux_ratio is not None
                 if param_flux_ratio_isnt_none and param_flux not in param_flux_added:
                     param_flux_added.add(param_flux)
-                    num_params_free += 1
-                    idx_params[param_flux] = num_params_free
+                    if not param_flux_ratio.fixed:
+                        num_params_free += 1
+                        idx_params[param_flux] = num_params_free
                 for name_param, idx_param in order_params_gauss.items():
                     param = params_profile[name_param]
-                    if name_param == 'flux' and param_flux_ratio_isnt_none:
-                        if param_flux_ratio.fixed:
-                            gpmb_indices_row[order_flux] = num_params_free
-                        else:
-                            gpmb_indices_row[order_flux] = idx_params[param_flux_ratio]
+                    if name_param == 'flux' and param_flux_ratio_isnt_none and not param_flux_ratio.fixed:
+                        gpmb_indices_row[order_flux] = idx_params[param_flux_ratio]
                     else:
                         gpmb_indices_row[idx_param] = idx_params[param]
                     params_to_append.append(param)
@@ -558,8 +556,7 @@ class Model:
             exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
             engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False,
             verify_derivative=True)
-        passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3,
-                            atol=1e-5)
+        passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3, atol=1e-5)
         param.set_value(value, transformed=True)
         if not np.all(passed):
             if do_plot_if_failed:
