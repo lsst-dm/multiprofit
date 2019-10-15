@@ -19,7 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from collections import OrderedDict
 import csv
 import galsim as gs
 import io
@@ -33,7 +32,7 @@ import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref
 import multiprofit.utils as mpfutil
 import numpy as np
-from scipy import stats
+from scipy import ndimage, stats
 import sys
 import time
 import traceback
@@ -394,11 +393,69 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
     return fits_model_psf
 
 
+def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel_min=None, pixel_sn_min=None,
+                          cenx=0, ceny=0):
+    bands = {}
+    fluxes = {}
+    num_pix_img = None
+    name_params_moments_init = mpfobj.names_params_ellipse
+    cens = dict(cenx=cenx, ceny=ceny)
+    moments_by_name = {name_param: 0 for name_param in name_params_moments_init}
+    num_exposures_measured = 0
+    denoise = pixel_min is None and pixel_sn_min is None
+    for exposure in exposures:
+        band = exposure.band
+        img_exp = exposure.image
+        num_pix_img_exp = img_exp.shape
+        if num_pix_img is None:
+            num_pix_img = num_pix_img_exp
+        elif num_pix_img_exp != num_pix_img:
+            raise RuntimeError(
+                f'get_init_from_moments image (band={band} shape={num_pix_img_exp} '
+                f'not same as first={num_pix_img}')
+        if band not in bands:
+            if flux_min_img is None or np.sum(img_exp) > flux_min_img:
+                if not denoise:
+                    if pixel_min is not None:
+                        pass
+                moments, cenx, ceny = mpfutil.estimate_ellipse(
+                    img_exp, denoise=denoise, return_cens=True, validate=False)
+                cens['cenx'] += cenx
+                cens['ceny'] += ceny
+                # TODO: subtract PSF moments from object
+                for name_param, value in zip(name_params_moments_init,
+                                             Ellipse.covar_matrix_as(moments, params=False)):
+                    moments_by_name[name_param] += value
+                num_exposures_measured += 1
+            bands[exposure.band] = None
+        # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
+        fluxes[band] = np.clip(
+            np.sum(img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp),
+            flux_min_obj, np.Inf)
+    num_pix_img = np.flip(num_pix_img, axis=0)
+    for params in [cens, moments_by_name]:
+        for name_param in params:
+            params[name_param] /= num_exposures_measured
+    moments_by_name = {name_param: value for name_param, value in zip(
+        name_params_moments_init,
+        Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
+    values_max = {
+        "sigma_x": np.sqrt(np.sum((num_pix_img/2.)**2)),
+        "sigma_y": np.sqrt(np.sum((num_pix_img/2.)**2)),
+    }
+    values_min = {}
+    for band in fluxes.keys():
+        values_min["flux_" + band] = 1e-6 * fluxes[band]
+        values_max["flux_" + band] = 100 * fluxes[band]
+    moments_by_name.update(cens)
+    return fluxes, moments_by_name, values_min, values_max, num_pix_img
+
+
 # Engine is galsim; TODO: add options
 def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
-        do_fit_fluxfracs=False, print_step_interval=100, logger=None, flux_min=1e-3
+        do_fit_fluxfracs=False, print_step_interval=100, logger=None, **kwargs
 ):
     """
     Convenience function to fit a galaxy given some exposures with PSFs.
@@ -430,43 +487,9 @@ def fit_galaxy(
     """
     if logger is None:
         logger = logging.getLogger(__name__)
-    bands = OrderedDict()
-    fluxes = {}
-    num_pix_img = None
-    name_params_moments_init = mpfobj.names_params_ellipse
-    cens = dict(cenx=0, ceny=0)
-    moments_by_name = {name_param: 0 for name_param in name_params_moments_init}
-    num_exposures_measured = 0
-    for exposure, _ in exposures_psfs:
-        band = exposure.band
-        img_exp = exposure.image
-        num_pix_img_exp = img_exp.shape
-        if num_pix_img is None:
-            num_pix_img = num_pix_img_exp
-        elif num_pix_img_exp != num_pix_img:
-            'fit_galaxy exposure image shape={} not same as first={}'.format(num_pix_img_exp, num_pix_img)
-        if band not in bands:
-            if np.sum(img_exp) > 0:
-                moments, cenx, ceny = mpfutil.estimate_ellipse(img_exp, return_cens=True, validate=False)
-                cens['cenx'] += cenx
-                cens['ceny'] += ceny
-                # TODO: subtract PSF moments from object
-                for name_param, value in zip(name_params_moments_init,
-                                             Ellipse.covar_matrix_as(moments, params=False)):
-                    moments_by_name[name_param] += value
-                num_exposures_measured += 1
-            bands[exposure.band] = None
-        # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
-        fluxes[band] = np.clip(np.sum(
-            img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp), flux_min,
-            np.Inf)
-    num_pix_img = np.flip(num_pix_img, axis=0)
-    for params in [cens, moments_by_name]:
-        for name_param in params:
-            params[name_param] /= num_exposures_measured
-    moments_by_name = {name_param: value for name_param, value in zip(
-        name_params_moments_init,
-        Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
+    fluxes, moments_by_name, values_min, values_max, num_pix_img = get_init_from_moments(
+        (exposure for exposure, _ in exposures_psfs), **kwargs)
+    bands = list(fluxes.keys())
     logger.info(f"Bands: {bands}; Moment init.: {moments_by_name}")
     engine = 'galsim'
     engines = {
@@ -479,14 +502,6 @@ def fit_galaxy(
     if modellib is None:
         modellib = "scipy"
 
-    values_max = {
-        "sigma_x": np.sqrt(np.sum((num_pix_img/2.)**2)),
-        "sigma_y": np.sqrt(np.sum((num_pix_img/2.)**2)),
-    }
-    values_min = {}
-    for band in bands:
-        values_min["flux_" + band] = 1e-6 * fluxes[band]
-        values_max["flux_" + band] = 100 * fluxes[band]
     models = {} if (models is None) else models
     params_fixed_default = {}
     fits_by_engine = {} if ((models is None) or (fits_by_engine is None)) else fits_by_engine
@@ -499,7 +514,7 @@ def fit_galaxy(
             num_rows, num_cols = len(modelspecs), 0
             figures = {}
             axes_list = {}
-            for band in list(bands) + (['multi'] if len(bands) > 1 else []):
+            for band in bands + (['multi'] if len(bands) > 1 else []):
                 num_cols = 5
                 # Change to landscape
                 figure, axes = plt.subplots(nrows=min([num_cols, num_rows]), ncols=max([num_cols, num_rows]))
@@ -601,8 +616,6 @@ def fit_galaxy(
                     logger.info('Initializing from moments')
                     for param in model.get_parameters(fixed=False):
                         value = moments_by_name.get(param.name)
-                        if value is None:
-                            value = cens.get(param.name)
                         if value is not None:
                             param.set_value(value, transformed=False)
                 else:
