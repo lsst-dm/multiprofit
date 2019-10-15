@@ -423,7 +423,7 @@ class Model:
         profiles = self.get_profiles(bands=bands, engine="libprofit")
         grad_param_maps = {
             band: (
-                np.zeros((len(profiles), len(order_params_gauss))),
+                np.zeros((len(profiles), len(order_params_gauss)), dtype=np.uint),
                 [],
             )
             for band in bands
