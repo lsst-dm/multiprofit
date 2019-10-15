@@ -1367,9 +1367,11 @@ class Model:
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
-                        imgprofiles = np.array(mpf.make_gaussian_pixel(
-                            params['cenx'], params['ceny'], params['flux'], params['re'],
-                            params['axrat'], params['ang'], 0, nx, 0, ny, nx, ny))
+                        imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
+                            params['cenx'], params['ceny'], params['flux'],
+                            mpfgauss.reff_to_sigma(params['sigma_x']),
+                            mpfgauss.reff_to_sigma(params['sigma_y']),
+                            params['rho'], 0, nx, 0, ny, nx, ny))
                     if do_fit_linear_prep:
                         exposure.meta['img_models_params_free'] += [(imgprofiles, param_flux)]
                     if image is None:
