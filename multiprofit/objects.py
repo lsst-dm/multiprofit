@@ -577,6 +577,15 @@ class Model:
             return False
         return True
 
+    def estimate_uncertainties(self, params_best, eps=1e-8):
+        if not self.can_do_fit_leastsq:
+            return None
+        else:
+            return None
+            n_params = len(params_best)
+            grad = np.zeros(n_params)
+            hessian = np.zeros((n_params, n_params))
+
     def evaluate(self, param_values=None, data=None, bands=None, engine=None, engineopts=None,
                  params_transformed=True, get_likelihood=True, is_likelihood_log=True, keep_likelihood=False,
                  keep_images=False, keep_models=False, plot=False,
@@ -585,7 +594,7 @@ class Model:
                  clock=False, do_plot_as_column=False,
                  img_plot_maxs=None, img_multi_plot_max=None, weights_band=None, do_fit_linear_prep=False,
                  do_fit_leastsq_prep=False, do_jacobian=False, do_verify_jacobian=False,
-                 do_compare_likelihoods=False):
+                 do_compare_likelihoods=False, grad_loglike=None):
         """
         Evaluate a model, plot and/or benchmark, and optionally return the likelihood and derived images.
 
@@ -629,11 +638,15 @@ class Model:
         :param do_verify_jacobian: bool; verify the Jacobian if do_fit_leastsq_prep by comparing to
             finite differencing
         :param do_compare_likelihoods: bool; compare likelihoods from C++ vs Python (if both exist)
+        :param grad_loglike: ndarray[float]; values for the gradient of the loglikehood vs fit params
         :return: likelihood: float; the (log) likelihood
             param_values: ndarray of floats; parameter values
             chis: list of residual images for each fit exposure, where chi = (data-model)/sigma
             times: Dict of floats, with time in
         """
+        if grad_loglike is not None:
+            do_jacobian = False
+            do_verify_jacobian = False
         times = {}
         time_now = time.time() if clock else None
         if engine is None:
@@ -722,7 +735,8 @@ class Model:
                     engineopts=engineopts, do_draw_image=do_draw_image or plot or do_compare_likelihoods,
                     scale=scale, clock=clock, times=times, do_fit_linear_prep=do_fit_linear_prep,
                     do_fit_leastsq_prep=do_fit_leastsq_prep, do_jacobian=do_jacobian,
-                    get_likelihood=get_likelihood, is_likelihood_log=is_likelihood_log)
+                    get_likelihood=get_likelihood, is_likelihood_log=is_likelihood_log,
+                    grad_loglike=grad_loglike)
                 if clock:
                     name_exposure = '_'.join([band, str(idx_exposure)])
                     times['_'.join([name_exposure, 'modeltotal'])] = time.time() - time_now
@@ -1071,7 +1085,8 @@ class Model:
     def get_image_model_exposure(
             self, exposure, profiles=None, meta_model=None, engine=None, engineopts=None, do_draw_image=True,
             scale=1, clock=False, times=None, do_fit_linear_prep=False, do_fit_leastsq_prep=False,
-            do_jacobian=False, get_likelihood=False, is_likelihood_log=True, verify_derivative=False):
+            do_jacobian=False, get_likelihood=False, is_likelihood_log=True, verify_derivative=False,
+            grad_loglike=None):
         """
             Draw model image for one exposure with one PSF
 
@@ -1139,8 +1154,8 @@ class Model:
                 [profiles_to_draw, profiles_left, profiles_to_fit_linear]
             )}
             # If these are the only profiles, just get the likelihood
-            get_like_only = (get_likelihood or do_jacobian) and profiles_to_draw_now and \
-                             not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
+            get_like_only = (get_likelihood or do_jacobian) and profiles_to_draw_now \
+                and not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
             if get_like_only:
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                 if 'like_const' not in exposure.meta:
@@ -1149,13 +1164,13 @@ class Model:
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
                     self.logger.info(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
-                do_jacobian_any = do_jacobian or do_fit_leastsq_prep
+                do_grad_any = do_jacobian or do_fit_leastsq_prep
                 profiles_band_bad = 0
                 profiles_band = []
                 profiles_band_idx = []
                 for idx_profile, profile in enumerate(profiles_to_draw_now):
                     profile_band = profile[band]
-                    if np.isinf(profile_band["flux"]) and not do_jacobian_any:
+                    if np.isinf(profile_band["flux"]) and not do_grad_any:
                         profiles_band_bad += 1
                     else:
                         profiles_band_idx.append(idx_profile)
@@ -1171,9 +1186,13 @@ class Model:
                 grad_params_indices, grad_params_obj = self.grad_param_maps[band] if has_grad_param_map else \
                     (None, None)
                 sersic_param_indices = self.param_maps['sersic'][band] if has_grad_param_map else None
-                if do_jacobian_any:
-                    grad = exposure.meta['jacobian']
-                    grad.fill(0)
+                if do_grad_any:
+                    if grad_loglike:
+                        grad = grad_loglike
+                        do_jacobian = False
+                    else:
+                        grad = exposure.meta['jacobian']
+                        grad.fill(0)
                     if do_fit_leastsq_prep:
                         grad_param_map = np.zeros((num_profiles, num_params_gauss), dtype=np.uint64)
                         grad_param_factor = np.zeros((num_profiles, num_params_gauss))
@@ -1295,7 +1314,7 @@ class Model:
                 )
                 # If computing the jacobian, will skip evaluating the likelihood and instead return the
                 # residual image for fitting
-                if do_jacobian_any or do_fit_leastsq_prep:
+                if do_grad_any or do_fit_leastsq_prep:
                     likelihood = None
                     order_flux = order_params_gauss['flux']
                     # Turn all of the gradients w.r.t. Gaussian fluxes into total flux and flux ratio values
@@ -2059,6 +2078,7 @@ class Modeller:
             "params_best": params_best,
             "result": result,
             "time": time_run,
+            "uncertainties": self.model.estimate_uncertainties(params_best),
         }
         return result
 
