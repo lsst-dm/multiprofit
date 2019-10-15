@@ -1243,7 +1243,7 @@ class Model:
                                     dweight_dn /= derivative
                                     dreff_dn /= derivative
                                 ellipse = profile['ellipse_src']
-                                factors = [dweight_dn*flux_src*profile["fluxfrac_psf"],
+                                factors = [dweight_dn*flux_src*profile.get("fluxfrac_psf", 1.),
                                            dreff_dn*ellipse.sigma_x,
                                            dreff_dn*ellipse.sigma_y]
                                 if not all([np.isfinite(factor) for factor in factors]):
