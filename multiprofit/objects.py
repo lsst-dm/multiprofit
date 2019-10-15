@@ -1192,7 +1192,8 @@ class Model:
                         do_jacobian = False
                     else:
                         grad = exposure.meta['jacobian']
-                        grad.fill(0)
+                        if do_fit_leastsq_prep:
+                            grad.fill(0)
                     if do_fit_leastsq_prep:
                         grad_param_map = np.zeros((num_profiles, num_params_gauss), dtype=np.uint64)
                         grad_param_factor = np.zeros((num_profiles, num_params_gauss))

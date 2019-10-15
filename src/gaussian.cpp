@@ -26,6 +26,7 @@
 
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -450,16 +451,21 @@ public:
 
     GradientsSersic() = delete;
 
-    const inline void set(Array3UncheckedMutable & output, size_t g, size_t dim1, size_t dim2,
+    const inline void add_index_to_set(size_t g, std::set<size_t> & set)
+    {
+        set.insert(param_map(g, 1));
+    }
+
+    const inline void add(Array3UncheckedMutable & output, size_t g, size_t dim1, size_t dim2,
         const ValuesGauss & gradients)
     {
         // Reset g_check to zero once g rolls back to zero itself
         g_check *= (g != 0);
         const bool to_add = g == param_map(this->g_check, 0);
         const auto idx = param_map(g, 1);
-        output(dim1, dim2, idx) += gradients.L*param_factor(g, 0);
-        output(dim1, dim2, idx) += gradients.sigma_x*param_factor(g, 1);
-        output(dim1, dim2, idx) += gradients.sigma_y*param_factor(g, 2);
+        double value = gradients.L*param_factor(g, 0) + gradients.sigma_x*param_factor(g, 1) +
+            gradients.sigma_y*param_factor(g, 2);
+        output(dim1, dim2, idx) += value;
         this->g_check += to_add;
     }
 };
@@ -631,7 +637,7 @@ inline void gaussian_pixel_get_jacobian_from_terms(
     );
 }
 
-inline void gaussian_pixel_add_jacobian(
+inline void gaussian_pixel_add_values(
     double & cen_x, double & cen_y, double & L, double & sig_x, double & sig_y, double & rho,
     const ValuesGauss & values,
     const double weight_cen_x=1, const double weight_cen_y=1, const double weight_L=1,
@@ -665,7 +671,7 @@ inline void gaussian_pixel_add_jacobian_type<GradientType::jacobian, false>(
 {
     gaussian_pixel_get_jacobian_from_terms(gradients, dim1, terms_pixel[g], terms_grad[g],
         value, value_unweighted, xy_norm);
-    gaussian_pixel_add_jacobian(
+    gaussian_pixel_add_values(
         output(dim1, dim2, grad_param_map(g, 0)), output(dim1, dim2, grad_param_map(g, 1)),
         output(dim1, dim2, grad_param_map(g, 2)), output(dim1, dim2, grad_param_map(g, 3)),
         output(dim1, dim2, grad_param_map(g, 4)), output(dim1, dim2, grad_param_map(g, 5)),
@@ -687,9 +693,8 @@ inline void gaussian_pixel_add_jacobian_type<GradientType::jacobian, true>(
     gaussian_pixel_add_jacobian_type<GradientType::jacobian, false>(
         output, grad_param_map, grad_param_factor, gradients, g, dim1, dim2, value, value_unweighted, xy_norm,
         terms_pixel, terms_grad, grad_sersic);
-    grad_sersic->set(output, g, dim1, dim2, gradients);
+    grad_sersic->add(output, g, dim1, dim2, gradients);
 }
-
 
 // Computes dmodel/dx for x in [cen_x, cen_y, flux, sigma_x, sigma_y, rho]
 template <GradientType gradient_type>
@@ -738,7 +743,7 @@ inline void gaussians_pixel_add_like_grad<true, GradientType::loglike>(ArrayUnch
         const Weights & weights = gaussweights[g];
         gaussian_pixel_get_jacobian_from_terms(gradients, dim1, terms_pixel[g], terms_grad[g],
             weights[0]*diffvar, weights[1]*diffvar, weights[2]);
-        gaussian_pixel_add_jacobian(
+        gaussian_pixel_add_values(
             output(grad_param_map(g, 0)), output(grad_param_map(g, 1)), output(grad_param_map(g, 2)),
             output(grad_param_map(g, 3)), output(grad_param_map(g, 4)), output(grad_param_map(g, 5)),
             gradients,
@@ -749,7 +754,7 @@ inline void gaussians_pixel_add_like_grad<true, GradientType::loglike>(ArrayUnch
 }
 
 template <GradientType gradient_type, bool do_sersic>
-double gaussian_pixel_add_all(size_t g, size_t j, size_t i, double weight,
+inline double gaussian_pixel_add_all(size_t g, size_t j, size_t i, double weight,
     const TermsPixelVec & terms_pixel_vec, Array3UncheckedMutable & output_jac_ref,
     const MatrixSUnchecked & grad_param_map_ref, const MatrixUnchecked & grad_param_factor_ref,
     std::vector<Weights> & gradweights, const TermsGradientVec & terms_grad_vec, ValuesGauss & gradients,
@@ -765,6 +770,20 @@ double gaussian_pixel_add_all(size_t g, size_t j, size_t i, double weight,
         grad_param_factor_ref, gradients, g, j, i, value, value_unweight, xy_norm,
         terms_pixel_vec, terms_grad_vec, grad_sersic);
     return value;
+}
+
+template <GradientType gradient_type>
+void reset_pixel(Array3UncheckedMutable & output_jac_ref, size_t dim1, size_t dim2,
+    const std::vector<size_t> & grad_param_idx, size_t grad_param_idx_size) {};
+
+template <>
+void reset_pixel<GradientType::jacobian>(Array3UncheckedMutable & output_jac_ref, size_t dim1, size_t dim2,
+    const std::vector<size_t> & grad_param_idx, size_t grad_param_idx_size)
+{
+    for(size_t k = 0; k < grad_param_idx_size; ++k)
+    {
+        output_jac_ref(dim1, dim2, grad_param_idx[k]) = 0;
+    }
 }
 
 // Compute Gaussian mixtures with the option to write output and/or evaluate the log likehood
@@ -817,6 +836,8 @@ double gaussians_pixel_template(const params_gauss & gaussians,
         (*grads).mutable_unchecked<3>() : (*array3_null).mutable_unchecked<3>();
     const size_t n_params_type = gradient_type == GradientType::loglike ? outputgradref.shape(0) :
         (gradient_type == GradientType::jacobian ? output_jac_ref.shape(2) : 0);
+    std::vector<size_t> grad_param_idx;
+    size_t grad_param_idx_size = 0;
     if(do_gradient)
     {
         const size_t n_params_grad = n_gaussians*(N_PARAMS);
@@ -889,12 +910,39 @@ double gaussians_pixel_template(const params_gauss & gaussians,
     const unsigned int dim_y = matcomparesize.shape(0);
     const bool is_variance_matrix = getlikelihood ? variance_inv->size() > 1 : false;
 
-    if(gradient_type == GradientType::jacobian &&
-        !(output_jac_ref.shape(0) == dim_y && output_jac_ref.shape(1) == dim_x))
+    /*
+    Somewhat ugly hack here to set refs to point at null if we know they won't be used
+    I would love to replace these by unique_ptrs or something and get rid of the nulls but I can't figure
+     out how to construct an unchecked reference even after looking at the pybind11 source.
+    */
+    MatrixUncheckedMutable outputref = writeoutput ? (*output).mutable_unchecked<2>() :
+                                       (*matrix_null).mutable_unchecked<2>();
+    MatrixSUnchecked grad_param_map_ref = do_gradient ? (*grad_param_map).unchecked<2>() :
+                                          (*matrix_s_null).unchecked<2>();
+    MatrixUnchecked grad_param_factor_ref = do_gradient ? (*grad_param_factor).unchecked<2>() :
+                                            (*matrix_null).unchecked<2>();
+    // I don't know if there's much overhead in calling get but there's no need to do it N times
+    GradientsSersic * grad_sersic_ptr = grad_sersic.get();
+
+    if(gradient_type == GradientType::jacobian)
     {
-        throw std::runtime_error("Data/output matrix dimensions [" + std::to_string(dim_x) + ',' +
-            std::to_string(dim_y) + "] don't match Jacobian matrix dimensions [" +
-            std::to_string(output_jac_ref.shape(1)) + ',' + std::to_string(output_jac_ref.shape(0)) + ']');
+        if(!(output_jac_ref.shape(0) == dim_y && output_jac_ref.shape(1) == dim_x))
+        {
+            throw std::runtime_error("Data/output matrix dimensions [" + std::to_string(dim_x) + ',' +
+                std::to_string(dim_y) + "] don't match Jacobian matrix dimensions [" +
+                std::to_string(output_jac_ref.shape(1)) + ',' +
+                std::to_string(output_jac_ref.shape(0)) + ']');
+        }
+        std::set<size_t> grad_param_idx_uniq;
+        for (size_t g = 0; g < n_gaussians; ++g) {
+            for (size_t p = 0; p < N_PARAMS; ++p) {
+                grad_param_idx_uniq.insert(grad_param_map_ref(g, p));
+            }
+            if(grad_sersic_ptr != nullptr) grad_sersic_ptr->add_index_to_set(g, grad_param_idx_uniq);
+        }
+        std::copy(grad_param_idx_uniq.begin(), grad_param_idx_uniq.end(),
+                  std::back_inserter(grad_param_idx));
+        grad_param_idx_size = grad_param_idx.size();
     }
 
     if(getlikelihood)
@@ -947,17 +995,6 @@ double gaussians_pixel_template(const params_gauss & gaussians,
             terms_grad[g].set(terms, cov_src, cov_psf, cov, std::move(yvals.x));
         }
     }
-    /*
-        Somewhat ugly hack here to set refs to point at null if we know they won't be used
-        I would love to replace these by unique_ptrs or something and get rid of the nulls but I can't figure
-         out how to construct an unchecked reference even after looking at the pybind11 source.
-    */
-    MatrixUncheckedMutable outputref = writeoutput ? (*output).mutable_unchecked<2>() :
-        (*matrix_null).mutable_unchecked<2>();
-    MatrixSUnchecked grad_param_map_ref = do_gradient ? (*grad_param_map).unchecked<2>() :
-        (*matrix_s_null).unchecked<2>();
-    MatrixUnchecked grad_param_factor_ref = do_gradient ? (*grad_param_factor).unchecked<2>() :
-        (*matrix_null).unchecked<2>();
     if(do_gradient) validate_param_map_factor(grad_param_map_ref, grad_param_factor_ref,
         n_gaussians, N_PARAMS, N_PARAMS, "gradient");
     const MatrixUnchecked data_ref = getlikelihood ? (*data).unchecked<2>() : gaussians_ref;
@@ -965,8 +1002,6 @@ double gaussians_pixel_template(const params_gauss & gaussians,
     double loglike = 0;
     double model = 0;
     ValuesGauss gradients = {0, 0, 0, 0, 0, 0};
-    // I don't know if there's much overhead in calling get but there's no need to do it N times
-    GradientsSersic * grad_sersic_ptr = grad_sersic.get();
     // TODO: Consider a version with cached xy, although it doubles memory usage
     for(unsigned int i = 0; i < dim_x; i++)
     {
@@ -979,6 +1014,7 @@ double gaussians_pixel_template(const params_gauss & gaussians,
         for(unsigned int j = 0; j < dim_y; j++)
         {
             model = 0;
+            reset_pixel<gradient_type>(output_jac_ref, j, i, grad_param_idx, grad_param_idx_size);
             for(size_t g = 0; g < n_gaussians; ++g)
             {
                 model += gaussian_pixel_add_all<gradient_type, do_sersic>(g, j, i, gaussians_ref(g, 2),
