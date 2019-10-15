@@ -528,7 +528,7 @@ class Model:
         errmsg = ""
         for name_item, (item_new, item_old) in {
             'meta_model': (meta_model_new, meta_model),
-            'engine'    : (engine_new, engine),
+            'engine': (engine_new, engine),
             'engineopts': (engineopts_new, engineopts),
         }.items():
             if name_item == "meta_model":
@@ -967,8 +967,8 @@ class Model:
             is_all_gaussian and (
                 is_psf_pixelated or (
                     not has_psf and
-                # Disabling these for fitting with a PSF because we don't want discontinuous likelihoods
-                # in fitting because the drawing method has changed, but it's fine for PSF fitting
+                    # Disabling these for fitting with a PSF because we don't want discontinuous likelihoods
+                    # in fitting because the drawing method has changed, but it's fine for PSF fitting
                     engineopts is not None and (
                         (engine == 'galsim' or engine == 'libprofit') and
                         engineopts.get("drawmethod") == draw_method_pixel[engine]
