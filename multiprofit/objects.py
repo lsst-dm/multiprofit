@@ -61,6 +61,12 @@ class Exposure:
         A class to hold an image, sigma map, bad pixel mask and reference to a PSF model/image.
         TODO: Decide whether this should be mutable and implement getters/setters if so; or use afw class
     """
+    def get_sigma_inverse(self):
+        return self.error_inverse if self.is_error_sigma else np.sqrt(self.error_inverse)
+
+    def get_var_inverse(self):
+        return self.error_inverse if not self.is_error_sigma else self.error_inverse**2
+
     def __init__(self, band, image, mask_inverse=None, error_inverse=None, psf=None, use_mask_inverse=None,
                  meta=None, is_error_sigma=True):
         if psf is not None and not isinstance(psf, PSF):
@@ -742,8 +748,7 @@ class Model:
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
                                      num_params_gauss*len(profiles)))
                     mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image,
-                        variance_inv=exposure.error_inverse**(1 + exposure.is_error_sigma),
+                        data=exposure.image, variance_inv=exposure.get_var_inverse(),
                         gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                         to_add=False, grad=grad)
                     for idx_param, param in enumerate(params):
@@ -762,7 +767,7 @@ class Model:
                         if do_compare_likelihoods and 'jacobian' in exposure.meta:
                             likelihood = mpfgauss.loglike_gaussians_pixel(
                                 data=exposure.image,
-                                variance_inv=exposure.error_inverse**(1 + exposure.is_error_sigma),
+                                variance_inv=exposure.get_var_inverse(),
                                 gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                                 output=image)
                         else:
@@ -789,8 +794,7 @@ class Model:
                             'get_image_model_exposure vs get_exposure_likelihood likelihoods differ '
                             'significantly ({:5e} vs {:5e})'.format(likelihood_new, likelihood_exposure))
                 elif do_draw_image and exposure.error_inverse is not None:
-                    chi = (image - exposure.image)*exposure.error_inverse**(
-                            2**(-(not exposure.is_error_sigma)))
+                    chi = (image - exposure.image)*exposure.get_sigma_inverse()
                 else:
                     chi = None
                 if get_likelihood or plot:
@@ -845,7 +849,7 @@ class Model:
         if likefunc is None:
             likefunc = self.likefunc
         has_mask = exposure.mask_inverse is not None
-        sigma_inv = exposure.error_inverse**(2**(-(not exposure.is_error_sigma)))
+        sigma_inv = exposure.get_sigma_inverse()
         if figaxes is not None:
             if params_postfix_name_model is not None:
                 if description_model is None:
@@ -1141,13 +1145,12 @@ class Model:
             get_like_only = (get_likelihood or do_jacobian) and profiles_to_draw_now and \
                              not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
             if get_like_only:
-                sigma_inv = exposure.error_inverse**(2**(-(not exposure.is_error_sigma)))
-                variance_inv = exposure.error_inverse**(1 + exposure.is_error_sigma)
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                 if 'like_const' not in exposure.meta:
+                    sigma_inv = exposure.get_sigma_inverse()
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv/np.sqrt(2.*np.pi)))
-                    if variance_inv.size == 1:
-                        exposure.meta['like_const'] *= np.prod(exposure.image.shape)
+                    if exposure.error_inverse.size == 1:
+                        exposure.meta['like_const'] *= nx*ny
                     self.logger.info(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
                 do_jacobian_any = do_jacobian or do_fit_leastsq_prep
                 profiles_band_bad = 0
@@ -1286,9 +1289,8 @@ class Model:
                     sersic_param_factor = mpfgauss.zeros_double
                 # Don't output the image if do_fit_linear_prep is true - the next section will do that
                 likelihood = exposure.meta['like_const'] + mpf.loglike_gaussians_pixel(
-                    data=exposure.image, variance_inv=variance_inv, gaussians=profile_matrix,
-                    x_min=0, x_max=exposure.image.shape[1], y_min=0, y_max=exposure.image.shape[0],
-                    to_add=False,
+                    data=exposure.image, variance_inv=exposure.get_var_inverse(), gaussians=profile_matrix,
+                    x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False,
                     output=exposure.meta["residual"] if do_jacobian or do_fit_leastsq_prep else (
                         image if do_draw_image else mpfgauss.zeros_double), grad=grad,
                     grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
@@ -1350,8 +1352,7 @@ class Model:
                     image = mpf.make_gaussians_pixel(
                         gaussians=gaussian_profiles_to_matrix(
                             [profile[band] for profile in profiles_to_draw]),
-                        x_min=0, x_max=exposure.image.shape[1], y_min=0, y_max=exposure.image.shape[0],
-                        dim_x=exposure.image.shape[1], dim_y=exposure.image.shape[0])
+                        x_min=0, x_max=nx, y_min=0, y_max=ny, dim_x=nx, dim_y=ny)
                     if do_fit_linear_prep:
                         exposure.meta['img_model_fixed'] = np.copy(image)
                 # Ensure identical order until all dicts are ordered
@@ -1362,8 +1363,7 @@ class Model:
                     if len(profiles_flux) > 1:
                         imgprofiles = mpf.make_gaussians_pixel(
                             gaussian_profiles_to_matrix([profile[band] for profile in profiles_flux]),
-                            0, exposure.image.shape[1], 0, exposure.image.shape[0],
-                            exposure.image.shape[1], exposure.image.shape[0])
+                            0, nx, 0, ny, nx, ny)
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
