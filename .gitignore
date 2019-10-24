@@ -1,8 +1,12 @@
 .idea/
 __pycache__/
 build/
+cmake_install.cmake
+cmake-build-debug/
 CMakeCache.txt
+CMakeFiles/
 dist/
+Makefile
 multiprofit.cbp
 multiprofit.egg-info/
 multiprofit/__pycache__/
