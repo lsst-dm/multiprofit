@@ -318,11 +318,11 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
 
 
 # Convenience function to fit a model. kwargs are passed on to evaluate_model
-def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
+def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
               do_print_final=True, print_step_interval=100, plot=False, do_linear=True, **kwargs):
     """
     Convenience function to fit a model with reasonable defaults.
-    :param model: multiprofit.Model
+    :param model: multiprofit.Model; default: modeller.model
     :param modeller: multiprofit.Modeller; default: new Modeller.
     :param modellib: String; the modelling library to use if modeller is None.
     :param modellibopts: Dict; options to pass to the modeller if modeller is None.
@@ -335,6 +335,10 @@ def fit_model(model, modeller=None, modellib="scipy", modellibopts=None,
     """
     if modeller is None:
         modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
+    elif model is None:
+        raise ValueError('fit_model must be passed a non-None model or modeller')
+    else:
+        model = modeller.model
     fit = modeller.fit(
         do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear)
     # Conveniently sets the parameters to the right values too
@@ -423,8 +427,8 @@ def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel
                 cens['cenx'] += cenx
                 cens['ceny'] += ceny
                 # TODO: subtract PSF moments from object
-                for name_param, value in zip(name_params_moments_init,
-                                             Ellipse.covar_matrix_as(moments, params=False)):
+                for name_param, value in zip(
+                        name_params_moments_init, Ellipse.covar_matrix_as(moments, params=False)):
                     moments_by_name[name_param] += value
                 num_exposures_measured += 1
             bands[exposure.band] = None
