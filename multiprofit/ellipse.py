@@ -31,7 +31,8 @@ class Ellipse:
             if params:
                 sigma_x = np.sqrt(sigma_x_sq)
                 sigma_y = np.sqrt(sigma_y_sq)
-                return sigma_x, sigma_y, offdiag/(sigma_x*sigma_y)
+                denom = (sigma_x*sigma_y)
+                return sigma_x, sigma_y, offdiag/denom if denom > 0 else 0
             else:
                 return sigma_x_sq, sigma_y_sq, offdiag
 
