@@ -561,8 +561,8 @@ class Model:
         if not np.all(passed):
             if do_plot_if_failed:
                 fig, axes = plt.subplots(ncols=3, nrows=2)
-                axes[0][0].imshow(image)
-                axes[0][1].imshow(image_new)
+                axes[0][0].imshow(np.log10(image))
+                axes[0][1].imshow(np.log10(image_new))
                 axes[0][2].imshow(passed+0.)
                 axes[1][0].imshow((image_new-image)/dx)
                 axes[1][1].imshow(jacobian[:, :, idx_param+1])
