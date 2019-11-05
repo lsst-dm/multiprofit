@@ -479,6 +479,7 @@ def fit_galaxy(
     :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
     :param print_step_interval: int; number of steps to run before printing output
     :param logger: logging.Logger; a logger to print messages and be passed to model(ler)s
+    :param print_exception: bool; whether to print the first exception encountered and the stack trace
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
         key='fits': value=array of fit results, key='modeltype': value =
@@ -730,10 +731,11 @@ def fit_galaxy(
                         fits.append(fit2)
                     fits_by_engine[engine][name_model] = {"fits": fits, "modeltype": modeltype}
                 except Exception as e:
-                    print("Error fitting galaxy {}:".format(name))
-                    print(e)
                     trace = traceback.format_exc()
-                    print(trace)
+                    if print_exception:
+                        print("Error fitting galaxy {}:".format(name))
+                        print(e)
+                        print(trace)
                     fits_by_engine[engine][name_model] = e, trace
     if plot:
         if len(bands) > 1:
