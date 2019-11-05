@@ -1124,6 +1124,7 @@ class Model:
         if meta_model['use_fast_gauss']:
             profiles_left = []
             profiles_to_draw = []
+            profiles_to_fit_linear_ids = []
             profiles_to_fit_linear = {}
             do_prep_both = do_fit_linear_prep and do_fit_leastsq_prep
             profiles_to_draw_now = []
@@ -1135,6 +1136,7 @@ class Model:
                     if do_fit_linear_prep and not params['param_flux'].fixed:
                         id_param_flux = id(params['param_flux'])
                         if id_param_flux not in profiles_to_fit_linear:
+                            profiles_to_fit_linear_ids.append(id_param_flux)
                             profiles_to_fit_linear[id_param_flux] = ([], params['param_flux'])
                         profiles_to_fit_linear[id_param_flux][0].append(profile)
                     else:
@@ -1373,7 +1375,7 @@ class Model:
                     if do_fit_linear_prep:
                         exposure.meta['img_model_fixed'] = np.copy(image)
                 # Ensure identical order until all dicts are ordered
-                for id_flux in np.sort(list(profiles_to_fit_linear.keys())):
+                for id_flux in profiles_to_fit_linear_ids:
                     profiles_flux, param_flux = profiles_to_fit_linear[id_flux]
                     # Draw all of the profiles together if there are multiple; otherwise
                     # make_gaussian_pixel is faster
