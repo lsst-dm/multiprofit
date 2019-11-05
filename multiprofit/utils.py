@@ -21,6 +21,7 @@
 
 
 import numpy as np
+from scipy import ndimage
 
 
 # Remove negative elements in an array and preserve the sum by zeroing the smallest positive elements
@@ -80,47 +81,86 @@ def mag_to_flux(ndarray):
 # TODO: replace with the stack's method (in meas_?)
 def estimate_ellipse(
         img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0, do_recenter=True,
-        return_cens=False, validate=True):
-    if validate:
+        return_cens=False, validate=True, contiguous=False, pixel_min=None, num_pix_min=2,
+        raise_on_fail=False):
+    """
+
+    :param img: ndarray; an image of a source to estimate the moments of.
+    :param cenx, ceny: float; initial estimate of the centroid of the source.
+    :param denoise: bool; whether to attempt to naively de-noise the image by zeroing all negative pixels and
+        the faintest positive pixels while conserving the total flux.
+    :param deconvolution_matrix: ndarray; a covariance matrix to subtract from the moments to deconvolve them,
+        e.g. for PSF estimation.
+    :param sigma_sq_min: float; the minimum variance to return, especially if deconvolving.
+    :param do_recenter: bool; whether to iteratively re-estimate the centroid.
+    :param return_cens: bool; whether to return the centroid.
+    :param validate: bool; whether to check if the image has positive net flux before processing.
+    :param contiguous: bool; whether to keep only the contiguous above-threshold pixels around the centroid.
+    :param pixel_min: float; the minimum threshold pixel value. Default 0.
+    :param num_pix_min: int; the minimum number of positive pixels required for processing.
+    :param raise_on_fail: bool; whether to raise an Exception on any failure instead of attempting to
+        continue by not strictly obeying the inputs.
+    :return: inertia: ndarray; the moment of inertia/covariance matrix.
+        cenx, ceny: The centroids, if return_cens is True.
+    """
+    if validate or denoise:
         sum_img = np.sum(img)
+    if validate and raise_on_fail:
         if not sum_img > 0:
             raise RuntimeError(f"Tried to estimate ellipse for img(shape={img.shape}, sum={sum_img})")
-    imgmeas = absconservetotal(np.copy(img)) if denoise else img
     if cenx is None:
-        cenx = imgmeas.shape[1]/2.
+        cenx = img.shape[1]/2.
     if ceny is None:
-        ceny = imgmeas.shape[0]/2.
-    y_0, x_0 = np.nonzero(imgmeas)
-    flux = imgmeas[y_0, x_0]
-    fluxsum = np.sum(flux)
-    y = y_0 + 0.5 - ceny
-    x = x_0 + 0.5 - cenx
+        ceny = img.shape[0]/2.
+    pixel_min = 0 if pixel_min is None else np.max([0, pixel_min])
+    if denoise and sum_img > 0:
+        img_meas = absconservetotal(np.copy(img))
+        mask = img_meas
+    else:
+        img_meas = img
+        mask = img > pixel_min
+    if contiguous:
+        pix_cenx, pix_ceny = round(cenx), round(ceny)
+        if img_meas[pix_ceny, pix_cenx] > pixel_min:
+            labels, _ = ndimage.label(mask)
+            mask = labels == labels[pix_ceny, pix_cenx]
+    y_0, x_0 = np.nonzero(mask)
+    num_pix = len(y_0)
+    flux = img_meas[y_0, x_0]
+    flux_sum = np.sum(flux)
+    if not num_pix >= num_pix_min:
+        if raise_on_fail:
+            raise RuntimeError(f'estimate_ellipse failed finding {num_pix}!>={num_pix_min}')
+        else:
+            finished = True
+    else:
+        finished = False
     inertia = np.zeros((2, 2))
-    finished = False
     while not finished:
+        y = y_0 + 0.5 - ceny
+        x = x_0 + 0.5 - cenx
         x_sq = x**2
         y_sq = y**2
         xy = x*y
-        inertia[0, 0] = np.sum(flux*x_sq)/fluxsum
-        inertia[0, 1] = np.sum(flux*xy)/fluxsum
-        inertia[1, 1] = np.sum(flux*y_sq)/fluxsum
+        inertia[0, 0] = np.sum(flux*x_sq)/flux_sum
+        inertia[0, 1] = np.sum(flux*xy)/flux_sum
+        inertia[1, 1] = np.sum(flux*y_sq)/flux_sum
         if do_recenter:
-            x_shift = np.sum(flux*x)/fluxsum
-            y_shift = np.sum(flux*y)/fluxsum
+            x_shift = np.sum(flux*x)/flux_sum
+            y_shift = np.sum(flux*y)/flux_sum
             finished = np.abs(x_shift) < 0.1 and np.abs(y_shift) < 0.1
             if not finished:
                 cenx += x_shift
                 ceny += y_shift
-                y = y_0 + 0.5 - ceny
-                x = x_0 + 0.5 - cenx
         else:
             finished = True
-
     if deconvolution_matrix is not None:
         inertia -= deconvolution_matrix
-        inertia[0, 0] = np.clip(inertia[0, 0], sigma_sq_min, np.Inf)
-        inertia[1, 1] = np.clip(inertia[1, 1], sigma_sq_min, np.Inf)
+    inertia[0, 0] = np.clip(inertia[0, 0], sigma_sq_min, np.Inf)
+    inertia[1, 1] = np.clip(inertia[1, 1], sigma_sq_min, np.Inf)
     inertia[1, 0] = inertia[0, 1]
+    if not np.all(np.isfinite(inertia)):
+        raise RuntimeError(f'Inertia {inertia} not all finite')
     if return_cens:
         return inertia, cenx, ceny
     return inertia

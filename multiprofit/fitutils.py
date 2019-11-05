@@ -32,7 +32,7 @@ import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref
 import multiprofit.utils as mpfutil
 import numpy as np
-from scipy import ndimage, stats
+from scipy import stats
 import sys
 import time
 import traceback
@@ -398,12 +398,12 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
 
 
 def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel_min=None, pixel_sn_min=None,
-                          cenx=0, ceny=0):
+                          cenx=0, ceny=0, contiguous=True):
     bands = {}
     fluxes = {}
     num_pix_img = None
     name_params_moments_init = mpfobj.names_params_ellipse
-    cens = dict(cenx=cenx, ceny=ceny)
+    cens = dict(cenx=0, ceny=0)
     moments_by_name = {name_param: 0 for name_param in name_params_moments_init}
     num_exposures_measured = 0
     denoise = pixel_min is None and pixel_sn_min is None
@@ -419,13 +419,11 @@ def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel
                 f'not same as first={num_pix_img}')
         if band not in bands:
             if flux_min_img is None or np.sum(img_exp) > flux_min_img:
-                if not denoise:
-                    if pixel_min is not None:
-                        pass
-                moments, cenx, ceny = mpfutil.estimate_ellipse(
-                    img_exp, denoise=denoise, return_cens=True, validate=False)
-                cens['cenx'] += cenx
-                cens['ceny'] += ceny
+                moments, cenx_band, ceny_band = mpfutil.estimate_ellipse(
+                    img_exp, denoise=denoise, return_cens=True, validate=False, contiguous=contiguous,
+                    pixel_min=pixel_min, cenx=cenx, ceny=ceny)
+                cens['cenx'] += cenx_band
+                cens['ceny'] += ceny_band
                 # TODO: subtract PSF moments from object
                 for name_param, value in zip(
                         name_params_moments_init, Ellipse.covar_matrix_as(moments, params=False)):
@@ -459,7 +457,7 @@ def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel
 def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
-        do_fit_fluxfracs=False, print_step_interval=100, logger=None, **kwargs
+        do_fit_fluxfracs=False, print_step_interval=100, logger=None, print_exception=True, **kwargs
 ):
     """
     Convenience function to fit a galaxy given some exposures with PSFs.
