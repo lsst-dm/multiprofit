@@ -90,7 +90,7 @@ void add_gaussians_pixel(
 double loglike_gaussians_pixel(
     const ndarray & data, const ndarray & variance_inv, const params_gauss & gaussians,
     double x_min, double x_max, double y_min, double y_max, bool to_add,
-    ndarray & output, ndarray & grad,
+    ndarray & output, ndarray & residual, ndarray & grad,
     ndarray_s & grad_param_map, ndarray & grad_param_factor,
     ndarray_s & sersic_param_map, ndarray & sersic_param_factor);
 }

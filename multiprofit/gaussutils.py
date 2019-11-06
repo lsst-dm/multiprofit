@@ -183,7 +183,7 @@ zeros_uint64 = np.zeros((0, 0), dtype=np.uint64)
 
 def loglike_gaussians_pixel(
         data, variance_inv, gaussians, x_min=None, x_max=None, y_min=None, y_max=None,
-        to_add=False, output=None, grad=None, grad_param_map=None, grad_param_factor=None,
+        to_add=False, output=None, residual=None, grad=None, grad_param_map=None, grad_param_factor=None,
         sersic_param_map=None, sersic_param_factor=None,
 ):
     """
@@ -199,7 +199,8 @@ def loglike_gaussians_pixel(
     :param y_min: Float; the y-coordinate of the bottom edge of the image.
     :param y_max: Float; the y-coordinate of the top edge of the image.
     :param to_add: Bool; if outputting the model, should it add to the output image or overwrite it?
-    :param output: np.array, shape==data.shape; output image for model or residual (if computing Jacobian).
+    :param output: np.array, shape==data.shape; output image for model.
+    :param residual:np.array, shape==data.shape; output image for residual.
     :param grad: np.array, shape~gaussians.shape to output likelihood gradient;
         shape==(data.shape[0],data.shape[1], N~gaussians.size) to output Jacobian
     :param grad_param_map: np.array[int], shape==gaussian.shape; optional indices of where each Gaussian
@@ -214,6 +215,8 @@ def loglike_gaussians_pixel(
     """
     if output is None:
         output = zeros_double
+    if residual is None:
+        residual = zeros_double
     if grad is None:
         grad = zeros_double
     if grad_param_map is None:
@@ -234,6 +237,6 @@ def loglike_gaussians_pixel(
         y_max = data.shape[0]
     return loglike_gaussians_pixel_pb(
         data=data, variance_inv=variance_inv, gaussians=gaussians, x_min=x_min, x_max=x_max,
-        y_min=y_min, y_max=y_max, to_add=to_add, output=output, grad=grad,
+        y_min=y_min, y_max=y_max, to_add=to_add, output=output, residual=residual, grad=grad,
         grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
         sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor)
