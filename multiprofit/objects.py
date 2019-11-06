@@ -1029,13 +1029,16 @@ class Model:
                             profile["idx_src"] = idx_src
                 else:
                     profiles_new = []
-                    for idx_psf, profile_psf in enumerate(exposure.psf.model.get_profiles(
-                            bands=[band], engine="libprofit")):
-                        fluxfrac = profile_psf[band]["flux"]
-                        ellipse_psf = Ellipse(*[profile_psf[band][var] for var in names_params])
-                        for idx_src, (ellipse_src, profile) in enumerate(ellipse_srcs):
+                    profiles_psf = exposure.psf.model.get_profiles(bands=[band], engine="libprofit")
+                    fluxfracs = []
+                    ellipses_psf = []
+                    for idx_psf, profile_psf in enumerate(profiles_psf):
+                        fluxfracs.append(profile_psf[band]["flux"])
+                        ellipses_psf.append(Ellipse(*[profile_psf[band][var] for var in names_params]))
+                    for idx_src, (ellipse_src, profile_src) in enumerate(ellipse_srcs):
+                        for idx_psf, (fluxfrac, ellipse_psf) in enumerate(zip(fluxfracs, ellipses_psf)):
                             if ellipse_src is not None:
-                                profile = copy.copy(profile)
+                                profile = copy.copy(profile_src)
                                 if is_all_fast_gauss or is_libprofit:
                                     # Needed because each PSF component will loop over the same profile object
                                     profile["flux"] *= fluxfrac
