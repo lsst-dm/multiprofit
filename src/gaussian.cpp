@@ -24,6 +24,7 @@
 #ifndef __MULTIPROFIT_GAUSSIAN_H_
 #include "gaussian.h"
 
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -274,7 +275,6 @@ enum class OutputType : unsigned char
     none      = 0,
     overwrite = 1,
     add       = 2,
-    residual  = 3,
 };
 enum class GradientType : unsigned char
 {
@@ -552,7 +552,7 @@ ndarray make_gaussian_pixel_sersic(
 }
 
 template <OutputType output_type>
-inline void gaussians_pixel_output(MatrixUncheckedMutable & output, double value, unsigned int dim1,
+inline void gaussians_pixel_output(MatrixUncheckedMutable & output, const double value, unsigned int dim1,
     unsigned int dim2) {};
 
 template <>
@@ -569,12 +569,12 @@ inline void gaussians_pixel_output<OutputType::add>(MatrixUncheckedMutable & out
     output(dim1, dim2) += value;
 }
 
-template <OutputType output_type>
+template <bool do_residual>
 inline void gaussians_pixel_residual(MatrixUncheckedMutable & output, const MatrixUnchecked & data,
     double model, unsigned int dim1, unsigned int dim2) {};
 
 template <>
-inline void gaussians_pixel_residual<OutputType::residual>(MatrixUncheckedMutable & output,
+inline void gaussians_pixel_residual<true>(MatrixUncheckedMutable & output,
     const MatrixUnchecked & data, const double model, unsigned int dim1, unsigned int dim2)
 {
     output(dim1, dim2) = data(dim1, dim2) - model;
@@ -790,11 +790,13 @@ void reset_pixel<GradientType::jacobian>(Array3UncheckedMutable & output_jac_ref
 // TODO: Reconsider whether there's a better way to do this
 // The template arguments ensure that there is no performance penalty to any of the versions of this function.
 // However, some messy validation is required as a result.
-template <OutputType output_type, bool getlikelihood, GradientType gradient_type, bool do_sersic>
+template <OutputType output_type, bool getlikelihood, bool do_residual, GradientType gradient_type,
+    bool do_sersic>
 double gaussians_pixel_template(const params_gauss & gaussians,
     const double x_min, const double x_max, const double y_min, const double y_max,
     const ndarray * const data, const ndarray * const variance_inv, ndarray * output = nullptr,
-    ndarray * grads = nullptr, ndarray_s * grad_param_map = nullptr, ndarray * grad_param_factor = nullptr,
+    ndarray * residual = nullptr, ndarray * grads = nullptr,
+    ndarray_s * grad_param_map = nullptr, ndarray * grad_param_factor = nullptr,
     std::unique_ptr<GradientsSersic> grad_sersic = nullptr)
 {
     check_is_gaussians(gaussians);
@@ -808,8 +810,14 @@ double gaussians_pixel_template(const params_gauss & gaussians,
     if(writeoutput)
     {
         check_is_matrix(output, "output image");
-        if(output->size() == 0) throw std::runtime_error("gaussians_pixel_template can't write to empty "
-            "matrix");
+        if(output->size() == 0) throw std::runtime_error(
+            "gaussians_pixel_template can't write model to empty matrix");
+    }
+    if(do_residual)
+    {
+        check_is_matrix(residual, "residual image");
+        if(residual->size() == 0) throw std::runtime_error(
+            "gaussians_pixel_template can't write residuals to empty matrix");
     }
     if(!writeoutput or !do_gradient)
     {
@@ -917,6 +925,8 @@ double gaussians_pixel_template(const params_gauss & gaussians,
     */
     MatrixUncheckedMutable outputref = writeoutput ? (*output).mutable_unchecked<2>() :
                                        (*matrix_null).mutable_unchecked<2>();
+    MatrixUncheckedMutable residual_ref = do_residual ? (*residual).mutable_unchecked<2>() :
+                                       (*matrix_null).mutable_unchecked<2>();
     MatrixSUnchecked grad_param_map_ref = do_gradient ? (*grad_param_map).unchecked<2>() :
                                           (*matrix_s_null).unchecked<2>();
     MatrixUnchecked grad_param_factor_ref = do_gradient ? (*grad_param_factor).unchecked<2>() :
@@ -1020,9 +1030,10 @@ double gaussians_pixel_template(const params_gauss & gaussians,
                 model += gaussian_pixel_add_all<gradient_type, do_sersic>(g, j, i, gaussians_ref(g, 2),
                     terms_pixel, output_jac_ref, grad_param_map_ref, grad_param_factor_ref, weights_grad,
                     terms_grad, gradients, grad_sersic_ptr);
+                //if(i == 57 && j == 88) std::cout << std::setprecision(18) << model << std::endl;
             }
             gaussians_pixel_output<output_type>(outputref, model, j, i);
-            gaussians_pixel_residual<output_type>(outputref, data_ref, model, j, i);
+            gaussians_pixel_residual<do_residual>(residual_ref, data_ref, model, j, i);
             gaussians_pixel_add_like<getlikelihood, gradient_type>(loglike, model, data_ref,
                 variance_inv_ref, j, i, is_variance_matrix);
             gaussians_pixel_add_like_grad<getlikelihood, gradient_type>(outputgradref, grad_param_map_ref,
@@ -1041,54 +1052,74 @@ GradientType get_gradient_type(const ndarray & grad)
 }
 
 // See loglike_gaussians_pixel for docs. This is just for explicit template instantiation.
-template <OutputType output_type, bool get_likelihood, bool do_sersic>
+template <OutputType output_type, bool get_likelihood, bool do_residual, bool do_sersic>
 double loglike_gaussians_pixel_getlike(
     const ndarray & data, const ndarray & variance_inv, const params_gauss & gaussians,
     const double x_min, const double x_max, const double y_min, const double y_max,
-    ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor,
-    std::unique_ptr<GradientsSersic> grad_sersic)
+    ndarray & output, ndarray & residual, ndarray & grad, ndarray_s & grad_param_map,
+    ndarray & grad_param_factor, std::unique_ptr<GradientsSersic> grad_sersic)
 {
     const GradientType gradient_type = get_gradient_type(grad);
     if(gradient_type == GradientType::loglike)
     {
-        return gaussians_pixel_template<output_type, get_likelihood, GradientType::loglike, do_sersic>(
-            gaussians, x_min, x_max, y_min, y_max, &data, &variance_inv, &output, &grad,
-            &grad_param_map, &grad_param_factor, std::move(grad_sersic));
+        return gaussians_pixel_template<
+            output_type, get_likelihood, do_residual, GradientType::loglike, do_sersic>(
+                gaussians, x_min, x_max, y_min, y_max, &data, &variance_inv, &output, &residual, &grad,
+                &grad_param_map, &grad_param_factor, std::move(grad_sersic));
     }
     else if (gradient_type == GradientType::jacobian)
     {
-        return gaussians_pixel_template<output_type, get_likelihood, GradientType::jacobian, do_sersic>(
-            gaussians, x_min, x_max, y_min, y_max, &data, &variance_inv, &output, &grad,
-            &grad_param_map, &grad_param_factor, std::move(grad_sersic));
+        return gaussians_pixel_template<
+            output_type, get_likelihood, do_residual, GradientType::jacobian, do_sersic>(
+                gaussians, x_min, x_max, y_min, y_max, &data, &variance_inv, &output, &residual, &grad,
+                &grad_param_map, &grad_param_factor, std::move(grad_sersic));
     }
     else
     {
-        return gaussians_pixel_template<output_type, get_likelihood, GradientType::none, do_sersic>(
-            gaussians, x_min, x_max, y_min, y_max, &data, &variance_inv, &output, &grad,
-            &grad_param_map, &grad_param_factor, std::move(grad_sersic));
+        return gaussians_pixel_template<
+            output_type, get_likelihood, do_residual, GradientType::none, do_sersic>(
+                gaussians, x_min, x_max, y_min, y_max, &data, &variance_inv, &output, &residual, &grad,
+                &grad_param_map, &grad_param_factor, std::move(grad_sersic));
     }
 }
 
 // See loglike_gaussians_pixel for docs. This is just for explicit template instantiation.
 template <OutputType output_type, bool get_likelihood>
-double loglike_gaussians_pixel_extra(
+double loglike_gaussians_pixel_sersic(
     const ndarray & data, const ndarray & variance_inv, const params_gauss & gaussians,
     const double x_min, const double x_max, const double y_min, const double y_max,
-    ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor,
-    std::unique_ptr<GradientsSersic> grad_sersic)
+    ndarray & output, ndarray & residual, ndarray & grad, ndarray_s & grad_param_map,
+    ndarray & grad_param_factor, std::unique_ptr<GradientsSersic> grad_sersic)
 {
     const bool do_sersic = grad_sersic != nullptr;
-    if(do_sersic)
+    const bool do_residual = residual.size() > 0;
+    if(do_residual)
     {
-        return loglike_gaussians_pixel_getlike<output_type, get_likelihood, true>(data, variance_inv,
-            gaussians, x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
-            std::move(grad_sersic));
-    }
-    else
-    {
-        return loglike_gaussians_pixel_getlike<output_type, get_likelihood, false>(data, variance_inv,
-            gaussians, x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
-            std::move(grad_sersic));
+        if(do_sersic)
+        {
+            return loglike_gaussians_pixel_getlike<output_type, get_likelihood, true, true>(
+                data, variance_inv, gaussians, x_min, x_max, y_min, y_max, output, residual, grad,
+                grad_param_map, grad_param_factor, std::move(grad_sersic));
+        }
+        else
+        {
+            return loglike_gaussians_pixel_getlike<output_type, get_likelihood, true, false>(
+                data, variance_inv, gaussians, x_min, x_max, y_min, y_max, output, residual, grad,
+                grad_param_map, grad_param_factor, std::move(grad_sersic));
+        }
+    } else {
+        if(do_sersic)
+        {
+            return loglike_gaussians_pixel_getlike<output_type, get_likelihood, false, true>(
+                data, variance_inv, gaussians, x_min, x_max, y_min, y_max, output, residual, grad,
+                grad_param_map, grad_param_factor, std::move(grad_sersic));
+        }
+        else
+        {
+            return loglike_gaussians_pixel_getlike<output_type, get_likelihood, false, false>(
+                data, variance_inv, gaussians, x_min, x_max, y_min, y_max, output, residual, grad,
+                grad_param_map, grad_param_factor, std::move(grad_sersic));
+        }
     }
 }
 
@@ -1097,20 +1128,20 @@ template <OutputType output_type>
 double loglike_gaussians_pixel_output(
     const ndarray & data, const ndarray & variance_inv, const params_gauss & gaussians,
     const double x_min, const double x_max, const double y_min, const double y_max,
-    ndarray & output, ndarray & grad, ndarray_s & grad_param_map, ndarray & grad_param_factor,
-    std::unique_ptr<GradientsSersic> grad_sersic)
+    ndarray & output, ndarray & residual, ndarray & grad, ndarray_s & grad_param_map,
+    ndarray & grad_param_factor, std::unique_ptr<GradientsSersic> grad_sersic)
 {
     const bool get_likelihood = data.size() > 0;
     if(get_likelihood)
     {
-        return loglike_gaussians_pixel_extra<output_type, true>(data, variance_inv, gaussians,
-            x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
+        return loglike_gaussians_pixel_sersic<output_type, true>(data, variance_inv, gaussians,
+            x_min, x_max, y_min, y_max, output, residual, grad, grad_param_map, grad_param_factor,
             std::move(grad_sersic));
     }
     else
     {
-        return loglike_gaussians_pixel_extra<output_type, false>(data, variance_inv, gaussians,
-            x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
+        return loglike_gaussians_pixel_sersic<output_type, false>(data, variance_inv, gaussians,
+            x_min, x_max, y_min, y_max, output, residual, grad, grad_param_map, grad_param_factor,
             std::move(grad_sersic));
     }
 }
@@ -1142,19 +1173,18 @@ double loglike_gaussians_pixel_output(
  * @param grad_param_factor Nx6 matrix of multiplicative factors for each gradient term. For example, if a
  *    Gaussian is a sub-component of a multi-Gaussian component with a total flux parameter but fixed
  *    ratios, as in multi-Gaussian Sersic models.
+ * @param output 2D output matrix of the same size as image.
  * @return The log likelihood.
  */
 double loglike_gaussians_pixel(
     const ndarray & data, const ndarray & variance_inv, const params_gauss & gaussians,
     const double x_min, const double x_max, const double y_min, const double y_max, bool to_add,
-    ndarray & output, ndarray & grad,
+    ndarray & output, ndarray & residual, ndarray & grad,
     ndarray_s & grad_param_map, ndarray & grad_param_factor,
     ndarray_s & sersic_param_map, ndarray & sersic_param_factor)
 {
-    const GradientType gradient_type = get_gradient_type(grad);
     const OutputType output_type = output.size() > 0 ? (
-            gradient_type == GradientType::jacobian ? OutputType::residual : (
-            to_add ? OutputType::add : OutputType::overwrite)) :
+            to_add ? OutputType::add : OutputType::overwrite) :
         OutputType::none;
     const bool do_sersic = sersic_param_map.size() > 0;
     std::unique_ptr<GradientsSersic> grad_sersic = do_sersic ?
@@ -1162,25 +1192,19 @@ double loglike_gaussians_pixel(
     if(output_type == OutputType::overwrite)
     {
         return loglike_gaussians_pixel_output<OutputType::overwrite>(data, variance_inv, gaussians,
-            x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
+            x_min, x_max, y_min, y_max, output, residual, grad, grad_param_map, grad_param_factor,
             std::move(grad_sersic));
     }
     else if(output_type == OutputType::add)
     {
         return loglike_gaussians_pixel_output<OutputType::add>(data, variance_inv, gaussians,
-            x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
-            std::move(grad_sersic));
-    }
-    else if(output_type == OutputType::residual)
-    {
-        return loglike_gaussians_pixel_output<OutputType::residual>(data, variance_inv, gaussians,
-            x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
+            x_min, x_max, y_min, y_max, output, residual, grad, grad_param_map, grad_param_factor,
             std::move(grad_sersic));
     }
     else
     {
         return loglike_gaussians_pixel_output<OutputType::none>(data, variance_inv, gaussians,
-            x_min, x_max, y_min, y_max, output, grad, grad_param_map, grad_param_factor,
+            x_min, x_max, y_min, y_max, output, residual, grad, grad_param_map, grad_param_factor,
             std::move(grad_sersic));
     }
 }
@@ -1191,7 +1215,7 @@ ndarray make_gaussians_pixel(
     const unsigned int dim_x, const unsigned int dim_y)
 {
     ndarray mat({dim_y, dim_x});
-    gaussians_pixel_template<OutputType::overwrite, false, GradientType::none, false>(
+    gaussians_pixel_template<OutputType::overwrite, false, false, GradientType::none, false>(
         gaussians, x_min, x_max, y_min, y_max, nullptr, nullptr, &mat);
     return mat;
 }
@@ -1201,7 +1225,7 @@ void add_gaussians_pixel(
     const double x_min, const double x_max, const double y_min, const double y_max,
     ndarray & output)
 {
-    gaussians_pixel_template<OutputType::add, true, GradientType::none, false>(
+    gaussians_pixel_template<OutputType::add, true, false, GradientType::none, false>(
         gaussians, x_min, x_max, y_min, y_max, nullptr, nullptr, &output);
 }
 }

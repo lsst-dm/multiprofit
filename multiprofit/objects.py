@@ -41,6 +41,11 @@ import seaborn as sns
 import sys
 import time
 
+try:
+    import pygmo as pg
+except ImportError:
+    pg = None
+
 
 # TODO: Make this a class?
 def get_gsparams(engineopts=None):
@@ -1029,13 +1034,16 @@ class Model:
                             profile["idx_src"] = idx_src
                 else:
                     profiles_new = []
-                    for idx_psf, profile_psf in enumerate(exposure.psf.model.get_profiles(
-                            bands=[band], engine="libprofit")):
-                        fluxfrac = profile_psf[band]["flux"]
-                        ellipse_psf = Ellipse(*[profile_psf[band][var] for var in names_params])
-                        for idx_src, (ellipse_src, profile) in enumerate(ellipse_srcs):
+                    profiles_psf = exposure.psf.model.get_profiles(bands=[band], engine="libprofit")
+                    fluxfracs = []
+                    ellipses_psf = []
+                    for idx_psf, profile_psf in enumerate(profiles_psf):
+                        fluxfracs.append(profile_psf[band]["flux"])
+                        ellipses_psf.append(Ellipse(*[profile_psf[band][var] for var in names_params]))
+                    for idx_src, (ellipse_src, profile_src) in enumerate(ellipse_srcs):
+                        for idx_psf, (fluxfrac, ellipse_psf) in enumerate(zip(fluxfracs, ellipses_psf)):
                             if ellipse_src is not None:
-                                profile = copy.copy(profile)
+                                profile = copy.copy(profile_src)
                                 if is_all_fast_gauss or is_libprofit:
                                     # Needed because each PSF component will loop over the same profile object
                                     profile["flux"] *= fluxfrac
@@ -1307,12 +1315,13 @@ class Model:
                     sersic_param_map = mpfgauss.zeros_uint64
                     sersic_param_factor = mpfgauss.zeros_double
                 # Don't output the image if do_fit_linear_prep is true - the next section will do that
+                residual = exposure.meta["residual"] if do_jacobian or do_fit_leastsq_prep else \
+                    mpfgauss.zeros_double
+                output = image if do_draw_image else mpfgauss.zeros_double
                 likelihood = exposure.meta['like_const'] + mpf.loglike_gaussians_pixel(
                     data=exposure.image, variance_inv=exposure.get_var_inverse(), gaussians=profile_matrix,
-                    x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False,
-                    output=exposure.meta["residual"] if do_jacobian or do_fit_leastsq_prep else (
-                        image if do_draw_image else mpfgauss.zeros_double), grad=grad,
-                    grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
+                    x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False, output=output, residual=residual,
+                    grad=grad, grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
                     sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor
                 )
                 # If computing the jacobian, will skip evaluating the likelihood and instead return the
@@ -1393,10 +1402,11 @@ class Model:
                             params['rho'], 0, nx, 0, ny, nx, ny))
                     if do_fit_linear_prep:
                         exposure.meta['img_models_params_free'] += [(imgprofiles, param_flux)]
-                    if image is None:
-                        image = np.copy(imgprofiles)
-                    else:
-                        image += imgprofiles
+                    if not do_draw_image:
+                        if image is None:
+                            image = np.copy(imgprofiles)
+                        else:
+                            image += imgprofiles
 
         # If there are any profiles left, render them with libprofit/galsim
         # In principle one could evaluate Gaussian mixtures with multiprofit code and render other models
@@ -1996,7 +2006,6 @@ class Modeller:
                     params_best = result.x
 
             elif self.modellib == "pygmo":
-                import pygmo as pg
                 algocmaes = algo == "cmaes"
                 algonlopt = not algocmaes
                 if algocmaes:
