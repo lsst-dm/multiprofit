@@ -1783,21 +1783,23 @@ class Modeller:
         if timing:
             tstep = time.time() - time_init
             rv += tstep
+        log_step = "print_step_interval" in self.fitinfo and self.fitinfo["print_step_interval"] is not None
         loginfo = {
             "params": params_free,
             "likelihood": likelihood,
             "prior": prior,
         }
+        if log_step and loginfo['likelihood'] is None:
+            loginfo['likelihood'] = self.model.get_likelihood()
         if timing:
             loginfo["time"] = tstep
             loginfo["time_init"] = time_init
         if "log" in self.fitinfo:
             self.fitinfo["log"].append(loginfo)
-        if ("print_step_interval" in self.fitinfo and
-                self.fitinfo["print_step_interval"] is not None):
+        if log_step:
             stepnum = len(self.fitinfo["log"])
             if stepnum % self.fitinfo["print_step_interval"] == 0:
-                self.logger.info(f"Step {stepnum}: {rv}, {loginfo}")
+                self.logger.info(f"Step {stepnum}: rv={rv}, loginfo={loginfo}")
         return rv
 
     def fit(self, params_init=None, do_print_final=True, timing=None, walltime_max=np.Inf,
