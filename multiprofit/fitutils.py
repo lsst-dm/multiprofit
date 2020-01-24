@@ -652,7 +652,7 @@ def fit_galaxy(
                         idx_paraminit = (0 if len(flag_params["init"][name_param]) == 1 else
                                          times_matched[name_param])
                         param.set_value(flag_params["init"][name_param][idx_paraminit],
-                                       transformed=False)
+                                        transformed=False)
                         times_matched[name_param] += 1
                     if plot and not param.fixed:
                         if name_param == "nser" or is_fluxrat:
@@ -1012,7 +1012,7 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
                     # Note this means that the new total flux will be some weighted sum of the best fits
                     # for each model that went into this, which may not be ideal. Oh well!
                     param_to_set.set_value(param_init.get_value(transformed=False)*fluxfracs[idx_comp],
-                                          transformed=False)
+                                           transformed=False)
             else:
                 if type(param_to_set) != type(param_init):
                     # TODO: finish this
