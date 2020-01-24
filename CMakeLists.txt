@@ -6,7 +6,5 @@ set(SOURCE_DIR "src")
 include_directories(${SOURCE_DIR})
 set(SOURCES "${SOURCE_DIR}/gaussian.cpp;${SOURCE_DIR}/gaussian_integrator.cpp")
 # Generate Python module
-find_package(Eigen3 REQUIRED)
-include_directories(${EIGEN3_INCLUDE_DIR})
 find_package(pybind11 REQUIRED)
 pybind11_add_module(_multiprofit ${SOURCES} "multiprofit/pybind11.cpp")

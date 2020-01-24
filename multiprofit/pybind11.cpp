@@ -30,8 +30,6 @@
 #endif
 
 #include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
-#include <pybind11/eigen.h>
 
 using namespace pybind11::literals;
 
