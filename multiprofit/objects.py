@@ -34,7 +34,6 @@ from multiprofit.limits import Limits
 from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
 import numpy as np
-import pyprofit as pyp
 import scipy.stats as spstats
 import scipy.optimize as spopt
 import seaborn as sns
@@ -45,6 +44,11 @@ try:
     import pygmo as pg
 except ImportError:
     pg = None
+
+try:
+    import pyprofit as pyp
+except ImportError:
+    pyp = None
 
 
 # TODO: Make this a class?
