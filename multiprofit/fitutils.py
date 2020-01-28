@@ -749,7 +749,7 @@ def fit_galaxy(
 
 def fit_galaxy_exposures(
         exposures_psfs, bands, modelspecs, results=None, plot=False, name_fit=None, redo=False,
-        redo_psfs=False, reset_images=False, loggerPsf=None, **kwargs
+        redo_psfs=False, reset_images=False, psf_sampling=1, loggerPsf=None, **kwargs
 ):
     """
     Fit a set of exposures and accompanying PSF images in the given bands with the requested model
@@ -764,6 +764,7 @@ def fit_galaxy_exposures(
     :param redo: bool; Redo any pre-existing fits in fits_by_engine?
     :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
     :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
+    :param psf_sampling: float; sampling factor for the PSF - fit sizes will be divided by this value.
     :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return: results: dict containing the following values:
@@ -826,9 +827,14 @@ def fit_galaxy_exposures(
                             name_model=name_psf, label=label, title=name_fit, figaxes=(figure, axes),
                             row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf, logger=loggerPsf)
                         if do_fit or 'object' not in psfs[idx][engine][name_psf]:
+                            model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
+                            if psf_sampling != 1:
+                                for param in model_psf.get_parameters(fixed=False):
+                                    if param.name.startswith('sigma'):
+                                        param.set_value(param.get_value(transformed=False)/psf_sampling,
+                                                        transformed=False)
                             psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
-                                band=band, engine=engine,
-                                model=psfs[idx][engine][name_psf]['modeller'].model.sources[0],
+                                band=band, engine=engine, model=model_psf,
                                 is_model_pixelated=is_psf_pixelated)
                         if plot and row_psf is not None:
                             row_psf += 1
