@@ -518,7 +518,27 @@ class Model:
 
     def __validate_jacobian_param(
             self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
-            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=False, dx_min=1e-8, dx_max=10):
+            dx_ratio=1e-6, do_raise=True, do_plot_if_failed=False, dx_min=1e-8, dx_max=10, dlldxs=None):
+        """
+
+        :param param: mpfObj.Parameter; param to validate jacobian for.
+        :param idx_param: int; index of parameter in jacobian matrix.
+        :param exposure: mpfObj.Exposure; exposure to validate jacobian on.
+        :param image: 2darray; the model image for the current parameters.
+        :param jacobian: 3darray; the jacobian matrix.
+        :param scale: float; the spatial pixel scale. Unimplemented.
+        :param engine: A valid rendering engine
+        :param engineopts: dict; engine options.
+        :param meta_model: dict; model metadata as returned by _get_image_model_exposure_setup.
+        :param dx_ratio: float; the desired dx/x for finite differencing.
+        :param do_raise: bool; raise an exception on failure?
+        :param do_plot_if_failed: bool; plot on failure?
+        :param dx_min: float; minimum absolute value for dx.
+        :param dx_max: float; maximum absolute value for dx.
+        :param dlldxs: tuple(float, list-like); the original log-likelihood, and a list to append dloglike/dx.
+            Forces an additional evaluation of the model loglike(x+dx).
+        :return: True if successful/False otherwise.
+        """
         value = param.get_value(transformed=True)
         dx = np.clip(value*dx_ratio, dx_min, dx_max)
         # Allow for roundoff errors - it need not be such a strict limit
@@ -561,13 +581,20 @@ class Model:
                     f"new={item_new} vs old={item_old}"
         if errmsg != "":
             raise RuntimeError(errmsg)
-        image_new, model, _, likelihood_new = self.get_image_model_exposure(
+        image_new, model, _, _ = self.get_image_model_exposure(
             exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
             engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False,
             verify_derivative=True)
         passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3, atol=1e-5)
         param.set_value(value, transformed=True)
-        if not np.all(passed):
+        if np.all(passed):
+            if dlldxs is not None:
+                _, _, _, likelihood_new = self.get_image_model_exposure(
+                    exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
+                    engineopts=engineopts, do_draw_image=False, scale=scale, get_likelihood=True)
+                likelihood_new -= exposure.meta['like_const']
+                dlldxs[1].append((likelihood_new - dlldxs[0])/dx)
+        else:
             if do_plot_if_failed:
                 fig, axes = plt.subplots(ncols=3, nrows=2)
                 axes[0][0].imshow(np.log10(image))
@@ -767,19 +794,23 @@ class Model:
                     jacobian = exposure.meta['jacobian']
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
                                      num_params_gauss*len(profiles)))
+                    gaussians = gaussian_profiles_to_matrix([p[band] for p in profiles])
+                    var_inv = exposure.get_var_inverse()
                     mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, variance_inv=exposure.get_var_inverse(),
-                        gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
+                        data=exposure.image, variance_inv=var_inv, gaussians=gaussians,
                         to_add=False, grad=grad)
+                    likelihood = mpfgauss.loglike_gaussians_pixel(
+                        data=exposure.image, variance_inv=var_inv, gaussians=gaussians, to_add=False)
+                    dlldxs = []
                     for idx_param, param in enumerate(params):
-                        if not self.__validate_jacobian_param(
-                            param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                            meta_model, dx_ratio=1e-6, do_raise=False, do_plot_if_failed=plot
-                        ):
-                            self.__validate_jacobian_param(
+                        for dx_ratio in [1e-6, 1e-8]:
+                            if self.__validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                                meta_model, dx_ratio=1e-8, do_raise=True, do_plot_if_failed=plot
-                            )
+                                meta_model, dx_ratio=dx_ratio, do_raise=False, do_plot_if_failed=plot,
+                                dlldxs=(likelihood, dlldxs)
+                            ):
+                                break
+                    self.logger.info(f'DLLs: [{", ".join(f"{dlldx:.3e}" for dlldx in dlldxs)}]')
 
                 if plot or (get_likelihood and likelihood_exposure is None) or (
                         do_compare_likelihoods and likelihood_exposure is not None):
@@ -857,7 +888,7 @@ class Model:
                         max_img=img_multi_plot_max, weight_per_img=weight_per_img)
                 row_figure += 1
         if clock:
-            self.logger.info(','.join(['{}={:.2e}'.format(name, value) for name, value in times.items()]))
+            self.logger.info(','.join([f'{name}={value:.2e}' for name, value in times.items()]))
         return likelihood, param_values, chis, times
 
     def get_exposure_likelihood(
