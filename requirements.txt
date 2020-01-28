@@ -1,4 +1,5 @@
 astropy
+galsim
 matplotlib
 numpy
 scipy
