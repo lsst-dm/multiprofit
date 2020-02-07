@@ -828,14 +828,19 @@ def fit_galaxy_exposures(
                             row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf, logger=loggerPsf)
                         if do_fit or 'object' not in psfs[idx][engine][name_psf]:
                             model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            if psf_sampling != 1:
-                                for param in model_psf.get_parameters(fixed=False):
-                                    if param.name.startswith('sigma'):
-                                        param.set_value(param.get_value(transformed=False)/psf_sampling,
-                                                        transformed=False)
                             psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
                                 band=band, engine=engine, model=model_psf,
                                 is_model_pixelated=is_psf_pixelated)
+                        if psf_sampling != 1:
+                            model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
+                            for param in model_psf.get_parameters(fixed=True, free=True):
+                                if param.name.startswith('sigma'):
+                                    sigma = param.get_value(transformed=False)
+                                    param.set_value(sigma/psf_sampling, transformed=False)
+                                    sigma_new = param.get_value(transformed=False)
+                                    loggerPsf.info(
+                                        f'Changed {param.name} value from {sigma:.3e} to {sigma_new:.3e}'
+                                        f' (PSF sampling={psf_sampling})')
                         if plot and row_psf is not None:
                             row_psf += 1
             exposures_psfs[idx] = (exposure, psfs[idx])
