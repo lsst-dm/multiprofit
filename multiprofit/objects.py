@@ -313,6 +313,20 @@ class Model:
             for axis, label in enumerate(labels):
                 (axes[axis].set_ylabel if do_plot_as_column or axis == 4 else axes[axis].set_title)(label)
 
+
+    @classmethod
+    def _plot_chi_hist(cls, chi, axis):
+        good_chi = chi[np.isfinite(chi)]
+        n_bins = 2*np.max([20, np.int(np.round(len(good_chi)/50))])
+        sns.distplot(good_chi, bins=n_bins, ax=axis,
+                     hist_kws={"log": True, "histtype": "step"},
+                     kde_kws={"kernel": "tri", "gridsize": n_bins//2}).set(
+            xlim=(-5, 5), ylim=(1e-4, 1)
+        )
+        x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
+        axis.plot(x, spstats.norm.pdf(x))
+
+
     @classmethod
     def _plot_exposures_color(
             cls, images, img_models, chis, figaxes, bands=None, band_string=None,
@@ -360,15 +374,7 @@ class Model:
         chi = np.array([])
         for chi_band in chis:
             chi = np.append(chi, chi_band)
-        n_bins = np.max([100, np.int(np.round(np.sum(~np.isnan(chi))/300))])
-        sns.distplot(chi[~np.isnan(chi)], bins=n_bins, ax=axes[4],
-                     hist_kws={"log": True, "histtype": "step"},
-                     kde_kws={"kernel": "tri", "gridsize": n_bins/2}).set(
-            xlim=(-5, 5), ylim=(1e-4, 1)
-        )
-        # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
-        x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
-        axes[4].plot(x, spstats.norm.pdf(x))
+        Model._plot_chi_hist(chi, axes[4])
         chisqred = np.sum(chi*chi)/len(chi)
         Model._label_figureaxes(axes, chisqred, name_model=name_model, description_model=description_model,
                                 label_img=band_string, is_first_model=is_first_model,
@@ -957,16 +963,7 @@ class Model:
                 axes[3], figaxes[0], img_chi, vertical=do_plot_as_column, do_show_labels=do_show_labels)
             if has_mask:
                 axes[3].contour(x, y, z, colors="green")
-            # Residual histogram compared to a normal distribution
-            n_bins = np.max([100, np.int(np.round(np.sum(~np.isnan(chi))/300))])
-            sns.distplot(chi[~np.isnan(chi)], bins=n_bins, ax=axes[4],
-                         hist_kws={"log": True, "histtype": "step"},
-                         kde_kws={"kernel": "tri", "gridsize": n_bins/2}).set(
-                xlim=(-5, 5), ylim=(1e-4, 1)
-            )
-            # axes[4].hist(chi[~np.isnan(chi)], bins=100, log=True, density=True, histtype="step", fill=False)
-            x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
-            axes[4].plot(x, spstats.norm.pdf(x))
+            Model._plot_chi_hist(chi, axes[4])
             Model._label_figureaxes(axes, chisqred, name_model=name_model, description_model=description_model,
                                     label_img='Band={}'.format(exposure.band), is_first_model=is_first_model,
                                     is_last_model=is_last_model, do_plot_as_column=do_plot_as_column)
