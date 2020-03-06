@@ -976,7 +976,7 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
     comps = [comp for comp in flux_comps[1:-1]]
     # Check if fluxcens all length three with a total flux parameter and two centers named cenx and ceny
     # TODO: More informative errors; check fluxes_init
-    bands = set([flux.band for flux in fluxes_init])
+    bands = {flux.band: True for flux in fluxes_init}
     num_bands = len(bands)
     for name, fluxcen in {"init": fluxcens_init, "new": fluxcens}.items():
         num_fluxcens_expect = 2 + num_bands
@@ -1283,10 +1283,10 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
     :param source:
     :return: List of new Gaussian components
     """
-    bands = set()
+    bands = {}
     for profile in profiles:
         for band in profile.keys():
-            bands.add(band)
+            bands[band] = True
     bands = list(bands)
     band_ref = bands[0]
     params = ['flux', 'sigma_x', 'sigma_y', 'rho', 'nser']
@@ -1370,4 +1370,3 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
             component_init += num_comps_to_add
 
     return components_gauss
-

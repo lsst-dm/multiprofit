@@ -458,7 +458,8 @@ class Model:
         }
         datasize = 0
         order_flux = order_params_gauss['flux']
-        param_flux_added = set()
+        # Sets aren't ordered. AAAAAAH.
+        param_flux_added = {}
         for band in bands:
             for exposure in self.data.exposures[band]:
                 exposure.meta["index_jacobian_start"] = datasize
@@ -480,7 +481,7 @@ class Model:
                 param_flux_ratio = profile_band.get("param_flux_ratio")
                 param_flux_ratio_isnt_none = param_flux_ratio is not None
                 if param_flux_ratio_isnt_none and param_flux not in param_flux_added:
-                    param_flux_added.add(param_flux)
+                    param_flux_added[param_flux] = True
                     if not param_flux_ratio.fixed:
                         num_params_free += 1
                         idx_params[param_flux] = num_params_free
