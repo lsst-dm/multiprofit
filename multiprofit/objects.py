@@ -2222,6 +2222,7 @@ class PhotometricModel:
                         unit=self.fluxes[flux.band].unit, **kwargs)
                     flux.set_value(profile_band['flux'], transformed=False)
                     comp.fluxes[i] = flux
+            comp.fluxes_dict = {flux.band: flux for flux in comp.fluxes}
         if use_fluxfracs:
             # Convert fluxes to fractions
             for band, fluxes in self.fluxes.items():
@@ -2246,7 +2247,7 @@ class PhotometricModel:
                     fluxfrac = FluxParameter(
                         band=flux.band, value=value, is_fluxratio=True, unit=None,
                         fixed=True if is_last else fixed, **kwargs)
-                    comp.fluxes[idx] = fluxfrac
+                    fluxes[idx] = fluxfrac
                     total -= values[idx]
                 self.fluxes[band] = FluxParameter(
                     band=band, value=np.sum(values), fixed=fixed, name=flux.name, is_fluxratio=False,
@@ -2256,7 +2257,7 @@ class PhotometricModel:
 
     def get_parameters(self, free=True, fixed=True, flatten=True, modifiers=True, astrometry=None):
         params_flux = [flux for flux in self.fluxes.values() if
-                      (flux.fixed and fixed) or (not flux.fixed and free)]
+                       (flux.fixed and fixed) or (not flux.fixed and free)]
         params = params_flux if flatten else [params_flux]
         for comp in self.components:
             params_comp = comp.get_parameters(free=free, fixed=fixed)
@@ -2409,6 +2410,7 @@ class Component(object, metaclass=ABCMeta):
                         i, str(type(param)), str(type(FluxParameter)))
                 )
         self.fluxes = fluxes
+        self.fluxes_dict = {flux.band: flux for flux in self.fluxes}
         self.name = name
 
 
@@ -2555,12 +2557,11 @@ class EllipticalParametricComponent(EllipticalComponent):
         if params is None:
             params = {}
 
-        flux_param_by_band = {flux.band: flux for flux in self.fluxes}
         for band in flux_by_band.keys():
-            if band not in flux_param_by_band:
+            if band not in self.fluxes_dict:
                 raise ValueError(
                     "Asked for EllipticalComponent (profile={:s}, name={:s}) model for band={:s} not in "
-                    "bands with fluxes {}".format(self.profile, self.name, band, flux_param_by_band))
+                    "bands with fluxes {}".format(self.profile, self.name, band, self.fluxes_dict))
 
         profiles = {}
         profile_base = super().get_profiles(flux_by_band, engine, cenx, ceny, params, engineopts)[0]
@@ -2568,7 +2569,7 @@ class EllipticalParametricComponent(EllipticalComponent):
         radius, axrat, ang = (np.Inf, None, None) if skip_covar else \
             mpfgauss.covar_to_ellipse(self.params_ellipse)
         for band in flux_by_band.keys():
-            flux_param_band = flux_param_by_band[band]
+            flux_param_band = self.fluxes_dict[band]
             profile = profile_base.copy()
             flux = flux_param_band.get_value(transformed=False)
             if flux_param_band.is_fluxratio:
@@ -2733,18 +2734,17 @@ class PointSourceProfile(Component):
         if not isinstance(psf, PSF):
             raise TypeError("psf type {} must be a {}".format(type(psf), PSF))
 
-        flux_param_by_band = {flux.band: flux for flux in self.fluxes}
         for band in flux_by_band.keys():
-            if band not in flux_param_by_band:
+            if band not in self.fluxes_dict:
                 raise ValueError(
                     "Called PointSourceProfile (name={:s}) get_profiles() for band={:s} not in "
-                    "bands with fluxes {}", self.name, band, flux_param_by_band)
+                    "bands with fluxes {}", self.name, band, self.fluxes_dict)
 
         # TODO: Think of the best way to do this
         # TODO: Ensure that this is getting copies - it isn't right now
         profiles = psf.model.get_profiles(engine=engine, bands=flux_by_band.keys())
         for band in flux_by_band.keys():
-            flux = flux_param_by_band[band].get_value(transformed=False)
+            flux = self.fluxes_dict[band].get_value(transformed=False)
             for profile in profiles[band]:
                 if engine == "galsim":
                     profile["profile"].flux *= flux

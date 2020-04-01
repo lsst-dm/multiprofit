@@ -1574,12 +1574,11 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
         if params is None:
             params = {}
 
-        flux_param_by_band = {flux.band: flux for flux in self.fluxes}
         for band in flux_by_band.keys():
-            if band not in flux_param_by_band:
+            if band not in self.fluxes_dict:
                 raise ValueError(
                     "Asked for EllipticalComponent (profile={:s}, name={:s}) model for band={:s} not in "
-                    "bands with fluxes {}".format(self.profile, self.name, band, flux_param_by_band))
+                    "bands with fluxes {}".format(self.profile, self.name, band, self.fluxes_dict))
 
         profile = {param.name: param.get_value(transformed=False) for param in
                    self.parameters.values()}
@@ -1600,23 +1599,21 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             if slope in MultiGaussianApproximationComponent.weights[self.profile][self.order]:
                 weights, reffs = MultiGaussianApproximationComponent.weights[self.profile][self.order][slope]
                 negatives = weights < 0
-                if any(negatives):
-                    raise RuntimeError("MultiGaussianApproximationComponent.weights[{}][{}] = {} "
-                                       "has negative weights".format(self.profile, self.order, weights))
             else:
                 weights = np.array([f[0](slope_log10) for f in self.weight_splines])
                 reffs = np.array([f[0](slope_log10) for f in self.reff_splines])
                 negatives = weights < 0
-            weights[negatives] = 0
-            if not all([0 <= w <= 1 and (s > 0 or s > 0) for w, s in zip(weights, reffs)]):
+                weights[negatives] = 0
+            if not all([(0 <= w <= 1) and (s > 0) for w, s in zip(weights, reffs)]):
                 raise RuntimeError('Weights {} not all >= 0 and <= 1 and/or reffs {} not all >=0 for slope '
                                    '{:.4e} log10(slope)={:.4e}'.format(weights, reffs, slope, slope_log10))
             weights, total = mpfutil.normalize(weights, return_sum=True)
             if get_derivatives:
                 try:
                     # Return dy/dn_ser, not dy/d(log10(nser))
-                    dweights = np.array([f[1](slope_log10)/(slope*ln10) for f in self.weight_splines])
-                    dreffs = np.array([f[1](slope_log10)/(slope*ln10) for f in self.reff_splines])
+                    dconst = 1.0/(slope*ln10)
+                    dweights = np.array([f[1](slope_log10)*dconst for f in self.weight_splines])
+                    dreffs = np.array([f[1](slope_log10)*dconst for f in self.reff_splines])
                 except Exception as e:
                     raise e
                 dweights[negatives] = 0
@@ -1629,9 +1626,9 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
         profile_base['nser'] = 0.5
         profile_base['can_do_fit_leastsq'] = True
         for band in flux_by_band.keys():
-            flux = flux_param_by_band[band].get_value(transformed=False)
+            flux = self.fluxes_dict[band].get_value(transformed=False)
             profile = profile_base.copy()
-            if flux_param_by_band[band].is_fluxratio:
+            if self.fluxes_dict[band].is_fluxratio:
                 fluxratio = np.float(flux)
                 if not 0 <= fluxratio <= 1:
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
@@ -1662,7 +1659,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
                 raise ValueError("Unimplemented rendering engine {:s}".format(engine))
             profile["pointsource"] = False
             profile["resolved"] = True
-            profile["param_flux"] = flux_param_by_band[band]
+            profile["param_flux"] = self.fluxes_dict[band]
             if is_sersic:
                 profile["param_nser"] = param_nser
 
