@@ -2161,7 +2161,7 @@ class Source:
         paramobjects = [
             self.modelastrometric.get_parameters(free, fixed, time),
             self.modelphotometric.get_parameters(free, fixed, flatten=flatten, modifiers=modifiers,
-                                                astrometry=astrometry)
+                                                 astrometry=astrometry)
         ]
         params = []
         for paramobject in paramobjects:
