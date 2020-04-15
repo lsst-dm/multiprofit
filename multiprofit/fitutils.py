@@ -685,10 +685,9 @@ def fit_galaxy(
                 values_param = np.array([x.get_value(transformed=False) for x in model.get_parameters(
                     fixed=True)])
                 if not all(np.isfinite(values_param)):
-                    raise RuntimeError('Not all params finite for model {}:'.format(name_model), values_param)
+                    raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
 
-                logger.info("Fitting model {:s} of type {:s} using engine {:s}".format(
-                    name_model, modeltype, engine))
+                logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
                 model.name = name_model
                 sys.stdout.flush()
                 if guesstype is not None:
@@ -992,25 +991,23 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
         for idx_band in range(num_bands):
             is_flux = isinstance(fluxcen[0], mpfobj.FluxParameter)
             if not is_flux or fluxcen[0].is_fluxratio:
-                raise RuntimeError("{} fluxcen[0] (type={}) isFluxParameter={} or is_fluxratio".format(
-                    name, type(fluxcen[0]), is_flux))
+                raise RuntimeError(f"{name} fluxcen[0] (type={type(fluxcen[0])}) isFluxParameter={is_flux} "
+                                   f"or is_fluxratio")
         if not (fluxcen[num_bands].name == "cenx" and fluxcen[num_bands+1].name == "ceny"):
-            raise RuntimeError("{}[{}:{}] names=({},{}) not ('cenx','ceny')".format(
-                name, num_bands, num_bands+1, fluxcen[num_bands].name, fluxcen[num_bands+1].name))
+            raise RuntimeError(f"{name}[{num_bands}:{num_bands+1}] names=({fluxcen[num_bands].name},"
+                               f"{fluxcen[num_bands+1].name}) not ('cenx','ceny')")
     for param_to_set, param_init in zip(fluxcens, fluxcens_init):
         param_to_set.set_value(param_init.get_value(transformed=False), transformed=False)
     # Check if num_comps equal
     if len(comps) != len(comps_init):
-        raise RuntimeError("Model {} has {} components but prereqs {} have a total of "
-                           "{}".format(model.name, len(comps), [x['modeltype'] for x in modelfits],
-                                       len(comps_init)))
+        raise RuntimeError(f"Model {model.name} has {len(comps)} components but prereqs "
+                           f"{[x['modeltype'] for x in modelfits]} have a total of {len(comps_init)}")
     for idx_comp, (comp_set, comp_init) in enumerate(zip(comps, comps_init)):
         if len(comp_set) != len(comp_init):
             # TODO: More informative error plz
             raise RuntimeError(
-                '[len(compset)={}, len(comp_init)={}, len(fluxfracs)={}] not identical'.format(
-                    len(comp_set), len(comp_init), len(fluxfracs)
-                ))
+                f'[len(compset)={len(comp_set)}, len(comp_init)={len(comp_init)}, '
+                f'len(fluxfracs)={len(fluxfracs)}] not identical')
         for param_to_set, (param_init, value) in zip(comp_set, comp_init):
             if isinstance(param_to_set, mpfobj.FluxParameter):
                 if has_fluxfracs:
