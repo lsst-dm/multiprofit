@@ -57,12 +57,23 @@ def covar_to_ellipse(x, use_method_eigen=True):
     :return: sigma_maj, axrat, ang: Floats of the major axis sigma, axis ratio, and position angle in degrees
         following the usual convention of countner-clockwise from the +x axis.
     """
+    vectorized = False
     if isinstance(x, Ellipse):
         is_matrix = True
         covar = x.get_covariance(matrix=True)
+    elif len(x) == 3:
+        if not all(isinstance(v, np.ndarray) for v in x):
+            raise TypeError(f"args x must all be ndarray, not {(type(v) for v in x)}")
+        lens = [len(v) for v in x]
+        if (lens[0] != lens[1]) or (lens[0] != lens[2]):
+            raise ValueError(f"lens={lens} not all equal")
+        if use_method_eigen:
+            raise ValueError(f"Can't use eigen method on vector inputs")
+        is_matrix = False
+        vectorized = True
     else:
         if not isinstance(x, np.ndarray):
-            raise TypeError("x must be ndarray or Ellipse, not {}".format(type(x)))
+            raise TypeError(f"x must be len(3), ndarray or Ellipse, not {type(x)}")
         is_matrix = x.shape == (2, 2)
         if is_matrix:
             covar = x
@@ -76,26 +87,49 @@ def covar_to_ellipse(x, use_method_eigen=True):
     ang = np.arctan2(2*offdiag, sigma_x_sq - sigma_y_sq)/2
     use_method_eigen = use_method_eigen and np.abs(np.linalg.cond(covar)) < 1e8
     if not use_method_eigen:
-        if np.pi/4 < (np.abs(ang) % np.pi) < 3*np.pi/4:
-            sin_ang_sq = np.sin(ang)**2
-            cos_ang_sq = 1-sin_ang_sq
+        if vectorized:
+            n = len(ang)
+            sin_ang_sq, cos_ang_sq = np.zeros(n), np.zeros(n)
+            cond = (np.abs(ang) % np.pi)
+            cond = (np.pi/4 < cond) & (cond < 3*np.pi/4)
+            value = np.sin(ang[cond])**2
+            sin_ang_sq[cond] = value
+            cos_ang_sq[cond] = 1 - value
+            cond = ~cond
+            value = np.cos(ang[cond])**2
+            cos_ang_sq[cond] = value
+            sin_ang_sq[cond] = 1 - value
         else:
-            cos_ang_sq = np.cos(ang)**2
-            sin_ang_sq = 1-cos_ang_sq
+            if np.pi/4 < (np.abs(ang) % np.pi) < 3*np.pi/4:
+                sin_ang_sq = np.sin(ang)**2
+                cos_ang_sq = 1 - sin_ang_sq
+            else:
+                cos_ang_sq = np.cos(ang)**2
+                sin_ang_sq = 1-cos_ang_sq
         #  == cos^2 - sin^2 == cos(2*theta)
         denom = 2.*cos_ang_sq - 1.
-        if np.abs(denom) < 1e-4 or (1 - np.abs(denom)) < 1e-4:
+        if not vectorized and (np.abs(denom) < 1e-4 or (1 - np.abs(denom)) < 1e-4):
             use_method_eigen = True
             if not is_matrix:
                 covar = Ellipse.covar_terms_as(*x)
         else:
             sigma_u = np.sqrt((cos_ang_sq*sigma_x_sq - sin_ang_sq*sigma_y_sq)/denom)
             sigma_v = np.sqrt((cos_ang_sq*sigma_y_sq - sin_ang_sq*sigma_x_sq)/denom)
-            sigma_maj = np.max([sigma_u, sigma_v])
-            axrat = sigma_u/sigma_v if sigma_u < sigma_v else sigma_v/sigma_u
-            if not 0 <= axrat <= 1:
-                raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
-                                   "sigma_u={} sigma_v={}".format(axrat, x, sigma_u, sigma_v))
+            if vectorized:
+                cond = sigma_u < sigma_v
+                sigma_maj, axrat = np.zeros(n), np.zeros(n)
+                sigma_maj[cond] = sigma_v[cond]
+                axrat[cond] = sigma_u[cond]/sigma_v[cond]
+                # I suspect that this is actually slower than writing ~cond repeatedly. Oh well.
+                cond = ~cond
+                sigma_maj[cond] = sigma_u[cond]
+                axrat[cond] = sigma_v[cond]/sigma_u[cond]
+            else:
+                sigma_maj = np.max([sigma_u, sigma_v])
+                axrat = sigma_u/sigma_v if sigma_u < sigma_v else sigma_v/sigma_u
+                if not 0 <= axrat <= 1:
+                    raise RuntimeError("Got unreasonable axis ratio {} from input={} and "
+                                       "sigma_u={} sigma_v={}".format(axrat, x, sigma_u, sigma_v))
     if use_method_eigen:
         eigenvalues, eigenvecs = np.linalg.eigh(covar)
         index_maj = np.argmax(eigenvalues)
