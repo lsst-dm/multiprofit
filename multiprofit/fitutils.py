@@ -182,8 +182,9 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
 # TODO: Fix per-component offset_xy as it's not actually working
 def get_model(
     fluxes_by_band, model_string, size_image, sigma_xs=None, sigma_ys=None, rhos=None, slopes=None,
-    fluxfracs=None, offset_xy=None, name_model="", namesrc="", n_exposures=1, engine="galsim",
-    engineopts=None, is_values_transformed=False, convertfluxfracs=False, repeat_ellipse=False, logger=None
+    fluxfracs=None, offset_xy=None, fit_background=False, name_model="", namesrc="", n_exposures=1,
+    engine="galsim", engineopts=None, is_values_transformed=False, convertfluxfracs=False,
+    repeat_ellipse=False, logger=None
 ):
     """
     Convenience function to get a multiprofit.objects.model with a single source with components with
@@ -199,6 +200,7 @@ def get_model(
     :param slopes: Float[num_components]; Profile shape (e.g. Sersic n) of each components
     :param fluxfracs: Float[num_components]; The flux fraction for each component
     :param offset_xy: Float[2][num_components]; The x-y offsets relative to source center of each component
+    :param fit_background: bool; whether to fit a flat background level per band
     :param name_model: String; a name for this model
     :param namesrc: String; a name for the source
     :param n_exposures: Int > 0; the number of exposures in each band.
@@ -293,8 +295,26 @@ def get_model(
     if convertfluxfracs:
         modelphoto.convert_param_fluxes(
             use_fluxfracs=False, transform=transforms_ref['log10'], limits=limits_ref["none"])
-    source = mpfobj.Source(modelastro, modelphoto, namesrc)
-    model = mpfobj.Model([source], data, engine=engine, engineopts=engineopts, name=name_model, logger=logger)
+    sources = [mpfobj.Source(modelastro, modelphoto, namesrc)]
+    if fit_background:
+        # The small positive value is a bit of a hack to get the initial linear fit to work
+        # (otherwise the initial background model is zero and nnls can't do anything with it)
+        param_fluxes_bg = [mpfobj.FluxParameter(
+            band, "background", 1e-9, None, limits=limits_ref["none_untransformed"],
+            transformed=False, prior=None, fixed=False, is_fluxratio=False)
+            for bandi, band in enumerate(bands)
+        ]
+        background = mpfobj.Background(param_fluxes_bg)
+        params_astrometry = [
+            mpfobj.Parameter("cenx", cenx, "pix", Limits(lower=0., upper=size_image[0]),
+                             transform=transforms_ref["none"], fixed=True),
+            mpfobj.Parameter("ceny", ceny, "pix", Limits(lower=0., upper=size_image[1]),
+                             transform=transforms_ref["none"], fixed=True),
+        ]
+        modelastro = mpfobj.AstrometricModel(params_astrometry)
+        modelphoto = mpfobj.PhotometricModel([background])
+        sources.append(mpfobj.Source(modelastro, modelphoto, namesrc))
+    model = mpfobj.Model(sources, data, engine=engine, engineopts=engineopts, name=name_model, logger=logger)
     return model
 
 
@@ -457,7 +477,8 @@ def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel
 def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
-        do_fit_fluxfracs=False, print_step_interval=100, logger=None, print_exception=True, **kwargs
+        do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
+        print_exception=True, **kwargs
 ):
     """
     Convenience function to fit a galaxy given some exposures with PSFs.
@@ -475,9 +496,11 @@ def fit_galaxy(
     :param img_multi_plot_max: float; Maximum value of summed images when plotting multi-band.
     :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB)
     :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
+    :param fit_background: bool; whether to fit a flat background level per band
     :param print_step_interval: int; number of steps to run before printing output
     :param logger: logging.Logger; a logger to print messages and be passed to model(ler)s
     :param print_exception: bool; whether to print the first exception encountered and the stack trace
+    :param kwargs: dict; additional keyword arguments to pass to get_init_from_moments
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
         key='fits': value=array of fit results, key='modeltype': value =
@@ -545,7 +568,7 @@ def fit_galaxy(
                 fluxes, modeltype, num_pix_img, [moments_by_name["sigma_x"]],
                 [moments_by_name["sigma_y"]], [moments_by_name["rho"]],
                 engine=engine, engineopts=engineopts, convertfluxfracs=not do_fit_fluxfracs,
-                repeat_ellipse=True, name_model=name_model, logger=logger
+                fit_background=fit_background, repeat_ellipse=True, name_model=name_model, logger=logger
             )
             params_fixed_default[modeltype] = [
                 param.fixed for param in model_default.get_parameters(fixed=True)]
@@ -638,8 +661,9 @@ def fit_galaxy(
                 for param in model.get_parameters(fixed=True):
                     is_flux = isinstance(param, mpfobj.FluxParameter)
                     is_fluxrat = is_fluxratio(param)
-                    name_param = param.name if not is_flux else (
-                        'flux' + ('ratio' if is_fluxrat else '') + '_' + param.band)
+                    is_bg = param.name == 'background'
+                    name_param = param.name if not is_flux else f'flux{("ratio" if is_fluxrat else "")}' \
+                                                                f'_{param.band}'
                     if name_param in flag_params['fixed'] or (is_flux and 'flux' in flag_params['fixed']):
                         param.fixed = True
                     # TODO: Figure out a better way to reset modifiers to be free
@@ -660,7 +684,7 @@ def fit_galaxy(
                     # Try to set a hard limit on params that need them with a logit transform
                     # This way even methods that don't respect bounds will have to until the transformed
                     # value reaches +/-inf, at least
-                    if name_param in values_max:
+                    if (name_param in values_max) and (not is_bg):
                         value_min = 0 if name_param not in values_min else values_min[name_param]
                         value_max = values_max[name_param]
                         transform = param.transform.transform
@@ -933,8 +957,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
     if fluxfracs is None:
         fluxfracs = 1./np.array(chisqreds)
         fluxfracs = fluxfracs/np.sum(fluxfracs)
-    if not len(model.sources) == 1:
-        raise RuntimeError("Can't init model with multiple sources from fits")
+    if not len([s for s in model.sources if not s.is_sky()]) == 1:
+        raise RuntimeError("Can't init model with multiple non-background sources from fits")
     has_fluxfracs = len(model.sources[0].modelphotometric.fluxes) > 0
     if has_fluxfracs:
         total = 1
@@ -1057,7 +1081,7 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
                 for param in params:
                     init = None
                     is_sersic = do_sersic and param.name == 'nser'
-                    if isinstance(param, mpfobj.FluxParameter):
+                    if isinstance(param, mpfobj.FluxParameter) and not (param.name == 'background'):
                         init = params_init['flux_' + param.band]
                     elif is_sersic or param.name in names:
                         init = params_init[param.name]
@@ -1223,21 +1247,27 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if is_mg_to_gauss and i == 0:
+                is_sky = num_sources*[False]
                 for idx_src in range(num_sources):
-                    components_new.append(get_multigaussians(
-                        model.sources[idx_src].get_profiles(bands=bands, engine='libprofit'),
-                        params_inherit=params_inherit, params_modify=params_modify,
-                        num_components=num_components, source=model_new.sources[idx_src]))
-                    components_old = model.sources[idx_src].modelphotometric.components
-                    for modeli in [model, model_new]:
-                        modeli.sources[idx_src].modelphotometric.components = []
-                    values_param_init = [param.get_value(transformed=False)
-                                         for param in model.get_parameters(fixed=True)]
-                    model.sources[idx_src].modelphotometric.components = components_old
+                    is_sky[idx_src] = model.sources[idx_src].is_sky()
+                    if not is_sky[idx_src]:
+                        components_new.append(get_multigaussians(
+                            model.sources[idx_src].get_profiles(bands=bands, engine='libprofit'),
+                            params_inherit=params_inherit, params_modify=params_modify,
+                            num_components=num_components, source=model_new.sources[idx_src]))
+                        components_old = model.sources[idx_src].modelphotometric.components
+                        for modeli in [model, model_new]:
+                            modeli.sources[idx_src].modelphotometric.components = []
+                        values_param_init = [param.get_value(transformed=False)
+                                             for param in model.get_parameters(fixed=True)]
+                        model.sources[idx_src].modelphotometric.components = components_old
                 model = model_new
         if is_mg_to_gauss:
-            for idx_src in range(len(components_new)):
-                model.sources[idx_src].modelphotometric.components = components_new[idx_src]
+            idx_new = 0
+            for idx_src in range(num_sources):
+                if not is_sky[idx_src]:
+                    model.sources[idx_src].modelphotometric.components = components_new[idx_new]
+                    idx_new += 1
     return model, guesstype
 
 
@@ -1292,7 +1322,7 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
     for band in bands:
         # Keep these as lists to make the check against values[band_ref] below easier (no need to call np.all)
         values[band] = {
-            'slope' if name == 'nser' else name: [profile[band][name] for profile in profiles]
+            ('slope' if (name == 'nser') else name): [profile[band][name] for profile in profiles]
             for name in params
         }
         # mag_to_flux needs a numpy array

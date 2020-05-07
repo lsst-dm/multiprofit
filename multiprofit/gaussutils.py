@@ -211,6 +211,7 @@ def multigauss2drquant(weightsizes, quant=0.5, xmin=0, xmax=1e5):
     return spopt.brentq(multigauss2dint, a=xmin, b=xmax, args=(weightsizes, quant))
 
 
+zero_double = np.zeros(0)
 zeros_double = np.zeros((0, 0))
 zeros_uint64 = np.zeros((0, 0), dtype=np.uint64)
 
@@ -218,7 +219,7 @@ zeros_uint64 = np.zeros((0, 0), dtype=np.uint64)
 def loglike_gaussians_pixel(
         data, variance_inv, gaussians, x_min=None, x_max=None, y_min=None, y_max=None,
         to_add=False, output=None, residual=None, grad=None, grad_param_map=None, grad_param_factor=None,
-        sersic_param_map=None, sersic_param_factor=None,
+        sersic_param_map=None, sersic_param_factor=None, background=None,
 ):
     """
     A wrapper for the pybind11 loglike_gaussians_pixel function with reasonable default values for all of the
@@ -245,6 +246,7 @@ def loglike_gaussians_pixel(
         Sersic index of multi-Gaussian profiles.
     :param sersic_param_factor: np.array[float], shape==gaussian.shape[1]; as grad_param_factor but for the
         Sersic index of multi-Gaussian profiles.
+    :param background: np.array[float], shape==(1); a constant background level; default zero.
     :return: the log-likelihood of the model, or zero for Jacobian (the residuals are output instead).
     """
     if output is None:
@@ -269,8 +271,10 @@ def loglike_gaussians_pixel(
         y_min = 0
     if y_max is None:
         y_max = data.shape[0]
+    if background is None:
+        background = zero_double
     return loglike_gaussians_pixel_pb(
         data=data, variance_inv=variance_inv, gaussians=gaussians, x_min=x_min, x_max=x_max,
         y_min=y_min, y_max=y_max, to_add=to_add, output=output, residual=residual, grad=grad,
         grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
-        sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor)
+        sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor, background=background)

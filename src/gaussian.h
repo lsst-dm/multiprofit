@@ -92,6 +92,7 @@ double loglike_gaussians_pixel(
     double x_min, double x_max, double y_min, double y_max, bool to_add,
     ndarray & output, ndarray & residual, ndarray & grad,
     ndarray_s & grad_param_map, ndarray & grad_param_factor,
-    ndarray_s & sersic_param_map, ndarray & sersic_param_factor);
+    ndarray_s & sersic_param_map, ndarray & sersic_param_factor,
+    ndarray & background);
 }
 #endif
