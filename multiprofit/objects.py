@@ -592,8 +592,9 @@ class Model:
             exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
             engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False,
             verify_derivative=True)
-        passed = np.isclose((image_new-image)/dx, jacobian[:, :, idx_param+1], rtol=1e-3, atol=1e-5)
-        param.set_value(value, transformed=True)
+        grad_findif = (image_new-image)/dx
+        grad_jac = jacobian[:, :, idx_param+1]
+        passed = np.isclose(grad_findif, grad_jac, rtol=1e-3, atol=1e-5)
         if np.all(passed):
             if dlldxs is not None:
                 _, _, _, likelihood_new = self.get_image_model_exposure(
@@ -601,15 +602,25 @@ class Model:
                     engineopts=engineopts, do_draw_image=False, scale=scale, get_likelihood=True)
                 likelihood_new -= exposure.meta['like_const']
                 dlldxs[1].append((likelihood_new - dlldxs[0])/dx)
+            param.set_value(value, transformed=True)
         else:
+            param.set_value(value, transformed=True)
             if do_plot_if_failed:
-                fig, axes = plt.subplots(ncols=3, nrows=2)
-                axes[0][0].imshow(np.log10(image))
-                axes[0][1].imshow(np.log10(image_new))
-                axes[0][2].imshow(passed+0.)
-                axes[1][0].imshow((image_new-image)/dx)
-                axes[1][1].imshow(jacobian[:, :, idx_param+1])
-                axes[1][2].imshow(jacobian[:, :, idx_param+1]/(image_new-image)*dx)
+                ncols = 3
+                plots = (
+                    (np.log10(image), f'Model(x)'),
+                    (np.log10(image_new), f'Model(x+dx)'),
+                    (passed+0., 'Passed'),
+                    (grad_findif, 'Fin. Dif.'),
+                    (grad_jac, 'Jacobian'),
+                    (grad_jac/grad_findif, 'Jac./Fin.Dif. ratio'),
+                )
+                fig, axes = plt.subplots(ncols=ncols, nrows=int(np.ceil(len(plots)/ncols)))
+                for idx_ax, (img_plot, title) in enumerate(plots):
+                    ax_plot = axes[idx_ax // ncols][idx_ax % ncols]
+                    ax_plot.imshow(img_plot)
+                    ax_plot.set_title(title)
+                plt.suptitle(f'Failed jac. {param.name}={value:.3e} dx={dx:.3e}')
                 plt.show()
             if do_raise:
                 raise RuntimeError(
