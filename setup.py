@@ -93,7 +93,7 @@ setup(
     author='Dan Taranu',
     author_email='dan.s.taranu@gmail.com',
     description='Multi-(Object/Band) Source Profile Fitting for Astronomy',
-     long_description='',
+    long_description='',
     packages=['multiprofit'],
     ext_modules=[CMakeExtension('_multiprofit')],
     # add custom build_ext command

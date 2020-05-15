@@ -470,6 +470,7 @@ class Model:
                     exposure.error_inverse = exposure.error_inverse**2
                     exposure.is_error_sigma = False
             gpmb_indices, gpmb_params = grad_param_maps[band]
+
             for idx, profile in enumerate(profiles):
                 gpmb_indices_row = gpmb_indices[idx, :]
                 profile_band = profile[band]
@@ -928,8 +929,8 @@ class Model:
 
             axes = figaxes[1]
             if has_mask:
-                xlist = np.arange(0, img_model.shape[1])
-                ylist = np.arange(0, img_model.shape[0])
+                xlist = np.arange(img_model.shape[1])
+                ylist = np.arange(img_model.shape[0])
                 x, y = np.meshgrid(xlist, ylist)
             if max_img is None:
                 if has_mask:
@@ -1387,7 +1388,7 @@ class Model:
                             idx_component = grad_param_map[idx_ratio, order_flux]
                             flux_ratio = param_flux_ratio.get_value(transformed=False)
                             flux_ratios_neg_p_one[ratio_iter] = 1 - flux_ratio
-                            flux_remaining[ratio_iter+1] = flux_remaining[ratio_iter]*(1-flux_ratio)
+                            flux_remaining[ratio_iter + 1] = flux_remaining[ratio_iter] * (1-flux_ratio)
                             if not is_flux_fixed:
                                 # Cheat a little and use the extra residual entry in index zero for temp space
                                 # ... I was considering removing it before this
@@ -1952,7 +1953,7 @@ class Modeller:
             for band in bands:
                 exposures = self.model.data.exposures[band]
                 for exposure in exposures:
-                    idx_end = idx_begin+datasizes[idx_exposure]
+                    idx_end = idx_begin + datasizes[idx_exposure]
                     maskinv = exposure.mask_inverse
                     for idx_free, (img_free, _) in enumerate(exposure.meta['img_models_params_free']):
                         x[idx_begin:idx_end, idx_param + idx_free] = (
