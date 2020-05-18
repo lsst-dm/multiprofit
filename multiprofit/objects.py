@@ -35,6 +35,7 @@ from multiprofit.limits import Limits
 from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
 import numpy as np
+import scipy.special as spspec
 import scipy.stats as spstats
 import scipy.optimize as spopt
 import seaborn as sns
@@ -426,20 +427,21 @@ class Model:
             sersic_param_maps: As grad_param_maps but specifically for Sersic index parameters.
             can_do_fit_leastsq: If False, then both param_maps are set to None.
         """
-        return_none = (None, None, False)
+        return_none = (None, None, False, None, None, None)
         if engine == 'galsim' and not (
                 engineopts is not None and engineopts.get("drawmethod") == draw_method_pixel["galsim"]):
             return return_none
         params = self.get_parameters(fixed=True)
         fixed = np.zeros(len(params))
-        num_params_free = 0
+        n_params_free = 0
         num_sersic_free = 0
         idx_params = {param: 0 for param in params}
+        n_priors = 0 if not self.priors else np.sum([len(p) for p in self.priors])
         for idx, param in enumerate(params):
             fixed[idx] = param.fixed
             if not param.fixed:
-                idx_params[param] = num_params_free + 1
-                num_params_free += 1
+                idx_params[param] = n_params_free + 1
+                n_params_free += 1
                 if param.name == "nser":
                     num_sersic_free += 1
         profiles = self.get_profiles(bands=bands, engine="libprofit")
@@ -463,9 +465,9 @@ class Model:
         param_flux_added = {}
         for band in bands:
             for exposure in self.data.exposures[band]:
-                exposure.meta["index_jacobian_start"] = datasize
+                exposure.meta['index_jacobian_start'] = datasize
                 datasize += exposure.image.size
-                exposure.meta["index_jacobian_end"] = datasize
+                exposure.meta['index_jacobian_end'] = datasize
                 if exposure.is_error_sigma:
                     exposure.error_inverse = exposure.error_inverse**2
                     exposure.is_error_sigma = False
@@ -485,8 +487,8 @@ class Model:
                 if param_flux_ratio_isnt_none and param_flux not in param_flux_added:
                     param_flux_added[param_flux] = True
                     if not param_flux_ratio.fixed:
-                        num_params_free += 1
-                        idx_params[param_flux] = num_params_free
+                        n_params_free += 1
+                        idx_params[param_flux] = n_params_free
                 is_bg = profile.get('background')
                 # TODO: Make this {'flux': 0} if is_bg when this works
                 orders_profile = {} if is_bg else order_params_gauss
@@ -498,24 +500,30 @@ class Model:
                         gpmb_indices_row[idx_param] = idx_params[param]
                     params_to_append.append(param)
                 gpmb_params.append(params_to_append)
-        if self.jacobian is None or self.jacobian.shape != (datasize, num_params_free+1):
-            self.jacobian = np.zeros((datasize, num_params_free+1))
+
+        datasize += n_priors
+        n_params_jac = n_params_free + 1
+        jacobian_prior, residuals_prior = None, None
+        if self.jacobian is None or self.jacobian.shape != (datasize, n_params_jac):
+            self.jacobian = np.zeros((datasize + n_priors, n_params_jac))
+            jacobian_prior = self.jacobian[datasize:, ].view()
+            jacobian_prior.shape = (n_priors, n_params_jac)
         if self.residuals is None or self.residuals.shape != (datasize,):
-            self.residuals = np.zeros(datasize)
+            self.residuals = np.zeros(datasize + n_priors)
+            residuals_prior = self.residuals[datasize:].view()
         for band in bands:
             for exposure in self.data.exposures[band]:
-                exposure.meta["jacobian"] = self.jacobian[exposure.meta["index_jacobian_start"]:
-                                                          exposure.meta["index_jacobian_end"], ].view()
-                exposure.meta["jacobian"].shape = (exposure.image.shape[0], exposure.image.shape[1],
-                                                   num_params_free+1)
-                exposure.meta["residual"] = self.residuals[exposure.meta["index_jacobian_start"]:
-                                                           exposure.meta["index_jacobian_end"]].view()
-                exposure.meta["residual"].shape = exposure.image.shape
+                start, end = (exposure.meta[f'index_jacobian_{pos}'] for pos in ('start', 'end'))
+                exposure.meta['jacobian_img'] = self.jacobian[start:end, ].view()
+                exposure.meta['jacobian_img'].shape = (
+                    exposure.image.shape[0], exposure.image.shape[1], n_params_jac)
+                exposure.meta['residual_img'] = self.residuals[start:end].view()
+                exposure.meta['residual_img'].shape = exposure.image.shape
         for src in self.sources:
             for comp in src.modelphotometric.components:
                 if hasattr(comp, 'do_return_all_profiles'):
                     comp.do_return_all_profiles = True
-        return grad_param_maps, sersic_param_maps, True
+        return grad_param_maps, sersic_param_maps, True, jacobian_prior, residuals_prior, idx_params
 
     def do_fit_leastsq_cleanup(self, bands):
         self.grad_param_maps = None
@@ -527,6 +535,8 @@ class Model:
                         del exposure.meta[item]
         self.jacobian = None
         self.residuals = None
+        self.jacobian_prior = None
+        self.residuals_prior = None
 
     def __validate_jacobian_param(
             self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
@@ -651,8 +661,9 @@ class Model:
                  do_plot_multi=False, figure=None, axes=None, row_figure=None, name_model="Model",
                  description_model=None, params_postfix_name_model=None, do_draw_image=False, scale=1,
                  clock=False, do_plot_as_column=False,
-                 img_plot_maxs=None, img_multi_plot_max=None, weights_band=None, do_fit_linear_prep=False,
-                 do_fit_leastsq_prep=False, do_jacobian=False, do_verify_jacobian=False,
+                 img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
+                 do_fit_linear_prep=False, do_fit_leastsq_prep=False, do_fit_nonlinear_prep=False,
+                 do_jacobian=False, do_verify_jacobian=False,
                  do_compare_likelihoods=False, grad_loglike=None):
         """
         Evaluate a model, plot and/or benchmark, and optionally return the likelihood and derived images.
@@ -693,6 +704,8 @@ class Model:
         :param weights_band: dict; key band: weight for scaling each band in multiband plots.
         :param do_fit_linear_prep: bool; do prep work to fit a linear model?
         :param do_fit_leastsq_prep: bool; do prep work for a least squares fit?
+        :param do_fit_nonlinear_prep: bool; do prep work to fit a non-linear model?
+            Ignored if do_leastsq_prep and leastsq prep succeeds.
         :param do_jacobian: bool; evaluate the Jacobian?
         :param do_verify_jacobian: bool; verify the Jacobian if do_fit_leastsq_prep by comparing to
             finite differencing
@@ -770,10 +783,13 @@ class Model:
         if do_plot_multi:
             weight_per_img = []
         if do_fit_leastsq_prep:
-            self.grad_param_maps, self.param_maps['sersic'], self.can_do_fit_leastsq = \
+            self.grad_param_maps, self.param_maps['sersic'], self.can_do_fit_leastsq,\
+                self.jacobian_prior, self.residuals_prior, self.params_prior_jacobian = \
                 self._do_fit_leastsq_prep(bands, engine, engineopts)
             if not self.can_do_fit_leastsq:
                 do_fit_leastsq_prep = False
+        if not do_fit_leastsq_prep and do_fit_nonlinear_prep and self.priors:
+            self.residuals_prior = np.zeros(np.sum([len(p) for p in self.priors]))
         if clock:
             times["setup"] = time.time() - time_now
             time_now = time.time()
@@ -793,9 +809,9 @@ class Model:
                     exposure, profiles=profiles, meta_model=meta_model, engine=engine,
                     engineopts=engineopts, do_draw_image=do_draw_image or plot or do_compare_likelihoods,
                     scale=scale, clock=clock, times=times, do_fit_linear_prep=do_fit_linear_prep,
-                    do_fit_leastsq_prep=do_fit_leastsq_prep, do_jacobian=do_jacobian,
-                    get_likelihood=get_likelihood, is_likelihood_log=is_likelihood_log,
-                    grad_loglike=grad_loglike)
+                    do_fit_leastsq_prep=do_fit_leastsq_prep, do_fit_nonlinear_prep=do_fit_nonlinear_prep,
+                    do_jacobian=do_jacobian, get_likelihood=get_likelihood,
+                    is_likelihood_log=is_likelihood_log, grad_loglike=grad_loglike)
                 if clock:
                     name_exposure = '_'.join([band, str(idx_exposure)])
                     times['_'.join([name_exposure, 'modeltotal'])] = time.time() - time_now
@@ -814,7 +830,7 @@ class Model:
 
                 # Validate the Jacobian by comparing to finite differencing if requested
                 if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian' in exposure.meta:
-                    jacobian = exposure.meta['jacobian']
+                    jacobian = exposure.meta['jacobian_img']
                     has_bg = 0
                     flux_bg = 0.
                     for p in profiles:
@@ -1159,8 +1175,8 @@ class Model:
     def get_image_model_exposure(
             self, exposure, profiles=None, meta_model=None, engine=None, engineopts=None, do_draw_image=True,
             scale=1, clock=False, times=None, do_fit_linear_prep=False, do_fit_leastsq_prep=False,
-            do_jacobian=False, get_likelihood=False, is_likelihood_log=True, verify_derivative=False,
-            grad_loglike=None):
+            do_fit_nonlinear_prep=False, do_jacobian=False, get_likelihood=False, is_likelihood_log=True,
+            verify_derivative=False, grad_loglike=None):
         """
             Draw model image for one exposure with one PSF
 
@@ -1276,7 +1292,7 @@ class Model:
                         grad = grad_loglike
                         do_jacobian = False
                     else:
-                        grad = exposure.meta['jacobian']
+                        grad = exposure.meta['jacobian_img']
                         if do_fit_leastsq_prep:
                             grad.fill(0)
                             if level_bg is not None:
@@ -1392,7 +1408,7 @@ class Model:
                     sersic_param_map = mpfgauss.zeros_uint64
                     sersic_param_factor = mpfgauss.zeros_double
                 # Don't output the image if do_fit_linear_prep is true - the next section will do that
-                residual = exposure.meta["residual"] if do_jacobian or do_fit_leastsq_prep else \
+                residual = exposure.meta['residual_img'] if do_jacobian or do_fit_leastsq_prep else \
                     mpfgauss.zeros_double
                 output = image if do_draw_image else mpfgauss.zeros_double
                 likelihood = exposure.meta['like_const'] + mpf.loglike_gaussians_pixel(
@@ -1767,15 +1783,35 @@ class Model:
                       src.get_param_names(free=free, fixed=fixed)]
         return names
 
-    def get_prior_value(self, free=True, fixed=True, log=True):
-        return 0. if log else 1.
+    def get_prior_value(self, log=True):
+        if self.priors:
+            idx_params = self.params_prior_jacobian
+            prior_log = 0
+            idx_prior = 0
+            for prior in self.priors:
+                prior_value, residuals, jacobians = prior.calc_residual(calc_jacobian=True)
+                prior_log += prior_value
+                n_res = len(residuals)
+                sli = slice(idx_prior, idx_prior + n_res)
+                try:
+                    self.residuals_prior[sli] = residuals
+                except Exception as error:
+                    pass
+                for param, jac_param in jacobians.items():
+                    idx_param = idx_params.get(param)
+                    if idx_param is not None:
+                        self.jacobian_prior[sli, idx_param] += jac_param
+                idx_prior += n_res
+            return prior_log if log else 10**prior_log
+        else:
+            return 0. if log else 1.
 
     def get_likelihood(self, params=None, data=None, log=True, **kwargs):
         likelihood = self.evaluate(params, data, is_likelihood_log=log, **kwargs)[0]
         return likelihood
 
     def __init__(self, sources, data=None, likefunc="normal", engine=None, engineopts=None, name="",
-                 logger=None):
+                 logger=None, priors=None):
         if engine is None:
             engine = "libprofit"
         for i, source in enumerate(sources):
@@ -1799,12 +1835,16 @@ class Model:
         self.grad_param_maps = None
         self.grad_param_free = None
         self.jacobian = None
+        self.jacobian_prior = None
         self.param_maps = {'sersic': None}
         self.likefunc = likefunc
         self.name = name
         self.logger = logger
         self.residuals = None
+        self.residuals_prior = None
         self.sources = sources
+        self.priors = priors
+        self.params_prior_jacobian = None
 
 
 class ModellerPygmoUDP:
@@ -1854,11 +1894,11 @@ class Modeller:
 
         if timing:
             time_init = time.time()
-        # TODO: Attempt to prevent/detect defeating this by modifying fixed/free params?
-        prior = self.fitinfo["priorLogfixed"] + self.model.get_prior_value(free=True, fixed=False)
         # TODO: Clarify that setting do_draw_image = True forces likelihood evaluation with both C++/Python
         #  (if possible)
         likelihood = self.model.get_likelihood(params_free, **kwargs)
+        # Must come second if do_fit_leastsq_prep is True and not previously called
+        prior = self.model.get_prior_value() if (likelihood is not None) else None
         # return LL, LP, etc.
         if returnlponly:
             rv = likelihood + prior
@@ -1907,7 +1947,6 @@ class Modeller:
         :param do_linear_only: bool; whether to skip the non-linear fit for non-linear problems.
         :return: dict with output.
         """
-        self.fitinfo["priorLogfixed"] = self.model.get_prior_value(free=False, fixed=True, log=True)
         self.fitinfo["log"] = []
         self.fitinfo["print_step_interval"] = print_step_interval
 
@@ -1948,8 +1987,8 @@ class Modeller:
 
         time_start = time.time()
         likelihood = self.evaluate(
-            params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_verify_jacobian=True,
-            do_compare_likelihoods=True)
+            params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
+            do_verify_jacobian=True, do_compare_likelihoods=True)
         likelihood_init = likelihood[0]
         self.logger.info(f"Param names   : {name_params}")
         self.logger.info(f"Initial params: {params_init}")
@@ -1959,6 +1998,8 @@ class Modeller:
         do_nonlinear = not (do_linear_only or (is_linear and do_linear and self.model.can_do_fit_leastsq))
 
         time_run = 0.0
+        # TODO: This should be an input argument
+        bands = np.sort(list(self.model.data.exposures.keys()))
         if do_linear:
             # If this isn't a linear problem, fix all free non-flux parameters and do a linear fit first
             if not is_linear:
@@ -1968,8 +2009,6 @@ class Modeller:
             self.logger.info("Beginning linear fit")
             time_init = time.time()
             datasizes = []
-            # TODO: This should be an input argument
-            bands = np.sort(list(self.model.data.exposures.keys()))
             params = []
             for band in bands:
                 params_band = None
@@ -2065,6 +2104,7 @@ class Modeller:
         # for which it's unnecessary
         # TODO: Review if/when priors are changed - linear fits won't be able to handle non-linear priors
         # (even if they're Gaussian, e.g. if applied to transforms/non-linear combinations of params)
+        do_fit_leastsq_cleanup = False
         if do_nonlinear:
             limits = self.model.get_limits(fixed=False, transformed=True)
             algo = self.modellibopts["algo"] if "algo" in self.modellibopts else (
@@ -2085,6 +2125,7 @@ class Modeller:
                                                  bounds=([x[0] for x in limits], [x[1] for x in limits]))
                     time_run += time.time() - time_init
                     params_best = result.x
+                    do_fit_leastsq_cleanup = True
                 else:
                     def neg_like_model(params_i, modeller):
                         modeller.fitinfo["n_eval_func"] += 1
@@ -2170,6 +2211,9 @@ class Modeller:
             result = None
             time_run += time.time() - time_init
 
+        if do_fit_leastsq_cleanup:
+            self.model.do_fit_leastsq_cleanup(bands)
+
         result = {
             "fitinfo": self.fitinfo.copy(),
             "params": self.model.get_parameters(),
@@ -2195,10 +2239,8 @@ class Modeller:
             logger = logging.getLogger(__name__)
         self.logger = logger
 
-        # Scratch space, I guess...
-        self.fitinfo = {
-            "priorLogfixed": np.log(1.0)
-        }
+        # Scratch space
+        self.fitinfo = {}
 
 
 class Source:
@@ -3059,3 +3101,66 @@ class FluxParameter(Parameter):
                            transformed=transformed, fixed=fixed)
         self.band = band
         self.is_fluxratio = is_fluxratio
+
+
+class ShapeLsqPrior:
+    def calc_residual(self, calc_jacobian=False, delta_jacobian=1e-5):
+        prior = 0
+        residuals = []
+        jacobians = {}
+        if self.size_mean_std or self.axrat_params:
+            size_x = self.size_x.get_value(transformed=False)
+            size_y = self.size_y.get_value(transformed=False)
+            rho = self.rho.get_value(transformed=False)
+            size_maj, axrat, _ = mpfgauss.covar_to_ellipse(Ellipse(size_x, size_y, rho))
+            if self.size_mean_std:
+                if self.size_log10:
+                    size_maj = np.log10(size_maj)
+                residual = (size_maj - self.size_mean_std[0])/self.size_mean_std[1]
+                residuals.append(residual)
+                prior += spstats.norm.logpdf(residual)
+            if self.axrat_params:
+                residual = ((spspec.logit(axrat/self.axrat_params[2]) - self.axrat_params[0])
+                            / self.axrat_params[1])
+                if not np.isfinite(residual):
+                    raise RuntimeError(f'Infinite axis ratio prior residual from q={axrat} and mean, std, '
+                                       f'logit stretch divisor = {self.axrat_params}')
+                residuals.append(residual)
+                prior += spstats.norm.logpdf(residual)
+            if calc_jacobian:
+                dsize_x = delta_jacobian*np.max((size_x, 1e-3))
+                dsize_y = delta_jacobian*np.max((size_y, 1e-3))
+                drho = delta_jacobian*np.sign(rho)
+                values = {x: x.get_value(transformed=x.transformed)
+                          for x in (self.size_x, self.size_y, self.rho)}
+                for param, delta in ((self.size_x, dsize_x), (self.size_y, dsize_y), (self.rho, drho)):
+                    good = False
+                    for sign in (1, -1):
+                        try:
+                            eps = sign*delta
+                            param.set_value(param.get_value(transformed=False) + eps, transformed=False)
+                            good = True
+                            delta = eps
+                            break
+                        except:
+                            pass
+                    if not good:
+                        raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
+                    _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
+                    jacobians[param] = (residuals_new[0] - residuals[0])/eps, (
+                            residuals_new[1] - residuals[1])/eps
+                    # Reset to original value
+                    param.set_value(values[param], transformed=param.transformed)
+
+        return prior, residuals, jacobians
+
+    def __len__(self):
+        return bool(self.size_mean_std) + bool(self.axrat_params)
+
+    def __init__(self, size_x, size_y, rho, size_mean_std=None, size_log10=True, axrat_params=None):
+        self.size_x = size_x
+        self.size_y = size_y
+        self.rho = rho
+        self.size_log10 = size_log10
+        self.size_mean_std = size_mean_std
+        self.axrat_params = axrat_params
