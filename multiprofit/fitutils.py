@@ -288,7 +288,7 @@ def get_model(
         compnum += num_profiles
     param_fluxes = [mpfobj.FluxParameter(
         band, "flux", np.log10(np.clip(fluxes_by_band[band], 1e-16, np.Inf)), None, limits=limits_ref["none"],
-        transform=transforms_ref["log10"], transformed=True, prior=None, fixed=False, is_fluxratio=False)
+        transform=transforms_ref["log10"], transformed=True, fixed=False, is_fluxratio=False)
         for bandi, band in enumerate(bands)
     ]
     modelphoto = mpfobj.PhotometricModel(components, param_fluxes)
@@ -301,7 +301,7 @@ def get_model(
         # (otherwise the initial background model is zero and nnls can't do anything with it)
         param_fluxes_bg = [mpfobj.FluxParameter(
             band, "background", 1e-9, None, limits=limits_ref["none_untransformed"],
-            transformed=False, prior=None, fixed=False, is_fluxratio=False)
+            transformed=False, fixed=False, is_fluxratio=False)
             for bandi, band in enumerate(bands)
         ]
         background = mpfobj.Background(param_fluxes_bg)

@@ -1768,14 +1768,7 @@ class Model:
         return names
 
     def get_prior_value(self, free=True, fixed=True, log=True):
-        return np.sum(np.array(
-            [param.get_prior(log=log) for param in self.get_parameters(free=free, fixed=fixed)]
-        ))
-
-    # TODO: implement
-    def get_prior_modes(self, free=True, fixed=True):
-        params = self.get_parameters(free=free, fixed=fixed)
-        return [param.get_prior.mode for param in params]
+        return 0. if log else 1.
 
     def get_likelihood(self, params=None, data=None, log=True, **kwargs):
         likelihood = self.evaluate(params, data, is_likelihood_log=log, **kwargs)[0]
@@ -2961,15 +2954,6 @@ class Parameter:
             return self.transform.reverse(self.value)
         return np.float64(self.value)
 
-    def get_prior(self, log=True):
-        if self.prior is None:
-            prior = 1.0
-            if log:
-                prior = 0.
-        else:
-            prior = self.prior.get_value(param=self, log=log)
-        return prior
-
     def get_limits(self, transformed=False):
         lower = self.limits.lower
         upper = self.limits.upper
@@ -3012,7 +2996,6 @@ class Parameter:
                 limits=self.limits,
                 inheritors=self.inheritors,
                 modifiers=self.modifiers,
-                prior=self.prior,
                 transform=self.transform,
                 transformed=self.transformed,
                 value=self.value,
@@ -3024,9 +3007,7 @@ class Parameter:
         return self.get_value(*args, **kwargs)
 
     def __init__(self, name, value, unit="", limits=None, transform=None, transformed=True,
-                 prior=None, fixed=False, inheritors=None, modifiers=None):
-        if prior is not None and not isinstance(prior, Prior):
-            raise TypeError("prior (type={:s}) is not an instance of {:s}".format(type(prior), type(Prior)))
+                 fixed=False, inheritors=None, modifiers=None):
         if transform is None:
             transform = Transform()
         if limits is None:
@@ -3041,7 +3022,6 @@ class Parameter:
         self.limits = limits
         self.transform = transform
         self.transformed = transformed
-        self.prior = prior
         # List of parameters that should inherit values from this one
         self.inheritors = [] if inheritors is None else inheritors
         # List of parameters that can modify this parameter's value - user decides what to do with them
@@ -3064,7 +3044,6 @@ class FluxParameter(Parameter):
                 inheritors=self.inheritors,
                 is_fluxratio=self.is_fluxratio,
                 modifiers=self.modifiers,
-                prior=self.prior,
                 transform=self.transform,
                 transformed=self.transformed,
                 value=self.value,
@@ -3072,49 +3051,11 @@ class FluxParameter(Parameter):
         ])
         return f'FluxParameter (name={self.name}):({attrs})'
 
-    def __init__(self, band, name, value, unit, limits, transform=None, transformed=True, prior=None,
+    def __init__(self, band, name, value, unit, limits, transform=None, transformed=True,
                  fixed=None, is_fluxratio=None):
         if is_fluxratio is None:
             is_fluxratio = False
         Parameter.__init__(self, name=name, value=value, unit=unit, limits=limits, transform=transform,
-                           transformed=transformed, prior=prior, fixed=fixed)
+                           transformed=transformed, fixed=fixed)
         self.band = band
         self.is_fluxratio = is_fluxratio
-
-
-class Prior:
-    """
-        A prior probability distribution function.
-        Not an ecclesiastical superior usually of lower rank than an abbot.
-
-        TODO: I'm not sure how to enforce proper normalization without implementing specific subclasses
-        e.g. Even in a flat prior, if the limits change the normalization does too.
-    """
-    def get_value(self, param, log):
-        if not isinstance(param, Parameter):
-            raise TypeError(
-                "param(type={:s}) is not an instance of {:s}".format(type(param), type(Parameter)))
-
-        if self.transformed != self.limits.transformed:
-            raise ValueError("Prior must have same transformed flag as its Limits")
-
-        value_param = param.get_value(transformed=self.transformed)
-        if self.limits.within(value_param):
-            prior = self.func(value_param)
-        else:
-            prior = 0.0
-        if log and not self.log:
-            return np.log(prior)
-        elif not log and self.log:
-            return np.exp(prior)
-        return prior
-
-    def __init__(self, func, log, transformed, mode, limits):
-        if not isinstance(limits, Limits):
-            "Prior limits(type={:s}) is not an instance of {:s}".format(type(limits), type(Limits))
-        # TODO: how to type check this?
-        self.func = func
-        self.log = log
-        self.transformed = transformed
-        self.mode = mode
-        self.limits = limits
