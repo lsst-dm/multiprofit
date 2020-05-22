@@ -24,6 +24,7 @@ import astropy.visualization as apvis
 import copy
 import galsim as gs
 import logging
+from math import sqrt
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
@@ -1105,7 +1106,7 @@ class Model:
                                     else:
                                         profile["profile_gs"] = gs.Gaussian(
                                             flux=profile["flux"]*fluxfrac,
-                                            fwhm=2*reff*np.sqrt(axrat), gsparams=gsparams)
+                                            fwhm=2*reff*sqrt(axrat), gsparams=gsparams)
                                         profile["shear"] = gs.Shear(q=axrat, beta=ang*gs.degrees)
                                         profile["offset"] = gs.PositionD(profile["cenx"], profile["ceny"])
                                 profile["pointsource"] = True
@@ -1214,7 +1215,7 @@ class Model:
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                 if 'like_const' not in exposure.meta:
                     sigma_inv = exposure.get_sigma_inverse()
-                    exposure.meta['like_const'] = np.sum(np.log(sigma_inv/np.sqrt(2.*np.pi)))
+                    exposure.meta['like_const'] = np.sum(np.log(sigma_inv/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
                     self.logger.info(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
@@ -2446,7 +2447,7 @@ class EllipseParameters(Ellipse):
         return self.get_sigma_x(), self.get_sigma_y(), self.get_rho()
 
     def get_radius(self):
-        return np.sqrt(self.get_sigma_x()**2 + self.get_sigma_y()**2)
+        return sqrt(self.get_sigma_x()**2 + self.get_sigma_y()**2)
 
     def get_sigma_x(self):
         return self.sigma_x.get_value(transformed=False)
@@ -2618,7 +2619,7 @@ class EllipticalParametricComponent(EllipticalComponent):
             if resolved:
                 if engine == "galsim":
                     axrat = profile["axrat"]
-                    axrat_sqrt = np.sqrt(axrat)
+                    axrat_sqrt = sqrt(axrat)
                     gsparams = get_gsparams(engineopts)
                     if is_gaussian:
                         profile_gs = gs.Gaussian(
