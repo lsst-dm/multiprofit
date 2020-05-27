@@ -90,6 +90,7 @@ PYBIND11_MODULE(_multiprofit, m)
         "x_min"_a, "x_max"_a, "y_min"_a, "y_max"_a, "to_add"_a, "output"_a.noconvert(),
         "residual"_a.noconvert(), "grad"_a.noconvert(),
         "grad_param_map"_a.noconvert(), "grad_param_factor"_a.noconvert(),
-        "sersic_param_map"_a.noconvert(), "sersic_param_factor"_a.noconvert()
+        "sersic_param_map"_a.noconvert(), "sersic_param_factor"_a.noconvert(),
+        "background"_a.noconvert()
     );
 }

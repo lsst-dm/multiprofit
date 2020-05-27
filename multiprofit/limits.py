@@ -68,6 +68,7 @@ class Limits:
 # TODO: Replace with a parameter factory and/or profile factory
 limits_ref = {
     "none": Limits(),
+    "none_untransformed": Limits(transformed=False),
     "fraction": Limits(lower=0., upper=1., transformed=True),
     "fractionlog10": Limits(upper=0., transformed=True),
     "axratlog10": Limits(lower=-2., upper=0., transformed=True),

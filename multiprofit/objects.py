@@ -246,7 +246,7 @@ def gaussian_profiles_to_matrix(profiles):
                     [p[ep[i]] if ep[i] in p else 0 for i in range(3)]
                 )
             )
-            for p in profiles
+            for p in profiles if not p.get("background")
         ]
     )
     for idx in (3, 4, 6, 7):
@@ -487,7 +487,10 @@ class Model:
                     if not param_flux_ratio.fixed:
                         num_params_free += 1
                         idx_params[param_flux] = num_params_free
-                for name_param, idx_param in order_params_gauss.items():
+                is_bg = profile.get('background')
+                # TODO: Make this {'flux': 0} if is_bg when this works
+                orders_profile = {} if is_bg else order_params_gauss
+                for name_param, idx_param in orders_profile.items():
                     param = params_profile[name_param]
                     if name_param == 'flux' and param_flux_ratio_isnt_none and not param_flux_ratio.fixed:
                         gpmb_indices_row[order_flux] = idx_params[param_flux_ratio]
@@ -812,24 +815,40 @@ class Model:
                 # Validate the Jacobian by comparing to finite differencing if requested
                 if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian' in exposure.meta:
                     jacobian = exposure.meta['jacobian']
+                    has_bg = 0
+                    flux_bg = 0.
+                    for p in profiles:
+                        if p[band].get('background'):
+                            has_bg += 1
+                            flux_bg += p[band]['flux']
+                    if has_bg > 1:
+                        raise RuntimeError("Can't handle multiple background components")
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
-                                     num_params_gauss*len(profiles)))
+                                     num_params_gauss*(len(profiles) - has_bg) + has_bg))
                     gaussians = gaussian_profiles_to_matrix([p[band] for p in profiles])
                     var_inv = exposure.get_var_inverse()
                     mpfgauss.loglike_gaussians_pixel(
                         data=exposure.image, variance_inv=var_inv, gaussians=gaussians,
-                        to_add=False, grad=grad)
+                        to_add=False, grad=grad, background=np.array(
+                            [flux_bg], dtype=np.float64) if has_bg else None)
                     likelihood = mpfgauss.loglike_gaussians_pixel(
                         data=exposure.image, variance_inv=var_inv, gaussians=gaussians, to_add=False)
                     dlldxs = []
+                    failed = []
                     for idx_param, param in enumerate(params):
-                        for dx_ratio in [1e-6, 1e-8]:
+                        passed = False
+                        for dx_ratio, do_raise in [(1e-7, False), (1e-5, True)]:
                             if self.__validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                                meta_model, dx_ratio=dx_ratio, do_raise=False, do_plot_if_failed=plot,
+                                meta_model, dx_ratio=dx_ratio, do_raise=False, do_plot_if_failed=False,
                                 dlldxs=(likelihood, dlldxs)
                             ):
+                                passed = True
                                 break
+                        if not passed:
+                            failed.append(str(param))
+                    if failed:
+                        self.logger.warning(f'Failed jacobian validation: {failed}')
                     self.logger.info(f'DLLs: [{", ".join(f"{dlldx:.3e}" for dlldx in dlldxs)}]')
 
                 if plot or (get_likelihood and likelihood_exposure is None) or (
@@ -1066,7 +1085,8 @@ class Model:
                 names_params = names_params_ellipse
                 ellipse_srcs = [
                     (
-                        Ellipse(*[profile[band][var] for var in names_params]) if profile[band]["nser"] == 0.5
+                        Ellipse(*[profile[band][var] for var in names_params])
+                        if profile[band].get("nser") == 0.5
                         else None,
                         profile[band]
                     )
@@ -1182,11 +1202,13 @@ class Model:
             profiles_to_fit_linear = {}
             do_prep_both = do_fit_linear_prep and do_fit_leastsq_prep
             profiles_to_draw_now = []
+            level_bg, order_bg = None, None
             for profile in profiles:
                 params = profile[band]
                 # Verify that it's a Gaussian
-                if 'profile' in params and params['profile'] == 'sersic' and 'nser' in params and \
-                        params['nser'] == 0.5:
+                is_bg = profile.get('background', False)
+                if is_bg or ('profile' in params and params['profile'] == 'sersic' and 'nser' in params and
+                             params['nser'] == 0.5):
                     if do_fit_linear_prep and not params['param_flux'].fixed:
                         id_param_flux = id(params['param_flux'])
                         if id_param_flux not in profiles_to_fit_linear:
@@ -1199,6 +1221,10 @@ class Model:
                         profiles_to_draw_now += [profile]
                 else:
                     profiles_left += [profile]
+                if is_bg:
+                    # TODO: Should not have to assume that background is last and all bands free
+                    level_bg = params['flux']
+                    order_bg = params['order_rev']
             profiles = profiles_left
             # TODO: Explain this for a future user and/or self
             # Normally, we'd skip the rest of this if do_fit_linear_prep is true and profiles_to_draw is empty
@@ -1224,10 +1250,13 @@ class Model:
                 profiles_band_bad = 0
                 profiles_band = []
                 profiles_band_idx = []
+                background = mpfgauss.zero_double
                 for idx_profile, profile in enumerate(profiles_to_draw_now):
                     profile_band = profile[band]
                     if np.isinf(profile_band["flux"]) and not do_grad_any:
                         profiles_band_bad += 1
+                    elif profile.get('background', False):
+                        background = np.array([profile_band['flux']], dtype=np.float64)
                     else:
                         profiles_band_idx.append(idx_profile)
                         profiles_band.append(profile_band)
@@ -1250,6 +1279,8 @@ class Model:
                         grad = exposure.meta['jacobian']
                         if do_fit_leastsq_prep:
                             grad.fill(0)
+                            if level_bg is not None:
+                                grad[:, :, -1-order_bg] = 1
                     if do_fit_leastsq_prep:
                         grad_param_map = np.zeros((num_profiles, num_params_gauss), dtype=np.uint64)
                         grad_param_factor = np.zeros((num_profiles, num_params_gauss))
@@ -1368,7 +1399,8 @@ class Model:
                     data=exposure.image, variance_inv=exposure.get_var_inverse(), gaussians=profile_matrix,
                     x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False, output=output, residual=residual,
                     grad=grad, grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
-                    sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor
+                    sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor,
+                    background=background
                 )
                 # If computing the jacobian, will skip evaluating the likelihood and instead return the
                 # residual image for fitting
@@ -1427,6 +1459,15 @@ class Model:
                         gaussians=gaussian_profiles_to_matrix(
                             [profile[band] for profile in profiles_to_draw]),
                         x_min=0, x_max=nx, y_min=0, y_max=ny, dim_x=nx, dim_y=ny)
+                    for profile in profiles_to_draw:
+                        background = 0
+                        if profile[band].get('background'):
+                            if background:
+                                raise RuntimeError("Ended up with >1 backgrounds to draw")
+                            background = profile[band].get('flux')
+                        # TODO: Also fix this if backgrounds get more complicated than constant
+                        if background:
+                            image += background
                     if do_fit_linear_prep:
                         exposure.meta['img_model_fixed'] = np.copy(image)
                 # Ensure identical order until all dicts are ordered
@@ -1441,11 +1482,20 @@ class Model:
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
-                        imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
-                            params['cenx'], params['ceny'], params['flux'],
-                            mpfgauss.reff_to_sigma(params['sigma_x']),
-                            mpfgauss.reff_to_sigma(params['sigma_y']),
-                            params['rho'], 0, nx, 0, ny, nx, ny))
+                        try:
+                            if profile.get('background'):
+                                # TODO: Use this or an alternative if background models become more complex
+                                # than just a flat background
+                                # imgprofiles = mpfgauss.loglike_gaussians_pixel()
+                                imgprofiles = np.full((ny, nx), params['flux'])
+                            else:
+                                imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
+                                    params['cenx'], params['ceny'], params['flux'],
+                                    mpfgauss.reff_to_sigma(params['sigma_x']),
+                                    mpfgauss.reff_to_sigma(params['sigma_y']),
+                                    params['rho'], 0, nx, 0, ny, nx, ny))
+                        except Exception as e:
+                            print('e', profile, params)
                     if do_fit_linear_prep:
                         exposure.meta['img_models_params_free'] += [(imgprofiles, param_flux)]
                     if not do_draw_image:
@@ -2204,6 +2254,9 @@ class Source:
             params={k: v for k, v in self.modelastrometric.params.items()},
             time=time, engineopts=engineopts)
 
+    def is_sky(self):
+        return all([isinstance(c, Background) for c in self.modelphotometric.components])
+
     def __init__(self, modelastrometry, modelphotometry, name=""):
         self.name = name
         self.modelphotometric = modelphotometry
@@ -2217,25 +2270,26 @@ class PhotometricModel:
                                "so it must already be using flux fracs")
         profiles = self.get_profiles(engine='libprofit', bands=self.fluxes.keys(), cenx=0, ceny=0)
         for profiles_comp, comp in zip(profiles, self.components):
-            for i, flux in enumerate(comp.fluxes):
-                profile_band = profiles_comp[flux.band]
-                if flux.is_fluxratio is use_fluxfracs:
-                    raise RuntimeError(
-                        'Tried to convert component with is_fluxratio={} already == use_fluxfracs={}'.format(
-                            flux.is_fluxratio, use_fluxfracs
-                        ))
-                if use_fluxfracs:
-                    if flux.band in self.fluxes:
-                        self.fluxes[flux.band].append(flux)
+            if not isinstance(comp, Background):
+                for i, flux in enumerate(comp.fluxes):
+                    profile_band = profiles_comp[flux.band]
+                    if flux.is_fluxratio is use_fluxfracs:
+                        raise RuntimeError(
+                            'Tried to convert component with is_fluxratio={} already == use_fluxfracs={}'.format(
+                                flux.is_fluxratio, use_fluxfracs
+                            ))
+                    if use_fluxfracs:
+                        if flux.band in self.fluxes:
+                            self.fluxes[flux.band].append(flux)
+                        else:
+                            self.fluxes[flux.band] = np.array([flux])
                     else:
-                        self.fluxes[flux.band] = np.array([flux])
-                else:
-                    flux = FluxParameter(
-                        band=flux.band, value=0, name=flux.name, is_fluxratio=False,
-                        unit=self.fluxes[flux.band].unit, **kwargs)
-                    flux.set_value(profile_band['flux'], transformed=False)
-                    comp.fluxes[i] = flux
-            comp.fluxes_dict = {flux.band: flux for flux in comp.fluxes}
+                        flux = FluxParameter(
+                            band=flux.band, value=0, name=flux.name, is_fluxratio=False,
+                            unit=self.fluxes[flux.band].unit, **kwargs)
+                        flux.set_value(profile_band['flux'], transformed=False)
+                        comp.fluxes[i] = flux
+                comp.fluxes_dict = {flux.band: flux for flux in comp.fluxes}
         if use_fluxfracs:
             # Convert fluxes to fractions
             for band, fluxes in self.fluxes.items():
@@ -2716,8 +2770,8 @@ class PointSourceProfile(Component):
 
     @classmethod
     def _checkengine(cls, engine):
-        if engine not in Model.ENGINES:
-            raise ValueError("Unknown {:s} rendering engine {:s}".format(type(cls), engine))
+        if engine not in cls.ENGINES:
+            raise ValueError(f"Unknown {type(cls)} rendering engine {engine}")
 
     @classmethod
     def is_gaussian(cls):
@@ -2769,7 +2823,71 @@ class PointSourceProfile(Component):
         return profiles
 
     def __init__(self, fluxes, name=""):
-        Component.__init__(fluxes=fluxes, name=name)
+        super().__init__(fluxes=fluxes, name=name)
+
+
+class Background(Component):
+
+    ENGINES = ["galsim", "libprofit"]
+
+    @classmethod
+    def _checkengine(cls, engine):
+        if engine not in cls.ENGINES:
+            raise ValueError(f"Unknown {type(cls)} rendering engine {engine}")
+
+    @classmethod
+    def is_gaussian(cls):
+        return True
+
+    @classmethod
+    def is_gaussian_mixture(cls):
+        return True
+
+    def get_parameters(self, free=True, fixed=True):
+        return [value for value in self.fluxes if
+                (value.fixed and fixed) or (not value.fixed and free)]
+
+    def get_profiles(self, flux_by_band, engine, cenx, ceny, params=None, engineopts=None):
+        """
+        Get engine-dependent representations of profiles to be rendered.
+
+        :param flux_by_band: Dict of fluxes by band
+        :param engine: Rendering engine
+        :param cenx: X center in image coordinates. Ignored.
+        :param ceny: Y center in image coordinates. Ignored.
+        :return: List of engine-dependent profiles
+        """
+        self._checkengine(engine)
+
+        profile = {"background": True}
+        for band in flux_by_band.keys():
+            if band not in self.fluxes_dict:
+                raise ValueError(
+                    "Called Background (name={:s}) get_profiles() for band={:s} not in "
+                    "bands with fluxes {}", self.name, band, self.fluxes_dict)
+            flux = self.fluxes_dict[band].get_value(transformed=False)
+            if engine == "libprofit":
+                profile[band] = {
+                    "background": True,
+                    "can_do_fit_leastsq": True,
+                    "flux": flux,
+                    "order_rev": self.band_order_rev[band],
+                    "param_flux": self.fluxes_dict[band],
+                    "params": {},
+                    "pointsource": False,
+                    "profile": "background",
+                    "resolved": False,
+                }
+            elif engine == "galsim":
+                pass
+            else:
+                raise ValueError("Unimplemented Background rendering engine {:s}".format(engine))
+        return [profile]
+
+    def __init__(self, fluxes, name=""):
+        super().__init__(fluxes=fluxes, name=name)
+        self.band_order_rev = {band: idx for idx, band in
+                               enumerate(reversed(list(self.fluxes_dict.keys())))}
 
 
 # TODO: This class needs loads of sanity checks and testing
@@ -2937,6 +3055,23 @@ class FluxParameter(Parameter):
         A flux, magnitude or flux ratio, all of which one could conceivably fit.
         TODO: name seems a bit redundant, but I don't want to commit to storing the band as a string now
     """
+    def __str__(self):
+        attrs = ', '.join([
+            f'{var}={value}' for var, value in dict(
+                band=self.band,
+                fixed=self.fixed,
+                limits=self.limits,
+                inheritors=self.inheritors,
+                is_fluxratio=self.is_fluxratio,
+                modifiers=self.modifiers,
+                prior=self.prior,
+                transform=self.transform,
+                transformed=self.transformed,
+                value=self.value,
+            ).items()
+        ])
+        return f'FluxParameter (name={self.name}):({attrs})'
+
     def __init__(self, band, name, value, unit, limits, transform=None, transformed=True, prior=None,
                  fixed=None, is_fluxratio=None):
         if is_fluxratio is None:
