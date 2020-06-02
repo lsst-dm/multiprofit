@@ -1918,8 +1918,6 @@ class Modeller:
             "likelihood": likelihood,
             "prior": prior,
         }
-        if log_step and loginfo['likelihood'] is None:
-            loginfo['likelihood'] = self.model.get_likelihood()
         if timing:
             loginfo["time"] = tstep
             loginfo["time_init"] = time_init
