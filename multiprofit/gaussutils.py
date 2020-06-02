@@ -63,7 +63,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
         covar = x.get_covariance(matrix=True)
     elif len(x) == 3:
         if not all(isinstance(v, np.ndarray) for v in x):
-            raise TypeError(f"args x must all be ndarray, not {(type(v) for v in x)}")
+            raise TypeError(f"args x must all be ndarray, not {list(type(v) for v in x)}")
         lens = [len(v) for v in x]
         if (lens[0] != lens[1]) or (lens[0] != lens[2]):
             raise ValueError(f"lens={lens} not all equal")

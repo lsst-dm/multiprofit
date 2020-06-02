@@ -1498,20 +1498,18 @@ class Model:
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
-                        try:
-                            if profile.get('background'):
-                                # TODO: Use this or an alternative if background models become more complex
-                                # than just a flat background
-                                # imgprofiles = mpfgauss.loglike_gaussians_pixel()
-                                imgprofiles = np.full((ny, nx), params['flux'])
-                            else:
-                                imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
-                                    params['cenx'], params['ceny'], params['flux'],
-                                    mpfgauss.reff_to_sigma(params['sigma_x']),
-                                    mpfgauss.reff_to_sigma(params['sigma_y']),
-                                    params['rho'], 0, nx, 0, ny, nx, ny))
-                        except Exception as e:
-                            print('e', profile, params)
+
+                        if profile.get('background'):
+                            # TODO: Use this or an alternative if background models become more complex
+                            # than just a flat background
+                            # imgprofiles = mpfgauss.loglike_gaussians_pixel()
+                            imgprofiles = np.full((ny, nx), params['flux'])
+                        else:
+                            imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
+                                params['cenx'], params['ceny'], params['flux'],
+                                mpfgauss.reff_to_sigma(params['sigma_x']),
+                                mpfgauss.reff_to_sigma(params['sigma_y']),
+                                params['rho'], 0, nx, 0, ny, nx, ny))
                     if do_fit_linear_prep:
                         exposure.meta['img_models_params_free'] += [(imgprofiles, param_flux)]
                     if not do_draw_image:
@@ -1691,19 +1689,19 @@ class Model:
                                     # Somewhat ugly hack - catch RunTimeErrors which are usually excessively
                                     # large FFTs and then try to evaluate the model in real space or give
                                     # up if it's any other error
-                                    except RuntimeError as e:
+                                    except RuntimeError:
                                         try:
                                             if method == "fft":
                                                 image_gs = profile_to_draw.drawImage(
                                                     method='real_space', nx=nx, ny=ny, scale=scale).array
                                             else:
-                                                raise e
-                                        except Exception as e:
-                                            raise e
-                                    except Exception as e:
+                                                raise
+                                        except Exception:
+                                            raise
+                                    except Exception:
                                         print("Exception attempting to draw image from profiles:",
                                               profile_to_draw)
-                                        raise e
+                                        raise
                                     if do_fit_linear_prep:
                                         if is_profile_linear:
                                             exposure.meta['img_models_params_free'].append(
@@ -1795,8 +1793,9 @@ class Model:
                 sli = slice(idx_prior, idx_prior + n_res)
                 try:
                     self.residuals_prior[sli] = residuals
-                except Exception as error:
-                    pass
+                except Exception:
+                    print(f"Failed to set prior residual for prior {prior}")
+                    raise
                 for param, jac_param in jacobians.items():
                     idx_param = idx_params.get(param)
                     if idx_param is not None:
@@ -3025,9 +3024,9 @@ class Parameter:
             # TODO: Error checking, etc. There are probably better ways to do this
             for param in self.inheritors:
                 param.value = self.value
-        except Exception as e:
+        except Exception:
             print(f"Failed to set {self} to value={value}")
-            raise e
+            raise
 
     def __str__(self):
         attrs = ', '.join([
