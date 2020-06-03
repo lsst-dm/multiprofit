@@ -711,6 +711,25 @@ def fit_galaxy(
                 if not all(np.isfinite(values_param)):
                     raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
 
+                # Setup priors
+                if modelinfo.get('priors') == 'default':
+                    model.priors = []
+                    all_gauss = [
+                        all(comp.is_gaussian() for comp in src.modelphotometric.components)
+                        for src in model.sources
+                    ]
+                    for src in model.sources:
+                        for comp in src.modelphotometric.components:
+                            ell = comp.params_ellipse
+                            prior_params = {
+                                'size_mean_std': (0., 0.1) if all_gauss else (0, 0.3),
+                                'size_log10': all_gauss,
+                                'axrat_params': (-0.1, 0.5, 1.1) if all_gauss else (-0.3, 0.2, 1.2),
+                            }
+                            model.priors.append(
+                                mpfobj.ShapeLsqPrior(ell.sigma_x, ell.sigma_y, ell.rho, **prior_params)
+                            )
+
                 logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
                 model.name = name_model
                 sys.stdout.flush()
