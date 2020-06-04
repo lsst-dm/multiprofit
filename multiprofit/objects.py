@@ -3100,7 +3100,44 @@ class FluxParameter(Parameter):
         self.is_fluxratio = is_fluxratio
 
 
-class ShapeLsqPrior:
+class LsqPrior(metaclass=ABCMeta):
+    @abstractmethod
+    def calc_residual(self, calc_jacobian=False, delta_jacobian=1e-5):
+        ...
+
+    @abstractmethod
+    def __len__(self):
+        ...
+
+
+class GaussianLsqPrior(LsqPrior):
+    def calc_residual(self, calc_jacobian=False, delta_jacobian=1e-5):
+        value = self.param.get_value(transformed=self.transformed)
+        residual = (value - self.mean)/self.std
+        if not np.isfinite(residual):
+            raise RuntimeError(f'Infinite axis ratio prior residual from y={val},'
+                               f' mean={self.mean} stddev={self.std}')
+        prior = spstats.norm.logpdf(residual)
+        jacobians = {}
+        # PDF = k exp(-y^2/2) where k = 1/(s*sqrt(2*pi)); y = (x-m)/s [m=mean, s=sigma)
+        # logPDF = log(k) - y^2/2
+        # dlogPDF/dx = -x/s^2
+        if calc_jacobian:
+            jacobians[self.param] = value/(self.std*self.std)
+
+        return prior, (residual,), jacobians
+
+    def __len__(self):
+        return 1
+
+    def __init__(self, param, mean, std, transformed=False):
+        self.param = param
+        self.mean = mean
+        self.std = std
+        self.transformed = transformed
+
+
+class ShapeLsqPrior(LsqPrior):
     def calc_residual(self, calc_jacobian=False, delta_jacobian=1e-5):
         prior = 0
         residuals = []
