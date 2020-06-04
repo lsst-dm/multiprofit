@@ -3127,7 +3127,7 @@ class ShapeLsqPrior:
             if calc_jacobian:
                 dsize_x = delta_jacobian*np.max((size_x, 1e-3))
                 dsize_y = delta_jacobian*np.max((size_y, 1e-3))
-                drho = delta_jacobian*np.sign(rho)
+                drho = -delta_jacobian*np.sign(rho)
                 values = {x: x.get_value(transformed=x.transformed)
                           for x in (self.size_x, self.size_y, self.rho)}
                 for param, delta in ((self.size_x, dsize_x), (self.size_y, dsize_y), (self.rho, drho)):
