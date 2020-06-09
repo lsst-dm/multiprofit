@@ -478,7 +478,7 @@ def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
         do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
-        print_exception=True, **kwargs
+        print_exception=True, prior_specs=None, **kwargs
 ):
     """
     Convenience function to fit a galaxy given some exposures with PSFs.
@@ -513,6 +513,8 @@ def fit_galaxy(
     """
     if logger is None:
         logger = logging.getLogger(__name__)
+    if prior_specs is None:
+        prior_specs = {}
     fluxes, moments_by_name, values_min, values_max, num_pix_img = get_init_from_moments(
         (exposure for exposure, _ in exposures_psfs), **kwargs)
     bands = list(fluxes.keys())
@@ -712,23 +714,53 @@ def fit_galaxy(
                     raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
 
                 # Setup priors
-                if modelinfo.get('priors') == 'default':
+                if prior_specs:
+                    priors_avail_per = {'shape': True, 'cenx': False, 'ceny': False}
                     model.priors = []
-                    all_gauss = [
-                        all(comp.is_gaussian() for comp in src.modelphotometric.components)
-                        for src in model.sources
-                    ]
+                    priors_comp = {}
+                    priors_src = {}
+
+                    for name_prior, params_prior_type in prior_specs.items():
+                        prior_type = priors_avail_per.get(name_prior)
+                        if prior_type is None:
+                            raise RuntimeError(f'Unknown prior type {name_prior}')
+                        (priors_comp if prior_type else priors_src)[name_prior] = params_prior_type
+
                     for src in model.sources:
-                        for comp in src.modelphotometric.components:
-                            ell = comp.params_ellipse
-                            prior_params = {
-                                'size_mean_std': (0., 0.1) if all_gauss else (0, 0.3),
-                                'size_log10': all_gauss,
-                                'axrat_params': (-0.1, 0.5, 1.1) if all_gauss else (-0.3, 0.2, 1.2),
-                            }
-                            model.priors.append(
-                                mpfobj.ShapeLsqPrior(ell.sigma_x, ell.sigma_y, ell.rho, **prior_params)
+                        all_gauss = all(comp.is_gaussian() for comp in src.modelphotometric.components)
+                        # TODO: There should be a better way of getting source-specific parameters
+                        # This hack will do for now
+                        params_src = {p.name: p for p in src.modelastrometric.get_parameters()}
+                        for name_prior, params_prior_type in priors_src.items():
+                            params_prior = params_prior_type[all_gauss]
+                            param = params_src[name_prior]
+                            mean = params_prior.get(
+                                'mean',
+                                param.get_value(transformed=params_prior_type.get('transformed', False)),
                             )
+                            model.priors.append(
+                                mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                            )
+                        for comp in src.modelphotometric.components:
+                            params_comp = {p.name: p for p in comp.get_parameters()}
+                            for name_prior, params_prior_type in priors_comp.items():
+                                params_prior = params_prior_type[all_gauss]
+                                if name_prior == 'shape':
+                                    ell = comp.params_ellipse
+                                    model.priors.append(
+                                        mpfpri.ShapeLsqPrior(
+                                            ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
+                                        )
+                                    )
+                                else:
+                                    param = params_comp[name_prior]
+                                    mean = params_prior.get(
+                                        'mean',
+                                        param.get_value(transformed=params_prior.get('transformed', False)),
+                                    )
+                                    model.priors.append(
+                                        mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                                    )
 
                 logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
                 model.name = name_model
