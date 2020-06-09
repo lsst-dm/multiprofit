@@ -29,6 +29,7 @@ from multiprofit.gaussutils import sigma_to_reff
 from multiprofit.limits import limits_ref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
+import multiprofit.priors as mpfpri
 from multiprofit.transforms import transforms_ref
 import multiprofit.utils as mpfutil
 import numpy as np
@@ -418,7 +419,7 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
 
 
 def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel_min=None, pixel_sn_min=None,
-                          cenx=0, ceny=0, contiguous=True):
+                          cenx=0, ceny=0, contiguous=True, sigma_min=1e-2):
     bands = {}
     fluxes = {}
     num_pix_img = None
@@ -461,6 +462,8 @@ def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel
     moments_by_name = {name_param: value for name_param, value in zip(
         name_params_moments_init,
         Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
+    moments_by_name['sigma_x'] = np.max((moments_by_name['sigma_x'], sigma_min))
+    moments_by_name['sigma_y'] = np.max((moments_by_name['sigma_y'], sigma_min))
     values_max = {
         "sigma_x": np.sqrt(np.sum((num_pix_img/2.)**2)),
         "sigma_y": np.sqrt(np.sum((num_pix_img/2.)**2)),
@@ -641,7 +644,7 @@ def fit_galaxy(
                 inittype = modelinfo['inittype']
                 guesstype = None
                 if inittype == 'moments':
-                    logger.info('Initializing from moments')
+                    logger.info(f'Initializing from moments: {moments_by_name}')
                     for param in model.get_parameters(fixed=False):
                         value = moments_by_name.get(param.name)
                         if value is not None:
