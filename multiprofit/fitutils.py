@@ -718,16 +718,19 @@ def fit_galaxy(
 
                 # Setup priors
                 if prior_specs:
+                    # Value is whether prior is applied per component or not
                     priors_avail_per = {'shape': True, 'cenx': False, 'ceny': False}
                     model.priors = []
                     priors_comp = {}
                     priors_src = {}
+                    prior_background = prior_specs.get('background')
 
                     for name_prior, params_prior_type in prior_specs.items():
-                        prior_type = priors_avail_per.get(name_prior)
-                        if prior_type is None:
-                            raise RuntimeError(f'Unknown prior type {name_prior}')
-                        (priors_comp if prior_type else priors_src)[name_prior] = params_prior_type
+                        if name_prior != 'background':
+                            prior_type = priors_avail_per.get(name_prior)
+                            if prior_type is None:
+                                raise RuntimeError(f'Unknown prior type {name_prior}')
+                            (priors_comp if prior_type else priors_src)[name_prior] = params_prior_type
 
                     for src in model.sources:
                         all_gauss = all(comp.is_gaussian() for comp in src.modelphotometric.components)
@@ -745,25 +748,34 @@ def fit_galaxy(
                                 mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
                             )
                         for comp in src.modelphotometric.components:
-                            params_comp = {p.name: p for p in comp.get_parameters()}
-                            for name_prior, params_prior_type in priors_comp.items():
-                                params_prior = params_prior_type[all_gauss]
-                                if name_prior == 'shape':
-                                    ell = comp.params_ellipse
-                                    model.priors.append(
-                                        mpfpri.ShapeLsqPrior(
-                                            ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
+                            if isinstance(comp, mpfobj.Background):
+                                if prior_background:
+                                    for band, param_flux in comp.fluxes_dict.items():
+                                        model.priors.append(
+                                            mpfpri.GaussianLsqPrior(param_flux, **prior_background[band])
                                         )
-                                    )
-                                else:
-                                    param = params_comp[name_prior]
-                                    mean = params_prior.get(
-                                        'mean',
-                                        param.get_value(transformed=params_prior.get('transformed', False)),
-                                    )
-                                    model.priors.append(
-                                        mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
-                                    )
+                            else:
+                                params_comp = {p.name: p for p in comp.get_parameters()}
+                                for name_prior, params_prior_type in priors_comp.items():
+                                    params_prior = params_prior_type[all_gauss]
+                                    if name_prior == 'shape':
+                                        ell = comp.params_ellipse
+                                        model.priors.append(
+                                            mpfpri.ShapeLsqPrior(
+                                                ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
+                                            )
+                                        )
+                                    else:
+                                        param = params_comp[name_prior]
+                                        mean = params_prior.get(
+                                            'mean',
+                                            param.get_value(
+                                                transformed=params_prior.get('transformed', False)
+                                            ),
+                                        )
+                                        model.priors.append(
+                                            mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                                        )
 
                 logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
                 model.name = name_model
