@@ -838,7 +838,7 @@ def fit_galaxy(
 
 def fit_galaxy_exposures(
         exposures_psfs, bands, modelspecs, results=None, plot=False, name_fit=None, redo=False,
-        redo_psfs=False, reset_images=False, psf_sampling=1, loggerPsf=None, **kwargs
+        redo_psfs=False, reset_images=False, psf_sampling=1, psf_shrink=0, loggerPsf=None, **kwargs
 ):
     """
     Fit a set of exposures and accompanying PSF images in the given bands with the requested model
@@ -854,6 +854,8 @@ def fit_galaxy_exposures(
     :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
     :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
     :param psf_sampling: float; sampling factor for the PSF - fit sizes will be divided by this value.
+    :param psf_shrink: float; Length in pixels to subtract from PSF sigma_{x,y} in quadrature before fitting
+        PSF-convolved models
     :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return: results: dict containing the following values:
@@ -876,6 +878,8 @@ def fit_galaxy_exposures(
     }
     figure, axes = (None, None)
     row_psf = None
+    resample = psf_sampling != 1
+    resize = psf_shrink > 0
     if plot:
         num_psfs = 0
         for modeltype_psf, _ in model_psfs:
@@ -920,16 +924,17 @@ def fit_galaxy_exposures(
                             psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
                                 band=band, engine=engine, model=model_psf,
                                 is_model_pixelated=is_psf_pixelated)
-                        if psf_sampling != 1:
+                        if resample or resize:
                             model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            for param in model_psf.get_parameters(fixed=True, free=True):
-                                if param.name.startswith('sigma'):
-                                    sigma = param.get_value(transformed=False)
-                                    param.set_value(sigma/psf_sampling, transformed=False)
-                                    sigma_new = param.get_value(transformed=False)
-                                    loggerPsf.info(
-                                        f'Changed {param.name} value from {sigma:.3e} to {sigma_new:.3e}'
-                                        f' (PSF sampling={psf_sampling})')
+                            for param in (p for p in model_psf.get_parameters(fixed=True, free=True)
+                                          if p.name.startswith('sigma')):
+                                sigma = param.get_value(transformed=False)
+                                param.set_value(np.sqrt((sigma/psf_sampling)**2 - psf_shrink**2),
+                                                transformed=False)
+                                sigma_new = param.get_value(transformed=False)
+                                loggerPsf.info(
+                                    f'Changed {param.name} value from {sigma:.3e} to {sigma_new:.3e}'
+                                    f' (PSF sampling={psf_sampling})')
                         if plot and row_psf is not None:
                             row_psf += 1
             exposures_psfs[idx] = (exposure, psfs[idx])
