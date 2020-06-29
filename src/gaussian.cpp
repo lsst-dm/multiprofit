@@ -808,6 +808,36 @@ void reset_pixel<GradientType::jacobian>(Array3UncheckedMutable & output_jac_ref
     }
 }
 
+template <bool getlikelihood>
+inline void gaussian_pixel_get_data_sigma_inv(double & data_out, double & var_inv_out,
+    const MatrixUnchecked & data, const MatrixUnchecked & sigma_inv,
+    unsigned int dim1, unsigned int dim2, const bool is_error_matrix) {}
+
+template <>
+inline void gaussian_pixel_get_data_sigma_inv<true>(
+    double & data_out, double & sigma_inv_out,
+    const MatrixUnchecked & data, const MatrixUnchecked & sigma_inv,
+    unsigned int dim1, unsigned int dim2, const bool is_error_matrix)
+{
+    data_out = data(dim1, dim2);
+    sigma_inv_out = sigma_inv(dim1*is_error_matrix, dim2*is_error_matrix);
+};
+
+template <bool getlikelihood, GradientType gradient_type>
+inline void gaussian_pixel_get_data_sigma_inv(double & data_out, double & var_inv_out,
+    const MatrixUnchecked & data, const MatrixUnchecked & sigma_inv,
+    unsigned int dim1, unsigned int dim2, const bool is_error_matrix) {}
+
+template <>
+inline void gaussian_pixel_get_data_sigma_inv<false, GradientType::jacobian>(
+    double & data_out, double & sigma_inv_out,
+    const MatrixUnchecked & data, const MatrixUnchecked & sigma_inv,
+    unsigned int dim1, unsigned int dim2, const bool is_error_matrix)
+{
+    gaussian_pixel_get_data_sigma_inv<true>(
+        data_out, sigma_inv_out, data, sigma_inv, dim1, dim2, is_error_matrix);
+}
+
 // Compute Gaussian mixtures with the option to write output and/or evaluate the log likehood
 // TODO: Reconsider whether there's a better way to do this
 // The template arguments ensure that there is no performance penalty to any of the versions of this function.
