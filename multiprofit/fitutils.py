@@ -1357,6 +1357,7 @@ def set_exposure(model, band, index=0, image=None, error_inverse=None, psf=None,
         if psf is None and image is not None and error_inverse is None:
             img_sigma = np.sqrt(np.var(image))
             exposure.error_inverse = 1.0/(factor_sigma*img_sigma)
+            exposure.is_error_sigma = True
         else:
             exposure.error_inverse = error_inverse
         if np.ndim(exposure.error_inverse) == 0:

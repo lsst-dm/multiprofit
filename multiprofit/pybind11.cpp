@@ -86,7 +86,7 @@ PYBIND11_MODULE(_multiprofit, m)
         "loglike_gaussians_pixel", &multiprofit::loglike_gaussians_pixel,
         "Evaluate the log likelihood of a 2D Gaussian mixture model at the centers of pixels on a rectangular"
         "grid using the standard bivariate Gaussian PDF.",
-        "data"_a.noconvert(), "variance_inv"_a.noconvert(), "gaussians"_a.noconvert(),
+        "data"_a.noconvert(), "sigma_inv"_a.noconvert(), "gaussians"_a.noconvert(),
         "x_min"_a, "x_max"_a, "y_min"_a, "y_max"_a, "to_add"_a, "output"_a.noconvert(),
         "residual"_a.noconvert(), "grad"_a.noconvert(),
         "grad_param_map"_a.noconvert(), "grad_param_factor"_a.noconvert(),

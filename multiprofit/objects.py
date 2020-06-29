@@ -467,9 +467,7 @@ class Model:
                 exposure.meta['index_jacobian_start'] = datasize
                 datasize += exposure.image.size
                 exposure.meta['index_jacobian_end'] = datasize
-                if exposure.is_error_sigma:
-                    exposure.error_inverse = exposure.error_inverse**2
-                    exposure.is_error_sigma = False
+
             gpmb_indices, gpmb_params = grad_param_maps[band]
 
             for idx, profile in enumerate(profiles):
@@ -602,19 +600,16 @@ class Model:
                     f"new={item_new} vs old={item_old}"
         if errmsg != "":
             raise RuntimeError(errmsg)
-        image_new, model, _, _ = self.get_image_model_exposure(
+        image_new, _, _, likelihood_new = self.get_image_model_exposure(
             exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
-            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False,
+            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=True,
             verify_derivative=True)
-        grad_findif = (image_new-image)/dx
+        # (data - model_new)/sigma - (data - model)/sigma = -(model_new - model)/sigma
+        grad_findif = -exposure.get_sigma_inverse()*(image_new - image)/dx
         grad_jac = jacobian[:, :, idx_param+1]
-        passed = np.isclose(grad_findif, grad_jac, rtol=1e-3, atol=1e-5)
+        passed = np.isclose(grad_findif, grad_jac, rtol=1e-3, atol=1e-4)
         if np.all(passed):
             if dlldxs is not None:
-                _, _, _, likelihood_new = self.get_image_model_exposure(
-                    exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
-                    engineopts=engineopts, do_draw_image=False, scale=scale, get_likelihood=True)
-                likelihood_new -= exposure.meta['like_const']
                 dlldxs[1].append((likelihood_new - dlldxs[0])/dx)
             param.set_value(value, transformed=True)
         else:
@@ -828,7 +823,7 @@ class Model:
                         figaxes = (figure, axes[row_figure])
 
                 # Validate the Jacobian by comparing to finite differencing if requested
-                if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian' in exposure.meta:
+                if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian_img' in exposure.meta:
                     jacobian = exposure.meta['jacobian_img']
                     has_bg = 0
                     flux_bg = 0.
@@ -841,13 +836,13 @@ class Model:
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
                                      num_params_gauss*(len(profiles) - has_bg) + has_bg))
                     gaussians = gaussian_profiles_to_matrix([p[band] for p in profiles])
-                    var_inv = exposure.get_var_inverse()
+                    sigma_inv = exposure.get_sigma_inverse()
                     mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, variance_inv=var_inv, gaussians=gaussians,
+                        data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians,
                         to_add=False, grad=grad, background=np.array(
                             [flux_bg], dtype=np.float64) if has_bg else None)
                     likelihood = mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, variance_inv=var_inv, gaussians=gaussians, to_add=False)
+                        data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians, to_add=False)
                     dlldxs = []
                     failed = []
                     for idx_param, param in enumerate(params):
@@ -855,8 +850,8 @@ class Model:
                         for dx_ratio, do_raise in [(1e-7, False), (1e-5, True)]:
                             if self.__validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                                meta_model, dx_ratio=dx_ratio, do_raise=False, do_plot_if_failed=False,
-                                dlldxs=(likelihood, dlldxs)
+                                meta_model, dx_ratio=dx_ratio, do_raise=False,
+                                do_plot_if_failed=plot and do_raise, dlldxs=(likelihood, dlldxs)
                             ):
                                 passed = True
                                 break
@@ -871,8 +866,7 @@ class Model:
                     if image is None:
                         if do_compare_likelihoods and 'jacobian' in exposure.meta:
                             likelihood = mpfgauss.loglike_gaussians_pixel(
-                                data=exposure.image,
-                                variance_inv=exposure.get_var_inverse(),
+                                data=exposure.image, sigma_inv=exposure.get_sigma_inverse(),
                                 gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                                 output=image)
                         else:
@@ -1255,8 +1249,8 @@ class Model:
                 and not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
             if get_like_only:
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
+                sigma_inv = exposure.get_sigma_inverse()
                 if 'like_const' not in exposure.meta:
-                    sigma_inv = exposure.get_sigma_inverse()
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
@@ -1295,7 +1289,7 @@ class Model:
                         if do_fit_leastsq_prep:
                             grad.fill(0)
                             if level_bg is not None:
-                                grad[:, :, -1-order_bg] = 1
+                                grad[:, :, -1-order_bg] = -sigma_inv
                     if do_fit_leastsq_prep:
                         grad_param_map = np.zeros((num_profiles, num_params_gauss), dtype=np.uint64)
                         grad_param_factor = np.zeros((num_profiles, num_params_gauss))
@@ -1411,7 +1405,7 @@ class Model:
                     mpfgauss.zeros_double
                 output = image if do_draw_image else mpfgauss.zeros_double
                 likelihood = exposure.meta['like_const'] + mpf.loglike_gaussians_pixel(
-                    data=exposure.image, variance_inv=exposure.get_var_inverse(), gaussians=profile_matrix,
+                    data=exposure.image, sigma_inv=sigma_inv, gaussians=profile_matrix,
                     x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False, output=output, residual=residual,
                     grad=grad, grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
                     sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor,
@@ -1725,9 +1719,9 @@ class Model:
         if image is not None:
             sum_not_finite = np.sum(~np.isfinite(image))
             if sum_not_finite > 0:
-                raise RuntimeError("{}.get_image_model_exposure() got {:d}/{:d} non-finite pixels".format(
-                    type(self), sum_not_finite, np.prod(image.shape)
-                ))
+                raise RuntimeError(f"{type(self)}.get_image_model_exposure() got "
+                                   f"{sum_not_finite:d}/{np.prod(image.shape):d} non-finite pixels from"
+                                   f" params {params}")
 
         return image, model, times, likelihood
 
@@ -1985,7 +1979,7 @@ class Modeller:
         likelihood = self.evaluate(
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
             do_verify_jacobian=True, do_compare_likelihoods=True)
-        likelihood_init = likelihood[0]
+        likelihood_init = likelihood
         self.logger.info(f"Param names   : {name_params}")
         self.logger.info(f"Initial params: {params_init}")
         self.logger.info(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
@@ -2107,18 +2101,25 @@ class Modeller:
                 "neldermead" if self.modellib == "pygmo" else "Nelder-Mead")
             if self.modellib == "scipy":
                 if self.model.can_do_fit_leastsq:
+                    for band, exposures in self.model.data.exposures.items():
+                        for exposure in exposures:
+                            if not exposure.is_error_sigma:
+                                exposure.error_inverse = np.sqrt(exposure.error_inverse)
+                                exposure.is_error_sigma = True
+
                     def residuals(params_i, modeller):
                         modeller.evaluate(params_i, timing=timing, get_likelihood=False, do_jacobian=True)
                         modeller.fitinfo["n_eval_func"] += 1
-                        return -modeller.model.residuals
+                        return modeller.model.residuals
 
                     def jacobian(params_i, modeller):
                         modeller.fitinfo["n_eval_grad"] += 1
                         return modeller.model.jacobian[:, modeller.model.grad_param_free]
 
+                    bounds = ([x[0] for x in limits], [x[1] for x in limits])
                     time_init = time.time()
                     result = spopt.least_squares(residuals, params_init, jac=jacobian, args=(self,),
-                                                 bounds=([x[0] for x in limits], [x[1] for x in limits]))
+                                                 bounds=bounds)
                     time_run += time.time() - time_init
                     params_best = result.x
                     do_fit_leastsq_cleanup = True
