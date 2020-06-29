@@ -75,6 +75,7 @@ class GaussianLsqPrior(LsqPrior):
         # dlogPDF/dx = -y/s
         if calc_jacobian:
             jacobians[self.param] = -residual/self.stddev
+
         return prior, (residual,), jacobians
 
     def __len__(self):
@@ -115,40 +116,42 @@ class ShapeLsqPrior(LsqPrior):
                                        f' = {self.size_mean_std}')
                 residuals.append(residual)
                 prior += spstats.norm.logpdf(residual)
-            if self.axrat_params:
-                residual = ((spspec.logit(axrat/self.axrat_params[2]) - self.axrat_params[0])
-                            / self.axrat_params[1])
-                if not np.isfinite(residual):
-                    raise RuntimeError(f'Infinite axis ratio prior residual from q={axrat} and mean, std, '
-                                       f'logit stretch divisor = {self.axrat_params}')
-                residuals.append(residual)
-                prior += spstats.norm.logpdf(residual)
-            if calc_jacobian:
-                dsize_x = delta_jacobian*np.max((size_x, 1e-3))
-                dsize_y = delta_jacobian*np.max((size_y, 1e-3))
-                drho = -delta_jacobian*(np.sign(rho) + (rho == 0))
-                values = {x: x.get_value(transformed=x.transformed)
-                          for x in (self.size_x, self.size_y, self.rho)}
-                for param, delta in ((self.size_x, dsize_x), (self.size_y, dsize_y), (self.rho, drho)):
-                    good = False
-                    for sign in (1, -1):
-                        try:
-                            eps = sign*delta
-                            param.set_value(param.get_value(transformed=False) + eps, transformed=False)
-                            good = True
-                            delta = eps
-                            break
-                        except RuntimeError:
-                            pass
-                    if not good or not np.abs(eps) > 0:
-                        raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
-                    _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
-                    jacobian = (residuals_new[0] - residuals[0])/eps, (residuals_new[1] - residuals[1])/eps
-                    if not all(np.isfinite(jacobian)):
-                        raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
-                    jacobians[param] = jacobian
-                    # Reset to original value
-                    param.set_value(values[param], transformed=param.transformed)
+
+        if self.axrat_params:
+            residual = ((spspec.logit(axrat/self.axrat_params[2]) - self.axrat_params[0])
+                        / self.axrat_params[1])
+            if not np.isfinite(residual):
+                raise RuntimeError(f'Infinite axis ratio prior residual from q={axrat} and mean, std, '
+                                   f'logit stretch divisor = {self.axrat_params}')
+            residuals.append(residual)
+            prior += spstats.norm.logpdf(residual)
+
+        if calc_jacobian:
+            dsize_x = delta_jacobian*np.max((size_x, 1e-3))
+            dsize_y = delta_jacobian*np.max((size_y, 1e-3))
+            drho = -delta_jacobian*(np.sign(rho) + (rho == 0))
+            values = {x: x.get_value(transformed=x.transformed)
+                      for x in (self.size_x, self.size_y, self.rho)}
+            for param, delta in ((self.size_x, dsize_x), (self.size_y, dsize_y), (self.rho, drho)):
+                good = False
+                for sign in (1, -1):
+                    try:
+                        eps = sign*delta
+                        param.set_value(param.get_value(transformed=False) + eps, transformed=False)
+                        good = True
+                        delta = eps
+                        break
+                    except RuntimeError:
+                        pass
+                if not good or not np.abs(eps) > 0:
+                    raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
+                _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
+                jacobian = (residuals_new[0] - residuals[0])/eps, (residuals_new[1] - residuals[1])/eps
+                if not all(np.isfinite(jacobian)):
+                    raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
+                jacobians[param] = jacobian
+                # Reset to original value
+                param.set_value(values[param], transformed=param.transformed)
 
         return prior, residuals, jacobians
 
