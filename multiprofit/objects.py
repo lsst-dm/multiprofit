@@ -426,20 +426,21 @@ class Model:
             sersic_param_maps: As grad_param_maps but specifically for Sersic index parameters.
             can_do_fit_leastsq: If False, then both param_maps are set to None.
         """
-        return_none = (None, None, False)
+        return_none = (None, None, False, None, None, None)
         if engine == 'galsim' and not (
                 engineopts is not None and engineopts.get("drawmethod") == draw_method_pixel["galsim"]):
             return return_none
         params = self.get_parameters(fixed=True)
         fixed = np.zeros(len(params))
-        num_params_free = 0
+        n_params_free = 0
         num_sersic_free = 0
         idx_params = {param: 0 for param in params}
+        n_priors = 0 if not self.priors else np.sum([len(p) for p in self.priors])
         for idx, param in enumerate(params):
             fixed[idx] = param.fixed
             if not param.fixed:
-                idx_params[param] = num_params_free + 1
-                num_params_free += 1
+                idx_params[param] = n_params_free + 1
+                n_params_free += 1
                 if param.name == "nser":
                     num_sersic_free += 1
         profiles = self.get_profiles(bands=bands, engine="libprofit")
@@ -463,12 +464,10 @@ class Model:
         param_flux_added = {}
         for band in bands:
             for exposure in self.data.exposures[band]:
-                exposure.meta["index_jacobian_start"] = datasize
+                exposure.meta['index_jacobian_start'] = datasize
                 datasize += exposure.image.size
-                exposure.meta["index_jacobian_end"] = datasize
-                if exposure.is_error_sigma:
-                    exposure.error_inverse = exposure.error_inverse**2
-                    exposure.is_error_sigma = False
+                exposure.meta['index_jacobian_end'] = datasize
+
             gpmb_indices, gpmb_params = grad_param_maps[band]
 
             for idx, profile in enumerate(profiles):
@@ -485,8 +484,8 @@ class Model:
                 if param_flux_ratio_isnt_none and param_flux not in param_flux_added:
                     param_flux_added[param_flux] = True
                     if not param_flux_ratio.fixed:
-                        num_params_free += 1
-                        idx_params[param_flux] = num_params_free
+                        n_params_free += 1
+                        idx_params[param_flux] = n_params_free
                 is_bg = profile.get('background')
                 # TODO: Make this {'flux': 0} if is_bg when this works
                 orders_profile = {} if is_bg else order_params_gauss
@@ -498,24 +497,30 @@ class Model:
                         gpmb_indices_row[idx_param] = idx_params[param]
                     params_to_append.append(param)
                 gpmb_params.append(params_to_append)
-        if self.jacobian is None or self.jacobian.shape != (datasize, num_params_free+1):
-            self.jacobian = np.zeros((datasize, num_params_free+1))
+
+        datasize += n_priors
+        n_params_jac = n_params_free + 1
+        jacobian_prior, residuals_prior = None, None
+        if self.jacobian is None or self.jacobian.shape != (datasize, n_params_jac):
+            self.jacobian = np.zeros((datasize + n_priors, n_params_jac))
+            jacobian_prior = self.jacobian[datasize:, ].view()
+            jacobian_prior.shape = (n_priors, n_params_jac)
         if self.residuals is None or self.residuals.shape != (datasize,):
-            self.residuals = np.zeros(datasize)
+            self.residuals = np.zeros(datasize + n_priors)
+            residuals_prior = self.residuals[datasize:].view()
         for band in bands:
             for exposure in self.data.exposures[band]:
-                exposure.meta["jacobian"] = self.jacobian[exposure.meta["index_jacobian_start"]:
-                                                          exposure.meta["index_jacobian_end"], ].view()
-                exposure.meta["jacobian"].shape = (exposure.image.shape[0], exposure.image.shape[1],
-                                                   num_params_free+1)
-                exposure.meta["residual"] = self.residuals[exposure.meta["index_jacobian_start"]:
-                                                           exposure.meta["index_jacobian_end"]].view()
-                exposure.meta["residual"].shape = exposure.image.shape
+                start, end = (exposure.meta[f'index_jacobian_{pos}'] for pos in ('start', 'end'))
+                exposure.meta['jacobian_img'] = self.jacobian[start:end, ].view()
+                exposure.meta['jacobian_img'].shape = (
+                    exposure.image.shape[0], exposure.image.shape[1], n_params_jac)
+                exposure.meta['residual_img'] = self.residuals[start:end].view()
+                exposure.meta['residual_img'].shape = exposure.image.shape
         for src in self.sources:
             for comp in src.modelphotometric.components:
                 if hasattr(comp, 'do_return_all_profiles'):
                     comp.do_return_all_profiles = True
-        return grad_param_maps, sersic_param_maps, True
+        return grad_param_maps, sersic_param_maps, True, jacobian_prior, residuals_prior, idx_params
 
     def do_fit_leastsq_cleanup(self, bands):
         self.grad_param_maps = None
@@ -527,6 +532,8 @@ class Model:
                         del exposure.meta[item]
         self.jacobian = None
         self.residuals = None
+        self.jacobian_prior = None
+        self.residuals_prior = None
 
     def __validate_jacobian_param(
             self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
@@ -593,19 +600,16 @@ class Model:
                     f"new={item_new} vs old={item_old}"
         if errmsg != "":
             raise RuntimeError(errmsg)
-        image_new, model, _, _ = self.get_image_model_exposure(
+        image_new, _, _, likelihood_new = self.get_image_model_exposure(
             exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
-            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=False,
+            engineopts=engineopts, do_draw_image=True, scale=scale, get_likelihood=True,
             verify_derivative=True)
-        grad_findif = (image_new-image)/dx
+        # (data - model_new)/sigma - (data - model)/sigma = -(model_new - model)/sigma
+        grad_findif = -exposure.get_sigma_inverse()*(image_new - image)/dx
         grad_jac = jacobian[:, :, idx_param+1]
-        passed = np.isclose(grad_findif, grad_jac, rtol=1e-3, atol=1e-5)
+        passed = np.isclose(grad_findif, grad_jac, rtol=1e-3, atol=1e-4)
         if np.all(passed):
             if dlldxs is not None:
-                _, _, _, likelihood_new = self.get_image_model_exposure(
-                    exposure, profiles=profiles_new, meta_model=meta_model_new, engine=engine,
-                    engineopts=engineopts, do_draw_image=False, scale=scale, get_likelihood=True)
-                likelihood_new -= exposure.meta['like_const']
                 dlldxs[1].append((likelihood_new - dlldxs[0])/dx)
             param.set_value(value, transformed=True)
         else:
@@ -651,8 +655,9 @@ class Model:
                  do_plot_multi=False, figure=None, axes=None, row_figure=None, name_model="Model",
                  description_model=None, params_postfix_name_model=None, do_draw_image=False, scale=1,
                  clock=False, do_plot_as_column=False,
-                 img_plot_maxs=None, img_multi_plot_max=None, weights_band=None, do_fit_linear_prep=False,
-                 do_fit_leastsq_prep=False, do_jacobian=False, do_verify_jacobian=False,
+                 img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
+                 do_fit_linear_prep=False, do_fit_leastsq_prep=False, do_fit_nonlinear_prep=False,
+                 do_jacobian=False, do_verify_jacobian=False,
                  do_compare_likelihoods=False, grad_loglike=None):
         """
         Evaluate a model, plot and/or benchmark, and optionally return the likelihood and derived images.
@@ -693,6 +698,8 @@ class Model:
         :param weights_band: dict; key band: weight for scaling each band in multiband plots.
         :param do_fit_linear_prep: bool; do prep work to fit a linear model?
         :param do_fit_leastsq_prep: bool; do prep work for a least squares fit?
+        :param do_fit_nonlinear_prep: bool; do prep work to fit a non-linear model?
+            Ignored if do_leastsq_prep and leastsq prep succeeds.
         :param do_jacobian: bool; evaluate the Jacobian?
         :param do_verify_jacobian: bool; verify the Jacobian if do_fit_leastsq_prep by comparing to
             finite differencing
@@ -770,10 +777,13 @@ class Model:
         if do_plot_multi:
             weight_per_img = []
         if do_fit_leastsq_prep:
-            self.grad_param_maps, self.param_maps['sersic'], self.can_do_fit_leastsq = \
+            self.grad_param_maps, self.param_maps['sersic'], self.can_do_fit_leastsq,\
+                self.jacobian_prior, self.residuals_prior, self.params_prior_jacobian = \
                 self._do_fit_leastsq_prep(bands, engine, engineopts)
             if not self.can_do_fit_leastsq:
                 do_fit_leastsq_prep = False
+        if not do_fit_leastsq_prep and do_fit_nonlinear_prep and self.priors:
+            self.residuals_prior = np.zeros(np.sum([len(p) for p in self.priors]))
         if clock:
             times["setup"] = time.time() - time_now
             time_now = time.time()
@@ -793,9 +803,9 @@ class Model:
                     exposure, profiles=profiles, meta_model=meta_model, engine=engine,
                     engineopts=engineopts, do_draw_image=do_draw_image or plot or do_compare_likelihoods,
                     scale=scale, clock=clock, times=times, do_fit_linear_prep=do_fit_linear_prep,
-                    do_fit_leastsq_prep=do_fit_leastsq_prep, do_jacobian=do_jacobian,
-                    get_likelihood=get_likelihood, is_likelihood_log=is_likelihood_log,
-                    grad_loglike=grad_loglike)
+                    do_fit_leastsq_prep=do_fit_leastsq_prep, do_fit_nonlinear_prep=do_fit_nonlinear_prep,
+                    do_jacobian=do_jacobian, get_likelihood=get_likelihood,
+                    is_likelihood_log=is_likelihood_log, grad_loglike=grad_loglike)
                 if clock:
                     name_exposure = '_'.join([band, str(idx_exposure)])
                     times['_'.join([name_exposure, 'modeltotal'])] = time.time() - time_now
@@ -813,8 +823,8 @@ class Model:
                         figaxes = (figure, axes[row_figure])
 
                 # Validate the Jacobian by comparing to finite differencing if requested
-                if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian' in exposure.meta:
-                    jacobian = exposure.meta['jacobian']
+                if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian_img' in exposure.meta:
+                    jacobian = exposure.meta['jacobian_img']
                     has_bg = 0
                     flux_bg = 0.
                     for p in profiles:
@@ -826,13 +836,13 @@ class Model:
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
                                      num_params_gauss*(len(profiles) - has_bg) + has_bg))
                     gaussians = gaussian_profiles_to_matrix([p[band] for p in profiles])
-                    var_inv = exposure.get_var_inverse()
+                    sigma_inv = exposure.get_sigma_inverse()
                     mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, variance_inv=var_inv, gaussians=gaussians,
+                        data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians,
                         to_add=False, grad=grad, background=np.array(
                             [flux_bg], dtype=np.float64) if has_bg else None)
                     likelihood = mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, variance_inv=var_inv, gaussians=gaussians, to_add=False)
+                        data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians, to_add=False)
                     dlldxs = []
                     failed = []
                     for idx_param, param in enumerate(params):
@@ -840,8 +850,8 @@ class Model:
                         for dx_ratio, do_raise in [(1e-7, False), (1e-5, True)]:
                             if self.__validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
-                                meta_model, dx_ratio=dx_ratio, do_raise=False, do_plot_if_failed=False,
-                                dlldxs=(likelihood, dlldxs)
+                                meta_model, dx_ratio=dx_ratio, do_raise=False,
+                                do_plot_if_failed=plot and do_raise, dlldxs=(likelihood, dlldxs)
                             ):
                                 passed = True
                                 break
@@ -856,8 +866,7 @@ class Model:
                     if image is None:
                         if do_compare_likelihoods and 'jacobian' in exposure.meta:
                             likelihood = mpfgauss.loglike_gaussians_pixel(
-                                data=exposure.image,
-                                variance_inv=exposure.get_var_inverse(),
+                                data=exposure.image, sigma_inv=exposure.get_sigma_inverse(),
                                 gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
                                 output=image)
                         else:
@@ -1159,8 +1168,8 @@ class Model:
     def get_image_model_exposure(
             self, exposure, profiles=None, meta_model=None, engine=None, engineopts=None, do_draw_image=True,
             scale=1, clock=False, times=None, do_fit_linear_prep=False, do_fit_leastsq_prep=False,
-            do_jacobian=False, get_likelihood=False, is_likelihood_log=True, verify_derivative=False,
-            grad_loglike=None):
+            do_fit_nonlinear_prep=False, do_jacobian=False, get_likelihood=False, is_likelihood_log=True,
+            verify_derivative=False, grad_loglike=None):
         """
             Draw model image for one exposure with one PSF
 
@@ -1240,8 +1249,8 @@ class Model:
                 and not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
             if get_like_only:
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
+                sigma_inv = exposure.get_sigma_inverse()
                 if 'like_const' not in exposure.meta:
-                    sigma_inv = exposure.get_sigma_inverse()
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
@@ -1276,11 +1285,11 @@ class Model:
                         grad = grad_loglike
                         do_jacobian = False
                     else:
-                        grad = exposure.meta['jacobian']
+                        grad = exposure.meta['jacobian_img']
                         if do_fit_leastsq_prep:
                             grad.fill(0)
                             if level_bg is not None:
-                                grad[:, :, -1-order_bg] = 1
+                                grad[:, :, -1-order_bg] = -sigma_inv
                     if do_fit_leastsq_prep:
                         grad_param_map = np.zeros((num_profiles, num_params_gauss), dtype=np.uint64)
                         grad_param_factor = np.zeros((num_profiles, num_params_gauss))
@@ -1392,11 +1401,11 @@ class Model:
                     sersic_param_map = mpfgauss.zeros_uint64
                     sersic_param_factor = mpfgauss.zeros_double
                 # Don't output the image if do_fit_linear_prep is true - the next section will do that
-                residual = exposure.meta["residual"] if do_jacobian or do_fit_leastsq_prep else \
+                residual = exposure.meta['residual_img'] if do_jacobian or do_fit_leastsq_prep else \
                     mpfgauss.zeros_double
                 output = image if do_draw_image else mpfgauss.zeros_double
                 likelihood = exposure.meta['like_const'] + mpf.loglike_gaussians_pixel(
-                    data=exposure.image, variance_inv=exposure.get_var_inverse(), gaussians=profile_matrix,
+                    data=exposure.image, sigma_inv=sigma_inv, gaussians=profile_matrix,
                     x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False, output=output, residual=residual,
                     grad=grad, grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
                     sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor,
@@ -1482,20 +1491,18 @@ class Model:
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
-                        try:
-                            if profile.get('background'):
-                                # TODO: Use this or an alternative if background models become more complex
-                                # than just a flat background
-                                # imgprofiles = mpfgauss.loglike_gaussians_pixel()
-                                imgprofiles = np.full((ny, nx), params['flux'])
-                            else:
-                                imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
-                                    params['cenx'], params['ceny'], params['flux'],
-                                    mpfgauss.reff_to_sigma(params['sigma_x']),
-                                    mpfgauss.reff_to_sigma(params['sigma_y']),
-                                    params['rho'], 0, nx, 0, ny, nx, ny))
-                        except Exception as e:
-                            print('e', profile, params)
+
+                        if profile.get('background'):
+                            # TODO: Use this or an alternative if background models become more complex
+                            # than just a flat background
+                            # imgprofiles = mpfgauss.loglike_gaussians_pixel()
+                            imgprofiles = np.full((ny, nx), params['flux'])
+                        else:
+                            imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
+                                params['cenx'], params['ceny'], params['flux'],
+                                mpfgauss.reff_to_sigma(params['sigma_x']),
+                                mpfgauss.reff_to_sigma(params['sigma_y']),
+                                params['rho'], 0, nx, 0, ny, nx, ny))
                     if do_fit_linear_prep:
                         exposure.meta['img_models_params_free'] += [(imgprofiles, param_flux)]
                     if not do_draw_image:
@@ -1675,19 +1682,19 @@ class Model:
                                     # Somewhat ugly hack - catch RunTimeErrors which are usually excessively
                                     # large FFTs and then try to evaluate the model in real space or give
                                     # up if it's any other error
-                                    except RuntimeError as e:
+                                    except RuntimeError:
                                         try:
                                             if method == "fft":
                                                 image_gs = profile_to_draw.drawImage(
                                                     method='real_space', nx=nx, ny=ny, scale=scale).array
                                             else:
-                                                raise e
-                                        except Exception as e:
-                                            raise e
-                                    except Exception as e:
+                                                raise
+                                        except Exception:
+                                            raise
+                                    except Exception:
                                         print("Exception attempting to draw image from profiles:",
                                               profile_to_draw)
-                                        raise e
+                                        raise
                                     if do_fit_linear_prep:
                                         if is_profile_linear:
                                             exposure.meta['img_models_params_free'].append(
@@ -1712,9 +1719,9 @@ class Model:
         if image is not None:
             sum_not_finite = np.sum(~np.isfinite(image))
             if sum_not_finite > 0:
-                raise RuntimeError("{}.get_image_model_exposure() got {:d}/{:d} non-finite pixels".format(
-                    type(self), sum_not_finite, np.prod(image.shape)
-                ))
+                raise RuntimeError(f"{type(self)}.get_image_model_exposure() got "
+                                   f"{sum_not_finite:d}/{np.prod(image.shape):d} non-finite pixels from"
+                                   f" params {params}")
 
         return image, model, times, likelihood
 
@@ -1767,22 +1774,36 @@ class Model:
                       src.get_param_names(free=free, fixed=fixed)]
         return names
 
-    def get_prior_value(self, free=True, fixed=True, log=True):
-        return np.sum(np.array(
-            [param.get_prior(log=log) for param in self.get_parameters(free=free, fixed=fixed)]
-        ))
-
-    # TODO: implement
-    def get_prior_modes(self, free=True, fixed=True):
-        params = self.get_parameters(free=free, fixed=fixed)
-        return [param.get_prior.mode for param in params]
+    def get_prior_value(self, log=True):
+        if self.priors:
+            idx_params = self.params_prior_jacobian
+            prior_log = 0
+            idx_prior = 0
+            for prior in self.priors:
+                prior_value, residuals, jacobians = prior.calc_residual(calc_jacobian=True)
+                prior_log += prior_value
+                n_res = len(residuals)
+                sli = slice(idx_prior, idx_prior + n_res)
+                try:
+                    self.residuals_prior[sli] = residuals
+                except Exception:
+                    print(f"Failed to set prior residual for prior {prior}")
+                    raise
+                for param, jac_param in jacobians.items():
+                    idx_param = idx_params.get(param)
+                    if idx_param is not None:
+                        self.jacobian_prior[sli, idx_param] += jac_param
+                idx_prior += n_res
+            return prior_log if log else 10**prior_log
+        else:
+            return 0. if log else 1.
 
     def get_likelihood(self, params=None, data=None, log=True, **kwargs):
         likelihood = self.evaluate(params, data, is_likelihood_log=log, **kwargs)[0]
         return likelihood
 
     def __init__(self, sources, data=None, likefunc="normal", engine=None, engineopts=None, name="",
-                 logger=None):
+                 logger=None, priors=None):
         if engine is None:
             engine = "libprofit"
         for i, source in enumerate(sources):
@@ -1806,12 +1827,16 @@ class Model:
         self.grad_param_maps = None
         self.grad_param_free = None
         self.jacobian = None
+        self.jacobian_prior = None
         self.param_maps = {'sersic': None}
         self.likefunc = likefunc
         self.name = name
         self.logger = logger
         self.residuals = None
+        self.residuals_prior = None
         self.sources = sources
+        self.priors = priors
+        self.params_prior_jacobian = None
 
 
 class ModellerPygmoUDP:
@@ -1861,11 +1886,11 @@ class Modeller:
 
         if timing:
             time_init = time.time()
-        # TODO: Attempt to prevent/detect defeating this by modifying fixed/free params?
-        prior = self.fitinfo["priorLogfixed"] + self.model.get_prior_value(free=True, fixed=False)
         # TODO: Clarify that setting do_draw_image = True forces likelihood evaluation with both C++/Python
         #  (if possible)
         likelihood = self.model.get_likelihood(params_free, **kwargs)
+        # Must come second if do_fit_leastsq_prep is True and not previously called
+        prior = self.model.get_prior_value() if (likelihood is not None) else None
         # return LL, LP, etc.
         if returnlponly:
             rv = likelihood + prior
@@ -1885,8 +1910,6 @@ class Modeller:
             "likelihood": likelihood,
             "prior": prior,
         }
-        if log_step and loginfo['likelihood'] is None:
-            loginfo['likelihood'] = self.model.get_likelihood()
         if timing:
             loginfo["time"] = tstep
             loginfo["time_init"] = time_init
@@ -1914,7 +1937,6 @@ class Modeller:
         :param do_linear_only: bool; whether to skip the non-linear fit for non-linear problems.
         :return: dict with output.
         """
-        self.fitinfo["priorLogfixed"] = self.model.get_prior_value(free=False, fixed=True, log=True)
         self.fitinfo["log"] = []
         self.fitinfo["print_step_interval"] = print_step_interval
 
@@ -1955,9 +1977,9 @@ class Modeller:
 
         time_start = time.time()
         likelihood = self.evaluate(
-            params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_verify_jacobian=True,
-            do_compare_likelihoods=True)
-        likelihood_init = likelihood[0]
+            params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
+            do_verify_jacobian=True, do_compare_likelihoods=True)
+        likelihood_init = likelihood
         self.logger.info(f"Param names   : {name_params}")
         self.logger.info(f"Initial params: {params_init}")
         self.logger.info(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
@@ -1966,6 +1988,8 @@ class Modeller:
         do_nonlinear = not (do_linear_only or (is_linear and do_linear and self.model.can_do_fit_leastsq))
 
         time_run = 0.0
+        # TODO: This should be an input argument
+        bands = np.sort(list(self.model.data.exposures.keys()))
         if do_linear:
             # If this isn't a linear problem, fix all free non-flux parameters and do a linear fit first
             if not is_linear:
@@ -1975,8 +1999,6 @@ class Modeller:
             self.logger.info("Beginning linear fit")
             time_init = time.time()
             datasizes = []
-            # TODO: This should be an input argument
-            bands = np.sort(list(self.model.data.exposures.keys()))
             params = []
             for band in bands:
                 params_band = None
@@ -2072,26 +2094,35 @@ class Modeller:
         # for which it's unnecessary
         # TODO: Review if/when priors are changed - linear fits won't be able to handle non-linear priors
         # (even if they're Gaussian, e.g. if applied to transforms/non-linear combinations of params)
+        do_fit_leastsq_cleanup = False
         if do_nonlinear:
             limits = self.model.get_limits(fixed=False, transformed=True)
             algo = self.modellibopts["algo"] if "algo" in self.modellibopts else (
                 "neldermead" if self.modellib == "pygmo" else "Nelder-Mead")
             if self.modellib == "scipy":
                 if self.model.can_do_fit_leastsq:
+                    for band, exposures in self.model.data.exposures.items():
+                        for exposure in exposures:
+                            if not exposure.is_error_sigma:
+                                exposure.error_inverse = np.sqrt(exposure.error_inverse)
+                                exposure.is_error_sigma = True
+
                     def residuals(params_i, modeller):
                         modeller.evaluate(params_i, timing=timing, get_likelihood=False, do_jacobian=True)
                         modeller.fitinfo["n_eval_func"] += 1
-                        return -modeller.model.residuals
+                        return modeller.model.residuals
 
                     def jacobian(params_i, modeller):
                         modeller.fitinfo["n_eval_grad"] += 1
                         return modeller.model.jacobian[:, modeller.model.grad_param_free]
 
+                    bounds = ([x[0] for x in limits], [x[1] for x in limits])
                     time_init = time.time()
                     result = spopt.least_squares(residuals, params_init, jac=jacobian, args=(self,),
-                                                 bounds=([x[0] for x in limits], [x[1] for x in limits]))
+                                                 bounds=bounds)
                     time_run += time.time() - time_init
                     params_best = result.x
+                    do_fit_leastsq_cleanup = True
                 else:
                     def neg_like_model(params_i, modeller):
                         modeller.fitinfo["n_eval_func"] += 1
@@ -2177,6 +2208,9 @@ class Modeller:
             result = None
             time_run += time.time() - time_init
 
+        if do_fit_leastsq_cleanup:
+            self.model.do_fit_leastsq_cleanup(bands)
+
         result = {
             "fitinfo": self.fitinfo.copy(),
             "params": self.model.get_parameters(),
@@ -2202,10 +2236,8 @@ class Modeller:
             logger = logging.getLogger(__name__)
         self.logger = logger
 
-        # Scratch space, I guess...
-        self.fitinfo = {
-            "priorLogfixed": np.log(1.0)
-        }
+        # Scratch space
+        self.fitinfo = {}
 
 
 class Source:
@@ -2961,15 +2993,6 @@ class Parameter:
             return self.transform.reverse(self.value)
         return np.float64(self.value)
 
-    def get_prior(self, log=True):
-        if self.prior is None:
-            prior = 1.0
-            if log:
-                prior = 0.
-        else:
-            prior = self.prior.get_value(param=self, log=log)
-        return prior
-
     def get_limits(self, transformed=False):
         lower = self.limits.lower
         upper = self.limits.upper
@@ -3001,9 +3024,9 @@ class Parameter:
             # TODO: Error checking, etc. There are probably better ways to do this
             for param in self.inheritors:
                 param.value = self.value
-        except Exception as e:
+        except Exception:
             print(f"Failed to set {self} to value={value}")
-            raise e
+            raise
 
     def __str__(self):
         attrs = ', '.join([
@@ -3012,7 +3035,6 @@ class Parameter:
                 limits=self.limits,
                 inheritors=self.inheritors,
                 modifiers=self.modifiers,
-                prior=self.prior,
                 transform=self.transform,
                 transformed=self.transformed,
                 value=self.value,
@@ -3024,9 +3046,7 @@ class Parameter:
         return self.get_value(*args, **kwargs)
 
     def __init__(self, name, value, unit="", limits=None, transform=None, transformed=True,
-                 prior=None, fixed=False, inheritors=None, modifiers=None):
-        if prior is not None and not isinstance(prior, Prior):
-            raise TypeError("prior (type={:s}) is not an instance of {:s}".format(type(prior), type(Prior)))
+                 fixed=False, inheritors=None, modifiers=None):
         if transform is None:
             transform = Transform()
         if limits is None:
@@ -3041,7 +3061,6 @@ class Parameter:
         self.limits = limits
         self.transform = transform
         self.transformed = transformed
-        self.prior = prior
         # List of parameters that should inherit values from this one
         self.inheritors = [] if inheritors is None else inheritors
         # List of parameters that can modify this parameter's value - user decides what to do with them
@@ -3064,7 +3083,6 @@ class FluxParameter(Parameter):
                 inheritors=self.inheritors,
                 is_fluxratio=self.is_fluxratio,
                 modifiers=self.modifiers,
-                prior=self.prior,
                 transform=self.transform,
                 transformed=self.transformed,
                 value=self.value,
@@ -3072,49 +3090,11 @@ class FluxParameter(Parameter):
         ])
         return f'FluxParameter (name={self.name}):({attrs})'
 
-    def __init__(self, band, name, value, unit, limits, transform=None, transformed=True, prior=None,
+    def __init__(self, band, name, value, unit, limits, transform=None, transformed=True,
                  fixed=None, is_fluxratio=None):
         if is_fluxratio is None:
             is_fluxratio = False
         Parameter.__init__(self, name=name, value=value, unit=unit, limits=limits, transform=transform,
-                           transformed=transformed, prior=prior, fixed=fixed)
+                           transformed=transformed, fixed=fixed)
         self.band = band
         self.is_fluxratio = is_fluxratio
-
-
-class Prior:
-    """
-        A prior probability distribution function.
-        Not an ecclesiastical superior usually of lower rank than an abbot.
-
-        TODO: I'm not sure how to enforce proper normalization without implementing specific subclasses
-        e.g. Even in a flat prior, if the limits change the normalization does too.
-    """
-    def get_value(self, param, log):
-        if not isinstance(param, Parameter):
-            raise TypeError(
-                "param(type={:s}) is not an instance of {:s}".format(type(param), type(Parameter)))
-
-        if self.transformed != self.limits.transformed:
-            raise ValueError("Prior must have same transformed flag as its Limits")
-
-        value_param = param.get_value(transformed=self.transformed)
-        if self.limits.within(value_param):
-            prior = self.func(value_param)
-        else:
-            prior = 0.0
-        if log and not self.log:
-            return np.log(prior)
-        elif not log and self.log:
-            return np.exp(prior)
-        return prior
-
-    def __init__(self, func, log, transformed, mode, limits):
-        if not isinstance(limits, Limits):
-            "Prior limits(type={:s}) is not an instance of {:s}".format(type(limits), type(Limits))
-        # TODO: how to type check this?
-        self.func = func
-        self.log = log
-        self.transformed = transformed
-        self.mode = mode
-        self.limits = limits

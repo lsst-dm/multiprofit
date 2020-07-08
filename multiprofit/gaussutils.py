@@ -63,7 +63,7 @@ def covar_to_ellipse(x, use_method_eigen=True):
         covar = x.get_covariance(matrix=True)
     elif len(x) == 3:
         if not all(isinstance(v, np.ndarray) for v in x):
-            raise TypeError(f"args x must all be ndarray, not {(type(v) for v in x)}")
+            raise TypeError(f"args x must all be ndarray, not {list(type(v) for v in x)}")
         lens = [len(v) for v in x]
         if (lens[0] != lens[1]) or (lens[0] != lens[2]):
             raise ValueError(f"lens={lens} not all equal")
@@ -217,15 +217,15 @@ zeros_uint64 = np.zeros((0, 0), dtype=np.uint64)
 
 
 def loglike_gaussians_pixel(
-        data, variance_inv, gaussians, x_min=None, x_max=None, y_min=None, y_max=None,
-        to_add=False, output=None, residual=None, grad=None, grad_param_map=None, grad_param_factor=None,
-        sersic_param_map=None, sersic_param_factor=None, background=None,
+    data, sigma_inv, gaussians, x_min=None, x_max=None, y_min=None, y_max=None,
+    to_add=False, output=None, residual=None, grad=None, grad_param_map=None, grad_param_factor=None,
+    sersic_param_map=None, sersic_param_factor=None, background=None,
 ):
     """
     A wrapper for the pybind11 loglike_gaussians_pixel function with reasonable default values for all of the
     arguments, since most of them don't accept None (nullptr)/
     :param data: np.array, ndim=2; image data if computing likelihood.
-    :param variance_inv: np.array, shape==data.shape; inverse variance image if computing likelihood.
+    :param sigma_inv: np.array, shape==data.shape; inverse sigma (sqrt variance) image if computing likelihood
     :param gaussians: np.array, shape=(6|9, N): Parameters for N Gaussians:
         cenx, ceny, flux, sigma_x, sigma_y, rho.
         Optionally include PSF sigma_x, sigma_y, rho.
@@ -274,7 +274,7 @@ def loglike_gaussians_pixel(
     if background is None:
         background = zero_double
     return loglike_gaussians_pixel_pb(
-        data=data, variance_inv=variance_inv, gaussians=gaussians, x_min=x_min, x_max=x_max,
+        data=data, sigma_inv=sigma_inv, gaussians=gaussians, x_min=x_min, x_max=x_max,
         y_min=y_min, y_max=y_max, to_add=to_add, output=output, residual=residual, grad=grad,
         grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
         sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor, background=background)

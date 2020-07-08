@@ -25,10 +25,11 @@ import io
 import logging
 import matplotlib.pyplot as plt
 from multiprofit.ellipse import Ellipse
-from multiprofit.gaussutils import sigma_to_reff
+from multiprofit.gaussutils import reff_to_sigma, sigma_to_reff
 from multiprofit.limits import limits_ref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
+import multiprofit.priors as mpfpri
 from multiprofit.transforms import transforms_ref
 import multiprofit.utils as mpfutil
 import numpy as np
@@ -288,7 +289,7 @@ def get_model(
         compnum += num_profiles
     param_fluxes = [mpfobj.FluxParameter(
         band, "flux", np.log10(np.clip(fluxes_by_band[band], 1e-16, np.Inf)), None, limits=limits_ref["none"],
-        transform=transforms_ref["log10"], transformed=True, prior=None, fixed=False, is_fluxratio=False)
+        transform=transforms_ref["log10"], transformed=True, fixed=False, is_fluxratio=False)
         for bandi, band in enumerate(bands)
     ]
     modelphoto = mpfobj.PhotometricModel(components, param_fluxes)
@@ -301,7 +302,7 @@ def get_model(
         # (otherwise the initial background model is zero and nnls can't do anything with it)
         param_fluxes_bg = [mpfobj.FluxParameter(
             band, "background", 1e-9, None, limits=limits_ref["none_untransformed"],
-            transformed=False, prior=None, fixed=False, is_fluxratio=False)
+            transformed=False, fixed=False, is_fluxratio=False)
             for bandi, band in enumerate(bands)
         ]
         background = mpfobj.Background(param_fluxes_bg)
@@ -417,17 +418,16 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
     return fits_model_psf
 
 
-def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel_min=None, pixel_sn_min=None,
-                          cenx=0, ceny=0, contiguous=True):
+def get_init_from_moments(exposures_psfs, flux_min_obj=1e-3, flux_min_img=None, pixel_min=None,
+                          pixel_sn_min=None, cenx=0, ceny=0, contiguous=True, sigma_min=1e-2, logger=None):
     bands = {}
     fluxes = {}
     num_pix_img = None
-    name_params_moments_init = mpfobj.names_params_ellipse
     cens = dict(cenx=0, ceny=0)
-    moments_by_name = {name_param: 0 for name_param in name_params_moments_init}
+    moments = None
     num_exposures_measured = 0
     denoise = pixel_min is None and pixel_sn_min is None
-    for exposure in exposures:
+    for exposure, psf in exposures_psfs:
         band = exposure.band
         img_exp = exposure.image
         num_pix_img_exp = img_exp.shape
@@ -439,28 +439,63 @@ def get_init_from_moments(exposures, flux_min_obj=1e-3, flux_min_img=None, pixel
                 f'not same as first={num_pix_img}')
         if band not in bands:
             if flux_min_img is None or np.sum(img_exp) > flux_min_img:
-                moments, cenx_band, ceny_band = mpfutil.estimate_ellipse(
+                if psf is None:
+                    deconvolution_params = None
+                else:
+                    # First key is engine, next is model
+                    psf = next(iter(next(iter(psf.values())).values()))['object']
+                    fluxfracs = [p for p in psf.model.get_parameters(fixed=True, free=True)
+                                 if isinstance(p, mpfobj.FluxParameter) and p.is_fluxratio]
+                    comps = psf.model.modelphotometric.components
+                    if len(fluxfracs) != len(comps):
+                        raise RuntimeError(f'PSF model len(fluxes)={len(fluxes)} != len(comps)={len(comps)}')
+                    flux_factor = 1
+                    p_xx, p_yy, p_xy = 0., 0., 0.
+                    for fluxfrac, comp in zip(fluxfracs, comps):
+                        flux_comp = flux_factor*fluxfrac.get_value(transformed=False)
+                        ell = comp.params_ellipse
+                        p_x, p_y, p_rho = (param.get_value(transformed=False)
+                                           for param in (ell.sigma_x, ell.sigma_y, ell.rho))
+                        p_x, p_y = (reff_to_sigma(p) for p in (p_x, p_y))
+                        p_xx += flux_comp * p_x * p_x
+                        p_yy += flux_comp * p_y * p_y
+                        p_xy += flux_comp * p_rho * p_x * p_y
+                        flux_factor -= flux_comp
+                    deconvolution_params = p_xx, p_yy, p_xy
+                moments_band, cenx_band, ceny_band = mpfutil.estimate_ellipse(
                     img_exp, denoise=denoise, return_cens=True, validate=False, contiguous=contiguous,
-                    pixel_min=pixel_min, cenx=cenx, ceny=ceny)
+                    pixel_min=pixel_min, cenx=cenx, ceny=ceny, deconvolution_params=deconvolution_params,
+                    return_as_params=True, weight_min=0 if not denoise else -np.Inf,
+                    sigma_sq_min=0)
+                if logger:
+                    logger.info(f'Got moments_band={moments_band} cens={cenx_band, ceny_band} subbing'
+                                f' deconv_params={deconvolution_params}')
                 cens['cenx'] += cenx_band
                 cens['ceny'] += ceny_band
                 # TODO: subtract PSF moments from object
-                for name_param, value in zip(
-                        name_params_moments_init, Ellipse.covar_matrix_as(moments, params=False)):
-                    moments_by_name[name_param] += value
+                if moments is None:
+                    moments = np.array(moments_band)
+                else:
+                    moments += np.array(moments_band)
                 num_exposures_measured += 1
             bands[exposure.band] = None
         # TODO: Figure out what to do if given multiple exposures per band (TBD if we want to)
         fluxes[band] = np.clip(
             np.sum(img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp),
             flux_min_obj, np.Inf)
+
+    moments_by_name = {
+        name_param: value for name_param, value in zip(
+            mpfobj.names_params_ellipse,
+            Ellipse.covar_terms_as(*list(moments/num_exposures_measured), matrix=False, params=True))
+    }
+
     num_pix_img = np.flip(num_pix_img, axis=0)
-    for params in [cens, moments_by_name]:
-        for name_param in params:
-            params[name_param] /= num_exposures_measured
-    moments_by_name = {name_param: value for name_param, value in zip(
-        name_params_moments_init,
-        Ellipse.covar_terms_as(*moments_by_name.values(), matrix=False, params=True))}
+    cens['cenx'] /= num_exposures_measured
+    cens['ceny'] /= num_exposures_measured
+
+    moments_by_name['sigma_x'] = np.max((sigma_to_reff(moments_by_name['sigma_x']), sigma_min))
+    moments_by_name['sigma_y'] = np.max((sigma_to_reff(moments_by_name['sigma_y']), sigma_min))
     values_max = {
         "sigma_x": np.sqrt(np.sum((num_pix_img/2.)**2)),
         "sigma_y": np.sqrt(np.sum((num_pix_img/2.)**2)),
@@ -478,7 +513,7 @@ def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
         do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
-        print_exception=True, **kwargs
+        print_exception=True, prior_specs=None, **kwargs
 ):
     """
     Convenience function to fit a galaxy given some exposures with PSFs.
@@ -500,6 +535,7 @@ def fit_galaxy(
     :param print_step_interval: int; number of steps to run before printing output
     :param logger: logging.Logger; a logger to print messages and be passed to model(ler)s
     :param print_exception: bool; whether to print the first exception encountered and the stack trace
+    :param prior_specs: dict; prior specifications.
     :param kwargs: dict; additional keyword arguments to pass to get_init_from_moments
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
@@ -513,8 +549,12 @@ def fit_galaxy(
     """
     if logger is None:
         logger = logging.getLogger(__name__)
+    if prior_specs is None:
+        prior_specs = {}
+    if logger not in kwargs:
+        kwargs['logger'] = logger
     fluxes, moments_by_name, values_min, values_max, num_pix_img = get_init_from_moments(
-        (exposure for exposure, _ in exposures_psfs), **kwargs)
+        exposures_psfs, **kwargs)
     bands = list(fluxes.keys())
     logger.info(f"Bands: {bands}; Moment init.: {moments_by_name}")
     engine = 'galsim'
@@ -639,7 +679,7 @@ def fit_galaxy(
                 inittype = modelinfo['inittype']
                 guesstype = None
                 if inittype == 'moments':
-                    logger.info('Initializing from moments')
+                    logger.info(f'Initializing from moments: {moments_by_name}')
                     for param in model.get_parameters(fixed=False):
                         value = moments_by_name.get(param.name)
                         if value is not None:
@@ -711,6 +751,67 @@ def fit_galaxy(
                 if not all(np.isfinite(values_param)):
                     raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
 
+                # Setup priors
+                if prior_specs:
+                    # Value is whether prior is applied per component or not
+                    priors_avail_per = {'shape': True, 'cenx': False, 'ceny': False}
+                    model.priors = []
+                    priors_comp = {}
+                    priors_src = {}
+                    prior_background = prior_specs.get('background')
+
+                    for name_prior, params_prior_type in prior_specs.items():
+                        if name_prior != 'background':
+                            prior_type = priors_avail_per.get(name_prior)
+                            if prior_type is None:
+                                raise RuntimeError(f'Unknown prior type {name_prior}')
+                            (priors_comp if prior_type else priors_src)[name_prior] = params_prior_type
+
+                    for src in model.sources:
+                        all_gauss = all(comp.is_gaussian() for comp in src.modelphotometric.components)
+                        # TODO: There should be a better way of getting source-specific parameters
+                        # This hack will do for now
+                        params_src = {p.name: p for p in src.modelastrometric.get_parameters()}
+                        for name_prior, params_prior_type in priors_src.items():
+                            params_prior = params_prior_type[all_gauss]
+                            param = params_src[name_prior]
+                            mean = params_prior.get(
+                                'mean',
+                                param.get_value(transformed=params_prior_type.get('transformed', False)),
+                            )
+                            model.priors.append(
+                                mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                            )
+                        for comp in src.modelphotometric.components:
+                            if isinstance(comp, mpfobj.Background):
+                                if prior_background:
+                                    for band, param_flux in comp.fluxes_dict.items():
+                                        model.priors.append(
+                                            mpfpri.GaussianLsqPrior(param_flux, **prior_background[band])
+                                        )
+                            else:
+                                params_comp = {p.name: p for p in comp.get_parameters()}
+                                for name_prior, params_prior_type in priors_comp.items():
+                                    params_prior = params_prior_type[all_gauss]
+                                    if name_prior == 'shape':
+                                        ell = comp.params_ellipse
+                                        model.priors.append(
+                                            mpfpri.ShapeLsqPrior(
+                                                ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
+                                            )
+                                        )
+                                    else:
+                                        param = params_comp[name_prior]
+                                        mean = params_prior.get(
+                                            'mean',
+                                            param.get_value(
+                                                transformed=params_prior.get('transformed', False)
+                                            ),
+                                        )
+                                        model.priors.append(
+                                            mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                                        )
+
                 logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
                 model.name = name_model
                 sys.stdout.flush()
@@ -772,7 +873,7 @@ def fit_galaxy(
 
 def fit_galaxy_exposures(
         exposures_psfs, bands, modelspecs, results=None, plot=False, name_fit=None, redo=False,
-        redo_psfs=False, reset_images=False, psf_sampling=1, loggerPsf=None, **kwargs
+        redo_psfs=False, reset_images=False, psf_sampling=1, psf_shrink=0, loggerPsf=None, **kwargs
 ):
     """
     Fit a set of exposures and accompanying PSF images in the given bands with the requested model
@@ -788,6 +889,8 @@ def fit_galaxy_exposures(
     :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
     :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
     :param psf_sampling: float; sampling factor for the PSF - fit sizes will be divided by this value.
+    :param psf_shrink: float; Length in pixels to subtract from PSF size_{x,y} in quadrature before fitting
+        PSF-convolved models
     :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return: results: dict containing the following values:
@@ -810,6 +913,8 @@ def fit_galaxy_exposures(
     }
     figure, axes = (None, None)
     row_psf = None
+    resample = psf_sampling != 1
+    resize = psf_shrink > 0
     if plot:
         num_psfs = 0
         for modeltype_psf, _ in model_psfs:
@@ -854,16 +959,18 @@ def fit_galaxy_exposures(
                             psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
                                 band=band, engine=engine, model=model_psf,
                                 is_model_pixelated=is_psf_pixelated)
-                        if psf_sampling != 1:
+                        if resample or resize:
                             model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            for param in model_psf.get_parameters(fixed=True, free=True):
-                                if param.name.startswith('sigma'):
-                                    sigma = param.get_value(transformed=False)
-                                    param.set_value(sigma/psf_sampling, transformed=False)
-                                    sigma_new = param.get_value(transformed=False)
-                                    loggerPsf.info(
-                                        f'Changed {param.name} value from {sigma:.3e} to {sigma_new:.3e}'
-                                        f' (PSF sampling={psf_sampling})')
+                            for param in (p for p in model_psf.get_parameters(fixed=True, free=True)
+                                          if p.name.startswith('sigma')):
+                                sigma = param.get_value(transformed=False)
+                                param.set_value(
+                                    np.nanmax((1e-3, np.sqrt((sigma/psf_sampling)**2 - psf_shrink**2))),
+                                    transformed=False)
+                                sigma_new = param.get_value(transformed=False)
+                                loggerPsf.info(
+                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
+                                    f' (PSF sampling={psf_sampling})')
                         if plot and row_psf is not None:
                             row_psf += 1
             exposures_psfs[idx] = (exposure, psfs[idx])
@@ -902,15 +1009,18 @@ def fit_galaxy_exposures(
 def get_psfmodel(
         engine, engineopts, num_comps, band, model, image, error_inverse=None, ratios_size=None,
         factor_sigma=1, logger=None):
-    sigma_x, sigma_y, rho = Ellipse.covar_matrix_as(mpfutil.estimate_ellipse(image), params=True)
-    sigma_x = sigma_to_reff(sigma_x)
-    sigma_y = sigma_to_reff(sigma_y)
+    sigma_x, sigma_y, rho = Ellipse.covar_terms_as(*mpfutil.estimate_ellipse(image, return_as_params=True),
+                                                   matrix=False, params=True)
+    if logger:
+        logger.info(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
+    sigma_x = reff_to_sigma(sigma_x)
+    sigma_y = reff_to_sigma(sigma_y)
     sigma_xs = np.repeat(sigma_x, num_comps)
     sigma_ys = np.repeat(sigma_y, num_comps)
     rhos = np.repeat(rho, num_comps)
 
     if ratios_size is None and num_comps > 1:
-        log_ratio = np.log(np.sqrt(num_comps))
+        log_ratio = np.log(np.cbrt(num_comps))
         ratios_size = np.exp(np.linspace(-log_ratio, log_ratio, num_comps))
     if num_comps > 1:
         for idx, (ratio, sigma_x, sigma_y) in enumerate(zip(ratios_size, sigma_xs, sigma_ys)):
@@ -1196,7 +1306,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                 raise RuntimeError("Model={} can't find reference={} "
                                    "to initialize from".format(modeltype, inittype))
     has_fit_init = inittype and 'fits' in fits_engine[inittype]
-    logger.info('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
+    if logger:
+        logger.info('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
     if has_fit_init:
         values_param_init = fits_engine[inittype]["fits"][-1]["params_bestall"]
         # TODO: Find a more elegant method to do this
@@ -1286,6 +1397,7 @@ def set_exposure(model, band, index=0, image=None, error_inverse=None, psf=None,
         if psf is None and image is not None and error_inverse is None:
             img_sigma = np.sqrt(np.var(image))
             exposure.error_inverse = 1.0/(factor_sigma*img_sigma)
+            exposure.is_error_sigma = True
         else:
             exposure.error_inverse = error_inverse
         if np.ndim(exposure.error_inverse) == 0:

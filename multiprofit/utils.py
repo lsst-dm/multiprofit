@@ -80,17 +80,17 @@ def mag_to_flux(ndarray):
 # TODO: compare with galsim's convenient calculateHLR/FWHM
 # TODO: replace with the stack's method (in meas_?)
 def estimate_ellipse(
-        img, cenx=None, ceny=None, denoise=True, deconvolution_matrix=None, sigma_sq_min=0, do_recenter=True,
-        return_cens=False, validate=True, contiguous=False, pixel_min=None, num_pix_min=2,
-        raise_on_fail=False):
+        img, cenx=None, ceny=None, denoise=True, deconvolution_params=None, sigma_sq_min=1e-8,
+        do_recenter=True, return_cens=False, validate=True, contiguous=False, pixel_min=None, num_pix_min=2,
+        weight_min=-np.Inf, raise_on_fail=False, return_as_params=False):
     """
 
     :param img: ndarray; an image of a source to estimate the moments of.
     :param cenx, ceny: float; initial estimate of the centroid of the source.
     :param denoise: bool; whether to attempt to naively de-noise the image by zeroing all negative pixels and
         the faintest positive pixels while conserving the total flux.
-    :param deconvolution_matrix: ndarray; a covariance matrix to subtract from the moments to deconvolve them,
-        e.g. for PSF estimation.
+    :param deconvolution_params: array-like; xx, yy and xy moments to subtract from measurements for
+        deconvolution
     :param sigma_sq_min: float; the minimum variance to return, especially if deconvolving.
     :param do_recenter: bool; whether to iteratively re-estimate the centroid.
     :param return_cens: bool; whether to return the centroid.
@@ -100,9 +100,13 @@ def estimate_ellipse(
     :param num_pix_min: int; the minimum number of positive pixels required for processing.
     :param raise_on_fail: bool; whether to raise an Exception on any failure instead of attempting to
         continue by not strictly obeying the inputs.
-    :return: inertia: ndarray; the moment of inertia/covariance matrix.
+    :param return_as_params: bool; whether to return a tuple of sigma_x^2, sigma_y^2, covar instead of the
+        full matrix (which is symmetric)
+    :return: inertia: ndarray; the moment of inertia/covariance matrix or parameters.
         cenx, ceny: The centroids, if return_cens is True.
     """
+    if not (sigma_sq_min >= 0):
+        raise ValueError(f'sigma_sq_min={sigma_sq_min} !>= 0')
     if validate or denoise:
         sum_img = np.sum(img)
     if validate and raise_on_fail:
@@ -128,37 +132,68 @@ def estimate_ellipse(
     num_pix = len(y_0)
     flux = img_meas[y_0, x_0]
     flux_sum = np.sum(flux)
-    if not num_pix >= num_pix_min:
+    if not ((num_pix >= num_pix_min) and (flux_sum > 0)):
         if raise_on_fail:
-            raise RuntimeError(f'estimate_ellipse failed finding {num_pix}!>={num_pix_min}')
-        else:
-            finished = True
+            raise RuntimeError(f'estimate_ellipse failed with n_pix={num_pix} !>= min={num_pix_min}'
+                               f' and/or flux_sum={flux_sum} !>0')
+        finished = True
+        i_xx, i_yy, i_xy = sigma_sq_min, sigma_sq_min, 0.
     else:
+        flux = np.clip(flux, weight_min, np.Inf)
         finished = False
-    inertia = np.zeros((2, 2))
+        i_xx, i_yy, i_xy = 0., 0., 0.
+
     while not finished:
         y = y_0 + 0.5 - ceny
         x = x_0 + 0.5 - cenx
         x_sq = x**2
         y_sq = y**2
         xy = x*y
-        inertia[0, 0] = np.sum(flux*x_sq)/flux_sum
-        inertia[0, 1] = np.sum(flux*xy)/flux_sum
-        inertia[1, 1] = np.sum(flux*y_sq)/flux_sum
+        i_xx = np.sum(flux*x_sq)/flux_sum
+        i_yy = np.sum(flux*y_sq)/flux_sum
+        i_xy = np.sum(flux*xy)/flux_sum
+
         if do_recenter:
             x_shift = np.sum(flux*x)/flux_sum
             y_shift = np.sum(flux*y)/flux_sum
             finished = np.abs(x_shift) < 0.1 and np.abs(y_shift) < 0.1
             if not finished:
-                cenx += x_shift
-                ceny += y_shift
+                cenx_new = cenx + x_shift
+                ceny_new = ceny + y_shift
+                if not ((0 < cenx_new < img.shape[1]) and (0 < ceny_new < img.shape[0])):
+                    if raise_on_fail:
+                        raise RuntimeError(f'ceny,cenx={ceny},{cenx} outside img.shape={img.shape}')
+                    finished = True
+                cenx = cenx_new
+                ceny = ceny_new
         else:
             finished = True
-    if deconvolution_matrix is not None:
-        inertia -= deconvolution_matrix
-    inertia[0, 0] = np.clip(inertia[0, 0], sigma_sq_min, np.Inf)
-    inertia[1, 1] = np.clip(inertia[1, 1], sigma_sq_min, np.Inf)
-    inertia[1, 0] = inertia[0, 1]
+
+    if deconvolution_params is not None:
+        d_xx, d_yy, d_xy = deconvolution_params
+        if not ((i_xx > d_xx) and (i_yy > d_yy)):
+            if raise_on_fail:
+                raise RuntimeError(f'Moments {i_xx},{i_yy} not > deconvolution {d_xx},{d_yy}')
+            cor = i_xy/np.sqrt(i_xx*i_yy) if (i_xx > 0 and i_yy > 0) else 0
+            i_xx /= 2
+            i_yy /= 2
+            i_xy = 0 if (cor == 0) else i_xy/2
+        else:
+            cor = i_xy/np.sqrt(i_xx*i_yy)
+            i_xx -= d_xx
+            i_yy -= d_yy
+            i_xy -= d_xy
+        cor_new = i_xy/np.sqrt(i_xx*i_yy) if (i_xx > 0 and i_yy > 0) else np.nan
+        if not (-1 < cor_new < 1):
+            if raise_on_fail:
+                raise RuntimeError(f'Deconvolved moments {i_xx},{i_yy},{i_xy} give !(-1<rho={cor_new}<1)')
+            if cor is not None:
+                i_xy = cor*np.sqrt(i_xx*i_yy)
+            else:
+                i_xy = 0
+    i_xx = np.clip(i_xx, sigma_sq_min, np.Inf)
+    i_yy = np.clip(i_yy, sigma_sq_min, np.Inf)
+    inertia = np.array(((i_xx, i_xy), (i_xy, i_yy))) if not return_as_params else (i_xx, i_yy, i_xy)
     if not np.all(np.isfinite(inertia)):
         raise RuntimeError(f'Inertia {inertia} not all finite')
     if return_cens:

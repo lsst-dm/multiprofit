@@ -198,9 +198,9 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         print("reff, axrat, ang: ", (reff_conv, axrat_conv, ang_conv))
         print("Estimated ellipse:", Ellipse.covar_matrix_as(
             estimate_ellipse(model, cenx=cenx, ceny=ceny, denoise=False), params=True))
-        print("Estimated deconvolved ellipse:", Ellipse.covar_matrix_as(estimate_ellipse(
-            model, cenx=cenx, ceny=ceny, denoise=False, deconvolution_matrix=psf.get_covariance()),
-            params=True))
+        print("Estimated deconvolved ellipse:", estimate_ellipse(
+            model, cenx=cenx, ceny=ceny, denoise=False, deconvolution_params=psf.get_covariance(matrix=False))
+              )
     data = np.random.poisson(model + bg) - bg
     output = np.zeros_like(data)
     num_params = 6
