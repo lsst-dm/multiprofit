@@ -871,9 +871,119 @@ def fit_galaxy(
     return fits_by_engine, models
 
 
+def get_psf_models(modelspecs):
+    """ Return a set of PSF model specifications.
+
+    :param modelspecs: List of dict, each a galaxy model specifications as returned by get_modelspecs.
+    :return: set of tuples of PSF model type string (e.g. "gaussian:1") and pixelization boolean
+    """
+    return set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
+
+
+def fit_psf_exposures(
+    exposures_psfs, model_psfs, bands, results=None, sampling=1., shrink=0., engine=None, engineopts=None,
+    logger=None, redo=True, plot=False, title=None, print_step_interval=None
+):
+    """ Fit the PSFs associated with exposures.
+
+    :param exposures_psfs: List of tuples (multiprofit.object.Exposure, nparray with PSF image)
+    :param model_psfs: set of list; PSF model specifications as returned by get_psf_models.
+    :param bands: List of bands
+    :param results: Dict with similar structure as return value.
+    :param sampling: float; sampling factor - fit sizes will be divided by this value.
+    :param shrink: float; Length in pixels to subtract from sigma_{x,y} in quadrature for future source fits.
+    :param engine: String; the rendering engine to pass to fit_model.
+    :param engineopts: Dict; the rendering options to pass to fit_model.
+    :param logger: logging.Logger; a logger to print messages.
+    :param redo: bool; Redo any pre-existing fits in fits_by_engine?
+    :param plot: Boolean; generate plots?
+    :param title: String; title for plots
+    :param print_step_interval: int; fit step interval to pass to fit_model.
+    :return: dict by exposure index containing a dict by engine of the result returned by fit_psf.
+
+    """
+    figure, axes = (None, None)
+    row = None
+    resample = sampling != 1.
+    resize = shrink > 0
+    if plot:
+        num_psfs = 0
+        for modeltype_psf, _ in model_psfs:
+            num_psfs += modeltype_psf != "empirical"
+        num_psfs *= len(bands)
+        if num_psfs > 1:
+            ncols = 5
+            figure, axes = plt.subplots(nrows=min([ncols, num_psfs]), ncols=max([ncols, num_psfs]))
+            if num_psfs > ncols:
+                axes = np.transpose(axes)
+            row = 0
+    if results is None:
+        results = {}
+    if engine is None:
+        engine = "galsim"
+    if engineopts is None:
+        engineopts = {
+            "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
+        }
+    any_skipped = False
+    for idx, (exposure, psf) in enumerate(exposures_psfs):
+        band = exposure.band
+        if band in bands:
+            if idx not in results:
+                results[idx] = {engine: {}}
+            for modeltype_psf, is_psf_pixelated in model_psfs:
+                name_psf = modeltype_psf + ("_pixelated" if is_psf_pixelated else "")
+                label = modeltype_psf + (" pix." if is_psf_pixelated else "") + " PSF"
+                if modeltype_psf == "empirical":
+                    # TODO: Check if this works
+                    results[idx][engine][name_psf] = {'object': mpfobj.PSF(
+                        band=band, engine=engine, image=psf.image.array)}
+                else:
+                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine] if is_psf_pixelated else None
+                    has_fit = name_psf in results[idx][engine]
+                    do_fit = redo or not has_fit
+                    if do_fit or plot:
+                        if do_fit:
+                            logger.info('Fitting PSF band={} model={} (not in {})'.format(
+                                band, name_psf, results[idx][engine].keys()))
+                        results[idx] = fit_psf(
+                            modeltype_psf, psf.image.array if (
+                                    hasattr(psf, "image") and hasattr(psf.image, "array")) else (
+                                psf if isinstance(psf, np.ndarray) else None),
+                            {engine: engineopts}, band=band, fits_model_psf=results[idx], plot=plot,
+                            name_model=name_psf, label=label, title=title, figaxes=(figure, axes),
+                            row_figure=row, redo=do_fit, print_step_interval=print_step_interval,
+                            logger=logger
+                        )
+                        if do_fit or 'object' not in results[idx][engine][name_psf]:
+                            model_psf = results[idx][engine][name_psf]['modeller'].model.sources[0]
+                            results[idx][engine][name_psf]['object'] = mpfobj.PSF(
+                                band=band, engine=engine, model=model_psf,
+                                is_model_pixelated=is_psf_pixelated)
+                        if resample or resize:
+                            model_psf = results[idx][engine][name_psf]['modeller'].model.sources[0]
+                            for param in (p for p in model_psf.get_parameters(fixed=True, free=True)
+                                          if p.name.startswith('sigma')):
+                                sigma = param.get_value(transformed=False)
+                                param.set_value(
+                                    np.nanmax((1e-3, np.sqrt((sigma/sampling)**2 - shrink**2))),
+                                    transformed=False)
+                                sigma_new = param.get_value(transformed=False)
+                                logger.info(
+                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
+                                    f' (PSF sampling={sampling})')
+                        if plot and row is not None:
+                            row += 1
+            exposures_psfs[idx] = (exposure, results[idx])
+        else:
+            any_skipped = True
+    return results, any_skipped
+
+
 def fit_galaxy_exposures(
         exposures_psfs, bands, modelspecs, results=None, plot=False, name_fit=None, redo=False,
-        redo_psfs=False, reset_images=False, psf_sampling=1, psf_shrink=0, loggerPsf=None, **kwargs
+        engine=None, engineopts=None, psf_sampling=1, psf_shrink=0, redo_psfs=False, reset_images=False,
+        loggerPsf=None, **kwargs
 ):
     """
     Fit a set of exposures and accompanying PSF images in the given bands with the requested model
@@ -882,15 +992,17 @@ def fit_galaxy_exposures(
     :param exposures_psfs: List of tuples (multiprofit.object.Exposure, nparray with PSF image)
     :param bands: List of bands
     :param modelspecs: List of dicts; as in get_modelspecs().
-    :param results:
+    :param results: Dict with similar structure as return value.
     :param plot: Boolean; generate plots?
     :param name_fit: String; name of the galaxy/image to use as a title in plots
     :param redo: bool; Redo any pre-existing fits in fits_by_engine?
-    :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
-    :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
+    :param engine: String; the rendering engine to pass to fit_model.
+    :param engineopts: Dict; the rendering options to pass to fit_model.
     :param psf_sampling: float; sampling factor for the PSF - fit sizes will be divided by this value.
     :param psf_shrink: float; Length in pixels to subtract from PSF size_{x,y} in quadrature before fitting
         PSF-convolved models
+    :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
+    :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
     :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return: results: dict containing the following values:
@@ -903,79 +1015,21 @@ def fit_galaxy_exposures(
         loggerPsf = logging.getLogger(__name__)
     if results is None:
         results = {}
+    if engine is None:
+        engine = "galsim"
+    if engineopts is None:
+        engineopts = {
+            "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
+        }
     metadata = {"bands": bands}
     # Having worked out what the image, psf and variance map are, fit PSFs and images
     psfs = results['psfs'] if 'psfs' in results else {}
-    model_psfs = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
-    engine = 'galsim'
-    engineopts = {
-        "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
-    }
-    figure, axes = (None, None)
-    row_psf = None
-    resample = psf_sampling != 1
-    resize = psf_shrink > 0
-    if plot:
-        num_psfs = 0
-        for modeltype_psf, _ in model_psfs:
-            num_psfs += modeltype_psf != "empirical"
-        num_psfs *= len(bands)
-        if num_psfs > 1:
-            ncols = 5
-            figure, axes = plt.subplots(nrows=min([ncols, num_psfs]), ncols=max([ncols, num_psfs]))
-            if num_psfs > ncols:
-                axes = np.transpose(axes)
-            row_psf = 0
-    any_skipped = False
-    for idx, (exposure, psf) in enumerate(exposures_psfs):
-        band = exposure.band
-        if band in bands:
-            if idx not in psfs:
-                psfs[idx] = {engine: {}}
-            for modeltype_psf, is_psf_pixelated in model_psfs:
-                name_psf = modeltype_psf + ("_pixelated" if is_psf_pixelated else "")
-                label = modeltype_psf + (" pix." if is_psf_pixelated else "") + " PSF"
-                if modeltype_psf == "empirical":
-                    # TODO: Check if this works
-                    psfs[idx][engine][name_psf] = {'object': mpfobj.PSF(
-                        band=band, engine=engine, image=psf.image.array)}
-                else:
-                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine] if is_psf_pixelated else None
-                    has_fit = name_psf in psfs[idx][engine]
-                    do_fit = redo_psfs or not has_fit
-                    if do_fit or plot:
-                        if do_fit:
-                            loggerPsf.info('Fitting PSF band={} model={} (not in {})'.format(
-                                band, name_psf, psfs[idx][engine].keys()))
-                        psfs[idx] = fit_psf(
-                            modeltype_psf, psf.image.array if (
-                                    hasattr(psf, "image") and hasattr(psf.image, "array")) else (
-                                psf if isinstance(psf, np.ndarray) else None),
-                            {engine: engineopts}, band=band, fits_model_psf=psfs[idx], plot=plot,
-                            name_model=name_psf, label=label, title=name_fit, figaxes=(figure, axes),
-                            row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf, logger=loggerPsf)
-                        if do_fit or 'object' not in psfs[idx][engine][name_psf]:
-                            model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
-                                band=band, engine=engine, model=model_psf,
-                                is_model_pixelated=is_psf_pixelated)
-                        if resample or resize:
-                            model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            for param in (p for p in model_psf.get_parameters(fixed=True, free=True)
-                                          if p.name.startswith('sigma')):
-                                sigma = param.get_value(transformed=False)
-                                param.set_value(
-                                    np.nanmax((1e-3, np.sqrt((sigma/psf_sampling)**2 - psf_shrink**2))),
-                                    transformed=False)
-                                sigma_new = param.get_value(transformed=False)
-                                loggerPsf.info(
-                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
-                                    f' (PSF sampling={psf_sampling})')
-                        if plot and row_psf is not None:
-                            row_psf += 1
-            exposures_psfs[idx] = (exposure, psfs[idx])
-        else:
-            any_skipped = True
+    model_psfs = get_psf_models(modelspecs)
+    psfs, any_skipped = fit_psf_exposures(
+        exposures_psfs, model_psfs, bands, results=psfs, engine=engine, engineopts=engineopts,
+        sampling=psf_sampling, shrink=psf_shrink, redo=redo_psfs, logger=loggerPsf,
+        plot=plot, title=name_fit, print_step_interval=np.Inf,
+    )
     if plot:
         plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
     fits_by_engine = None if 'fits' not in results else results['fits']
