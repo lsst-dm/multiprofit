@@ -649,6 +649,27 @@ class Model:
             grad = np.zeros(n_params)
             hessian = np.zeros((n_params, n_params))
 
+    @staticmethod
+    def _compute_loglike_exposure(likelihood, exposure, is_likelihood_log=True):
+        like_const = exposure.meta.get("like_const", 0. if is_likelihood_log else 1.)
+        if is_likelihood_log:
+            likelihood = likelihood + like_const
+        else:
+            likelihood = np.exp(likelihood)*like_const
+        return likelihood
+
+    @staticmethod
+    def _get_background(profiles, band):
+        has_bg = 0
+        flux_bg = 0.
+        for p in profiles:
+            if p[band].get('background'):
+                has_bg += 1
+                flux_bg += p[band]['flux']
+        if has_bg > 1:
+            raise RuntimeError("Can't handle multiple background components")
+        return (has_bg == 1), np.array([flux_bg], dtype=np.float64) if has_bg else None
+
     def evaluate(self, param_values=None, data=None, bands=None, engine=None, engineopts=None,
                  params_transformed=True, get_likelihood=True, is_likelihood_log=True, keep_likelihood=False,
                  keep_images=False, keep_models=False, plot=False,
@@ -658,7 +679,8 @@ class Model:
                  img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
                  do_fit_linear_prep=False, do_fit_leastsq_prep=False, do_fit_nonlinear_prep=False,
                  do_jacobian=False, do_verify_jacobian=False,
-                 do_compare_likelihoods=False, grad_loglike=None):
+                 do_compare_likelihoods=False, grad_loglike=None,
+                 debug=False):
         """
         Evaluate a model, plot and/or benchmark, and optionally return the likelihood and derived images.
 
@@ -705,6 +727,7 @@ class Model:
             finite differencing
         :param do_compare_likelihoods: bool; compare likelihoods from C++ vs Python (if both exist)
         :param grad_loglike: ndarray[float]; values for the gradient of the loglikehood vs fit params
+        :param debug: bool; whether to do debug tests/checks
         :return: likelihood: float; the (log) likelihood
             param_values: ndarray of floats; parameter values
             chis: list of residual images for each fit exposure, where chi = (data-model)/sigma
@@ -805,7 +828,8 @@ class Model:
                     scale=scale, clock=clock, times=times, do_fit_linear_prep=do_fit_linear_prep,
                     do_fit_leastsq_prep=do_fit_leastsq_prep, do_fit_nonlinear_prep=do_fit_nonlinear_prep,
                     do_jacobian=do_jacobian, get_likelihood=get_likelihood,
-                    is_likelihood_log=is_likelihood_log, grad_loglike=grad_loglike)
+                    is_likelihood_log=is_likelihood_log, grad_loglike=grad_loglike, debug=debug)
+
                 if clock:
                     name_exposure = '_'.join([band, str(idx_exposure)])
                     times['_'.join([name_exposure, 'modeltotal'])] = time.time() - time_now
@@ -822,36 +846,37 @@ class Model:
                     else:
                         figaxes = (figure, axes[row_figure])
 
-                # Validate the Jacobian by comparing to finite differencing if requested
+                gaussians = None
+                has_bg, background = None, None
+
                 if do_fit_leastsq_prep and do_verify_jacobian and 'jacobian_img' in exposure.meta:
                     jacobian = exposure.meta['jacobian_img']
-                    has_bg = 0
-                    flux_bg = 0.
-                    for p in profiles:
-                        if p[band].get('background'):
-                            has_bg += 1
-                            flux_bg += p[band]['flux']
-                    if has_bg > 1:
-                        raise RuntimeError("Can't handle multiple background components")
+
+                    has_bg, background = self._get_background(profiles, band)
+                    gaussians = gaussian_profiles_to_matrix([p[band] for p in profiles])
                     grad = np.zeros((exposure.image.shape[0], exposure.image.shape[1],
                                      num_params_gauss*(len(profiles) - has_bg) + has_bg))
-                    gaussians = gaussian_profiles_to_matrix([p[band] for p in profiles])
                     sigma_inv = exposure.get_sigma_inverse()
-                    mpfgauss.loglike_gaussians_pixel(
+
+                    # The point of this is to fill in the grad array
+                    likelihood_new = mpfgauss.loglike_gaussians_pixel(
                         data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians,
-                        to_add=False, grad=grad, background=np.array(
-                            [flux_bg], dtype=np.float64) if has_bg else None)
-                    likelihood = mpfgauss.loglike_gaussians_pixel(
-                        data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians, to_add=False)
+                        to_add=False, grad=grad, background=background)
+
+                    if likelihood_exposure is None:
+                        likelihood_exposure = self._compute_loglike_exposure(
+                            likelihood_new, exposure, is_likelihood_log=is_likelihood_log)
+
                     dlldxs = []
                     failed = []
+
                     for idx_param, param in enumerate(params):
                         passed = False
                         for dx_ratio, do_raise in [(1e-7, False), (1e-5, True)]:
                             if self.__validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
                                 meta_model, dx_ratio=dx_ratio, do_raise=False,
-                                do_plot_if_failed=plot and do_raise, dlldxs=(likelihood, dlldxs)
+                                do_plot_if_failed=plot and do_raise, dlldxs=(likelihood_new, dlldxs)
                             ):
                                 passed = True
                                 break
@@ -861,22 +886,30 @@ class Model:
                         self.logger.warning(f'Failed jacobian validation: {failed}')
                     self.logger.info(f'DLLs: [{", ".join(f"{dlldx:.3e}" for dlldx in dlldxs)}]')
 
-                if plot or (get_likelihood and likelihood_exposure is None) or (
-                        do_compare_likelihoods and likelihood_exposure is not None):
-                    if image is None:
-                        if do_compare_likelihoods and 'jacobian' in exposure.meta:
-                            likelihood = mpfgauss.loglike_gaussians_pixel(
-                                data=exposure.image, sigma_inv=exposure.get_sigma_inverse(),
-                                gaussians=gaussian_profiles_to_matrix([p[band] for p in profiles]),
-                                output=image)
-                        else:
-                            raise RuntimeError("Unexpected None image for do_compare_likelihoods={}, "
-                                               "'jacobian' in exposure.meta={}".format(
-                                                   do_compare_likelihoods, "jacobian" in exposure.meta))
+                missing_likelihood = (get_likelihood or do_compare_likelihoods) and (
+                    likelihood_exposure is None)
+                if (plot and image is None) or missing_likelihood:
+                    if has_bg is None:
+                        has_bg, background = self._get_background(profiles, band)
+                    likelihood_new = mpfgauss.loglike_gaussians_pixel(
+                        data=exposure.image, sigma_inv=exposure.get_sigma_inverse(),
+                        gaussians=gaussians if gaussians is not None else gaussian_profiles_to_matrix(
+                            [p[band] for p in profiles]),
+                        background=background, output=image)
+                    likelihood_new = self._compute_loglike_exposure(
+                        likelihood_new, exposure, is_likelihood_log=is_likelihood_log)
+                    if not np.isclose(likelihood_new, likelihood_exposure):
+                        raise RuntimeError(
+                            f'get_exposure_likelihood={likelihood_exposure:.6e} !close to '
+                            f'loglike_gaussians_pixel={likelihood_new:.6e} (diff='
+                            f'{likelihood_exposure - likelihood_new:.6e})'
+                        )
+                    if missing_likelihood:
+                        likelihood_exposure = likelihood_new
 
-                    # Get the likelihood if it was not already computed by get_image_model_exposure
+                if plot or do_compare_likelihoods:
                     # Also generate chi and clipped images for plotting
-                    likelihood_new, chi, img_clip, model_clip = \
+                    likelihood_validate, chi, img_clip, model_clip = \
                         self.get_exposure_likelihood(
                             exposure, image, log=is_likelihood_log, figaxes=figaxes,
                             name_model=name_model, description_model=description_model,
@@ -885,17 +918,19 @@ class Model:
                             is_last_model=is_last_model, max_img=img_plot_maxs[band] if (
                                 img_plot_maxs is not None and band in img_plot_maxs) else None
                         )
-                    if likelihood_exposure is None:
-                        likelihood_exposure = likelihood_new
-                    elif not np.isclose(likelihood_new, likelihood_exposure):
-                        # TODO: Think harder about what to do here
-                        raise RuntimeError(
-                            'get_image_model_exposure vs get_exposure_likelihood likelihoods differ '
-                            'significantly ({:5e} vs {:5e})'.format(likelihood_new, likelihood_exposure))
                 elif do_draw_image and exposure.error_inverse is not None:
                     chi = (image - exposure.image)*exposure.get_sigma_inverse()
                 else:
                     chi = None
+
+                if do_compare_likelihoods:
+                    if not np.isclose(likelihood_validate, likelihood_exposure):
+                        raise RuntimeError(
+                            f'get_exposure_likelihood={likelihood_exposure:.6e} !close to '
+                            f'loglike_gaussians_pixel={likelihood_validate:.6e} (diff='
+                            f'{likelihood_exposure - likelihood_validate:.6e})'
+                        )
+
                 if get_likelihood or plot:
                     if clock:
                         times['_'.join([name_exposure, 'like'])] = time.time() - time_now
@@ -960,6 +995,7 @@ class Model:
                 xlist = np.arange(img_model.shape[1])
                 ylist = np.arange(img_model.shape[0])
                 x, y = np.meshgrid(xlist, ylist)
+                z = exposure.mask_inverse
             if max_img is None:
                 if has_mask:
                     max_img = np.max([np.max(exposure.image[exposure.mask_inverse]),
@@ -976,8 +1012,7 @@ class Model:
                 _sidecolorbar(axes[i], figaxes[0], img_handle, vertical=do_plot_as_column,
                               do_show_labels=do_show_labels)
                 if has_mask:
-                    z = exposure.mask_inverse
-                    axes[i].contour(x, y, z)
+                    axes[i].contour(x, y, z, colors='green')
             # The difference map
             chi = exposure.image - img_model
             if norm_img_diff is None:
@@ -988,7 +1023,7 @@ class Model:
             _sidecolorbar(
                 axes[2], figaxes[0], imgdiff, vertical=do_plot_as_column, do_show_labels=do_show_labels)
             if has_mask:
-                axes[2].contour(x, y, z)
+                axes[2].contour(x, y, z, colors='green')
             # The chi (data-model)/error map
             chi *= sigma_inv
             chisqred = mpfutil.get_chisqred([chi[exposure.mask_inverse] if has_mask else chi])
@@ -1005,6 +1040,7 @@ class Model:
                 axes[3], figaxes[0], img_chi, vertical=do_plot_as_column, do_show_labels=do_show_labels)
             if has_mask:
                 axes[3].contour(x, y, z, colors="green")
+                chi = chi[exposure.mask_inverse]
             Model._plot_chi_hist(chi, axes[4])
             Model._label_figureaxes(axes, chisqred, name_model=name_model, description_model=description_model,
                                     label_img='Band={}'.format(exposure.band), is_first_model=is_first_model,
@@ -1015,13 +1051,15 @@ class Model:
                     sigma_inv[exposure.mask_inverse]
             else:
                 chi = (exposure.image - img_model)*sigma_inv
+
         if likefunc == "t":
             variance = chi.var()
             dof = 2. * variance / (variance - 1.)
             dof = max(min(dof, float('inf')), 0)
             likelihood = np.sum(spstats.t.logpdf(chi, dof))
         elif likefunc == "normal":
-            likelihood = np.sum(spstats.norm.logpdf(chi) + np.log(sigma_inv))
+            likelihood = np.sum(spstats.norm.logpdf(chi)
+                                + np.log(sigma_inv[exposure.mask_inverse] if has_mask else sigma_inv))
         else:
             raise ValueError("Unknown likelihood function {:s}".format(self.likefunc))
 
@@ -1169,7 +1207,7 @@ class Model:
             self, exposure, profiles=None, meta_model=None, engine=None, engineopts=None, do_draw_image=True,
             scale=1, clock=False, times=None, do_fit_linear_prep=False, do_fit_leastsq_prep=False,
             do_fit_nonlinear_prep=False, do_jacobian=False, get_likelihood=False, is_likelihood_log=True,
-            verify_derivative=False, grad_loglike=None):
+            verify_derivative=False, grad_loglike=None, debug=False):
         """
             Draw model image for one exposure with one PSF
 
@@ -1251,7 +1289,8 @@ class Model:
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
                 sigma_inv = exposure.get_sigma_inverse()
                 if 'like_const' not in exposure.meta:
-                    exposure.meta['like_const'] = np.sum(np.log(sigma_inv/sqrt(2.*np.pi)))
+                    mask = exposure.mask_inverse if exposure.mask_inverse is not None else (sigma_inv > 0)
+                    exposure.meta['like_const'] = np.sum(np.log(sigma_inv[mask]/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
                     self.logger.info(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
@@ -1404,17 +1443,21 @@ class Model:
                 residual = exposure.meta['residual_img'] if do_jacobian or do_fit_leastsq_prep else \
                     mpfgauss.zeros_double
                 output = image if do_draw_image else mpfgauss.zeros_double
-                likelihood = exposure.meta['like_const'] + mpf.loglike_gaussians_pixel(
+
+                likelihood_free = mpf.loglike_gaussians_pixel(
                     data=exposure.image, sigma_inv=sigma_inv, gaussians=profile_matrix,
                     x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False, output=output, residual=residual,
                     grad=grad, grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
                     sersic_param_map=sersic_param_map, sersic_param_factor=sersic_param_factor,
                     background=background
                 )
+                if debug:
+                    pass
+                    #print('pm', exposure.meta['like_const'], likelihood_free)#, profile_matrix)
+                likelihood = exposure.meta['like_const'] + likelihood_free
                 # If computing the jacobian, will skip evaluating the likelihood and instead return the
                 # residual image for fitting
                 if do_grad_any or do_fit_leastsq_prep:
-                    likelihood = None
                     order_flux = order_params_gauss['flux']
                     # Turn all of the gradients w.r.t. Gaussian fluxes into total flux and flux ratio values
                     if do_fit_leastsq_prep:
@@ -1461,7 +1504,7 @@ class Model:
                         if grad_param_fixed:
                             self.grad_param_free = np.setdiff1d(self.grad_param_free, grad_param_fixed)
                 elif not is_likelihood_log:
-                    likelihood = 10**likelihood
+                    likelihood = np.exp(likelihood)
             if (not get_like_only) or do_fit_linear_prep or do_fit_leastsq_prep:
                 if profiles_to_draw:
                     image = mpf.make_gaussians_pixel(
@@ -1485,9 +1528,8 @@ class Model:
                     # Draw all of the profiles together if there are multiple; otherwise
                     # make_gaussian_pixel is faster
                     if len(profiles_flux) > 1:
-                        imgprofiles = mpf.make_gaussians_pixel(
-                            gaussian_profiles_to_matrix([profile[band] for profile in profiles_flux]),
-                            0, nx, 0, ny, nx, ny)
+                        gaussians = gaussian_profiles_to_matrix([profile[band] for profile in profiles_flux])
+                        imgprofiles = mpf.make_gaussians_pixel(gaussians, 0, nx, 0, ny, nx, ny)
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
@@ -1891,6 +1933,7 @@ class Modeller:
         likelihood = self.model.get_likelihood(params_free, **kwargs)
         # Must come second if do_fit_leastsq_prep is True and not previously called
         prior = self.model.get_prior_value() if (likelihood is not None) else None
+
         # return LL, LP, etc.
         if returnlponly:
             rv = likelihood + prior
@@ -1922,7 +1965,7 @@ class Modeller:
         return rv
 
     def fit(self, params_init=None, do_print_final=True, timing=None, walltime_max=np.Inf,
-            print_step_interval=None, do_linear=True, do_linear_only=False):
+            print_step_interval=None, do_linear=True, do_linear_only=False, debug=False):
         """
         Fit the Model to the data and return a dict with assorted fit information.
 
@@ -1935,6 +1978,8 @@ class Modeller:
         :param print_step_interval: int; number of steps to run before printing another status message.
         :param do_linear: bool; whether to do a linear fit for free component amplitudes first.
         :param do_linear_only: bool; whether to skip the non-linear fit for non-linear problems.
+        :param debug: bool; whether to run additional diagnostic tests in model evaluation.
+
         :return: dict with output.
         """
         self.fitinfo["log"] = []
@@ -1978,10 +2023,11 @@ class Modeller:
         time_start = time.time()
         likelihood = self.evaluate(
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
-            do_verify_jacobian=True, do_compare_likelihoods=True)
+            do_verify_jacobian=True, do_compare_likelihoods=True, debug=debug)
         likelihood_init = likelihood
         self.logger.info(f"Param names   : {name_params}")
-        self.logger.info(f"Initial params: {params_init}")
+        self.logger.info(f"Initial params (transformed): {params_init}")
+        self.logger.info(f"Initial params: {[param.get_value(transformed=False) for param in params_free]}")
         self.logger.info(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
         sys.stdout.flush()
 
@@ -2014,6 +2060,7 @@ class Modeller:
                                            'in two exposures: {} vs {}'.format(params_band, params_exposure))
                 if params_band is not None:
                     params += params_band
+
             num_params = len(params)
             datasize = np.sum(datasizes)
             # Matrix of vectors for each variable component
@@ -2024,60 +2071,98 @@ class Modeller:
             idx_param = 0
             for band in bands:
                 exposures = self.model.data.exposures[band]
+                idx_free = None
                 for exposure in exposures:
                     idx_end = idx_begin + datasizes[idx_exposure]
                     maskinv = exposure.mask_inverse
+                    sigma_inv = exposure.get_sigma_inverse()
+                    if maskinv is not None:
+                        sigma_inv = sigma_inv[maskinv]
                     for idx_free, (img_free, _) in enumerate(exposure.meta['img_models_params_free']):
                         x[idx_begin:idx_end, idx_param + idx_free] = (
-                            img_free if maskinv is None else img_free[maskinv]).flat
+                            img_free if maskinv is None else img_free[maskinv]).flat * sigma_inv
                     img = exposure.image
                     img_fixed = exposure.meta['img_model_fixed']
                     y[idx_begin:idx_end] = (
                         (img if maskinv is None else img[maskinv]) if img_fixed is None else
                         (img - img_fixed if maskinv is None else img[maskinv] - img_fixed[maskinv])
-                    ).flat
+                    ).flat * sigma_inv
                     idx_begin = idx_end
                     idx_exposure += 1
-                if exposures:
+                if exposures and idx_param:
                     idx_param += idx_free + 1
+
             fluxratios_to_print = None
             fitmethods = {
                 'scipy.optimize.nnls': [None],
                 # TODO: Confirm that nnls really performs best
                 #'scipy.optimize.lsq_linear': ['bvls'],
-                #'numpy.linalg.lstsq': [None, 1e-2, 0.1, 1],
+                #'numpy.linalg.lstsq': [None],#, 1e-3, 1, 100],
+                #'fastnnls.fnnls': [None],
             }
+            values_init = [param.get_value(transformed=False) for param in params]
+            reset = True
+
             for method, params_to_fit in fitmethods.items():
                 for fitparam in params_to_fit:
-                    values_init = [param.get_value(transformed=False) for param in params]
                     if method == 'scipy.optimize.nnls':
                         fluxratios = spopt.nnls(x, y)[0]
                     elif method == 'scipy.optimize.lsq_linear':
-                        fluxratios = spopt.lsq_linear(x, y, bounds=(0, np.Inf), method=fitparam).x
+                        fluxratios = spopt.lsq_linear(x, y, bounds=(0.01, np.Inf), method=fitparam).x
                     elif method == 'numpy.linalg.lstsq':
                         fluxratios = np.linalg.lstsq(x, y, rcond=fitparam)[0]
+                    elif method == 'fastnnls.fnnls':
+                        from fastnnls import fnnls
+                        y = x.T.dot(y)
+                        x = x.T.dot(x)
+                        fluxratios = fnnls(x, y)
                     else:
                         raise ValueError('Unknown linear fit method ' + method)
-                    for fluxratio, param, valueinit in zip(fluxratios, params, values_init):
-                        ratio = np.max([1e-3, fluxratio])
+
+                    values_new = []
+                    for fluxratio, param, value_init in zip(fluxratios, params, values_init):
+                        ratio = np.max([1e-2, fluxratio])
                         # TODO: See if there is a better alternative to setting values outside transform range
                         # Perhaps leave an option to change the transform to log10?
+                        value_set = None
                         for frac in np.linspace(1, 0, 10+1):
-                            param.set_value(valueinit*(frac*ratio + 1 - frac), transformed=False)
+                            value_new = value_init*(frac*ratio + 1. - frac)
+                            param.set_value(value_new, transformed=False)
                             if np.isfinite(param.get_value(transformed=False)):
+                                values_new.append(value_new)
+                                value_set = value_new
                                 break
+                        if value_set is None:
+                            values_new.append(value_init)
+
                     likelihood_new = self.evaluate()
+
                     if likelihood_new[0] > likelihood[0]:
                         fluxratios_to_print = fluxratios
                         method_best = method
                         likelihood = likelihood_new
+                        values_init = values_new
+                        reset = False
                     else:
-                        for valueinit, param in zip(values_init, params):
-                            param.set_value(valueinit, transformed=False)
+                        reset = True
+
+            if reset:
+                for value_init, param in zip(values_init, params):
+                    param.set_value(value_init, transformed=False)
+
             self.logger.info("Model '{}' linear fit elapsed time: {:.3e}".format(
                 self.model.name, time.time() - time_init))
             if fluxratios_to_print is None:
                 self.logger.info("Linear fit failed to improve on initial parameters")
+                likelihood_new = self.evaluate()
+                if np.abs(likelihood_new[0] - likelihood_init[0]) > 1e-2:
+                    sigma_inv = exposure.get_sigma_inverse()
+                    like_const_new = np.sum(np.log(sigma_inv[exposure.mask_inverse]/sqrt(2.*np.pi)))
+                    raise RuntimeError(
+                        f'likelihood_new={likelihood_new[0]:.6e} != likelihood_init={likelihood_init[0]:.6e}'
+                        f' reset={reset} like_const_new={like_const_new} vs exp={exposure.meta["like_const"]}'
+                        f' lens={(len(fluxratios), len(params), len(values_init))}'
+                    )
             else:
                 params_init = np.array([param.get_value(transformed=True) for param in params_free])
                 params_init_true = np.array([param.get_value(transformed=False) for param in params_free])
@@ -2185,7 +2270,7 @@ class Modeller:
                 # TODO: Increment n_evals
             else:
                 raise RuntimeError("Unknown optimization library " + self.modellib)
-            likelihood = self.evaluate(params_best)
+            likelihood = self.evaluate(params_best, debug=debug)
             if do_print_final:
                 self.logger.info(
                     "Model '{}' nonlinear fit elapsed time: {:.3e} after {},{} function,gradient "
@@ -3028,19 +3113,21 @@ class Parameter:
             print(f"Failed to set {self} to value={value}")
             raise
 
-    def __str__(self):
+    def __repr__(self):
         attrs = ', '.join([
-            f'{var}={value}' for var, value in dict(
-                fixed=self.fixed,
+            f'{var}={value!r}' for var, value in dict(
+                name=self.name,
+                value=self.value,
+                unit=self.unit,
                 limits=self.limits,
-                inheritors=self.inheritors,
-                modifiers=self.modifiers,
                 transform=self.transform,
                 transformed=self.transformed,
-                value=self.value,
+                fixed=self.fixed,
+                inheritors=self.inheritors,
+                modifiers=self.modifiers,
             ).items()
         ])
-        return f'Parameter (name={self.name}):({attrs})'
+        return f'Parameter({attrs})'
 
     def __call__(self, *args, **kwargs):
         return self.get_value(*args, **kwargs)
