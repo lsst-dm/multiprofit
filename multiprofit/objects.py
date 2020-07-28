@@ -2023,7 +2023,7 @@ class Modeller:
         time_start = time.time()
         likelihood = self.evaluate(
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
-            do_verify_jacobian=True, do_compare_likelihoods=True, debug=debug)
+            do_verify_jacobian=not do_linear_only, do_compare_likelihoods=True, debug=debug)
         likelihood_init = likelihood
         self.logger.info(f"Param names   : {name_params}")
         self.logger.info(f"Initial params (transformed): {params_init}")
