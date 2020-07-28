@@ -356,7 +356,7 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
     :param model: multiprofit.Model
     :param plot: Boolean; generate plot?
     :param title: String; title to add on top of the plot.
-    :param kwargs: Dict; additional arguments to pass to model.evaluate().
+    :param kwargs: Dict; additional keyword arguments to pass to model.evaluate().
     :return: Chi maps for each exposure.
     """
     _, _, chis, _ = model.evaluate(plot=plot, **kwargs)
@@ -370,7 +370,8 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
 
 # Convenience function to fit a model. kwargs are passed on to evaluate_model
 def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
-              do_print_final=True, print_step_interval=100, plot=False, do_linear=True, **kwargs):
+              do_print_final=True, print_step_interval=100, plot=False, do_linear=True,
+              kwargs_fit=None, **kwargs):
     """
     Convenience function to fit a model with reasonable defaults.
     :param model: multiprofit.Model; default: modeller.model
@@ -381,6 +382,7 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
     :param print_step_interval: Integer; step interval between printing.
     :param plot: Boolean; plot final fit?
     :param do_linear: Boolean; do linear fit?
+    :param kwargs_fit: Dict; additional keyword arguments to pass to modeller.fit().
     :param kwargs: Dict; passed to evaluate_model() after fitting is complete (e.g. plotting options).
     :return: Tuple of modeller.fit and modeller.
     """
@@ -390,8 +392,12 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
         raise ValueError('fit_model must be passed a non-None model or modeller')
     else:
         model = modeller.model
+    if kwargs_fit is None:
+        kwargs_fit = {}
     fit = modeller.fit(
-        do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear)
+        do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear,
+        **kwargs_fit
+    )
     # Conveniently sets the parameters to the right values too
     # TODO: Find a better way to ensure chis are returned than setting do_draw_image=True
     chis = evaluate_model(model, plot=plot, param_values=fit["params_best"], do_draw_image=True, **kwargs)
