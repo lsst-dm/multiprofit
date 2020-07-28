@@ -71,7 +71,7 @@ def is_fluxratio(param):
 
 def get_param_default(
         param, value=None, profile=None, fixed=False, is_value_transformed=False, use_sersic_logit=True,
-        is_multigauss=False
+        is_multigauss=False, return_value=False
 ):
     """ Get a reasonable default instantiation of a parameter by name.
 
@@ -83,11 +83,15 @@ def get_param_default(
     :param use_sersic_logit: bool; whether to use a logit transform on the Sersic index. Ignored if profile
         is not "sersic".
     :param is_multigauss: bool; whether the profile is a Gaussian mixture approximation.
-    :return: multiprofit.objects.Parameter initialized as specified.
+    :param return_value: bool; whether to only return the value instead of a Parameter
+    :return: multiprofit.objects.Parameter initialized as specified, or float value if return_value is True.
     """
     transform = transforms_ref["none"]
     limits = limits_ref["none"]
     name = param
+    if param == "nser":
+        param = "slope"
+        profile = "sersic"
     if param == "slope":
         if profile == "moffat":
             name = "con"
@@ -122,6 +126,8 @@ def get_param_default(
     elif not is_value_transformed:
         value = transform.transform(value)
 
+    if return_value:
+        return value
     param = mpfobj.Parameter(name, value, "", limits=limits,
                              transform=transform, transformed=True, fixed=fixed)
     return param
