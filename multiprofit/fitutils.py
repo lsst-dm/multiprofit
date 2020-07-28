@@ -557,8 +557,6 @@ def get_init_from_moments(
             np.sum(img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp),
             flux_min_obj, np.Inf)
 
-    num_pix_img = np.flip(num_pix_img, axis=0)
-
     if estimate_moments:
         moments_by_name = {
             name_param: value for name_param, value in zip(
@@ -576,10 +574,9 @@ def get_init_from_moments(
 
     moments_by_name.update(cens)
 
-    values_max = {
-        "sigma_x": np.sqrt(np.sum((num_pix_img/2.)**2)),
-        "sigma_y": np.sqrt(np.sum((num_pix_img/2.)**2)),
-    }
+    num_pix_img = None if num_pix_img is None else np.flip(num_pix_img, axis=0)
+    sigma_max = np.Inf if num_pix_img is None else np.sqrt(np.sum((num_pix_img/2.)**2))
+    values_max = {"sigma_x": sigma_max, "sigma_y": sigma_max}
     values_min = {}
     for band in fluxes.keys():
         values_min["flux_" + band] = 1e-6 * fluxes[band]
