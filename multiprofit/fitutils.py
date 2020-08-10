@@ -509,7 +509,7 @@ def get_init_from_moments(
     :param flux_min_img: float; minimum total flux in the image required for moment estimation
     :param sigma_min: float;
     :param logger: logging.Logger; a logger to print messages
-    :param **kwargs: dict; additional keyword args to pass to mpfutil.estimate_ellipse
+    :param kwargs: dict; additional keyword args to pass to mpfutil.estimate_ellipse
     :return:
     """
     bands = {}

@@ -2361,9 +2361,10 @@ class Source:
             self.modelphotometric.get_parameters(free, fixed)
 
     def get_profiles(self, engine, bands, time=None, engineopts=None):
-        """
+        """ Get profiles for rendering sources.
 
         :param bands: List of bands
+        :param time: A currently-unused time object
         :param engine: Valid rendering engine
         :param engineopts: Dict of engine options
         :return:
