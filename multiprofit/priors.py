@@ -151,7 +151,10 @@ class ShapeLsqPrior(LsqPrior):
                     raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
                 jacobians[param] = jacobian
                 # Reset to original value
-                param.set_value(values[param], transformed=param.transformed)
+                value_reset = values[param]
+                param.set_value(value_reset, transformed=param.transformed)
+                if param.get_value(transformed=param.transformed) != value_reset:
+                    raise RuntimeError(f'Failed to reset param {param} to value={value_reset}; check limits')
 
         return prior, residuals, jacobians
 

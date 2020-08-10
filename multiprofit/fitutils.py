@@ -55,12 +55,36 @@ def truncnorm_logpdf_mean(x, mean=0., scale=1., a=-np.inf, b=np.inf):
     return stats.truncnorm.logpdf(x - mean, scale=scale, a=a, b=b)
 
 
+def is_fluxparam(param):
+    return isinstance(param, mpfobj.FluxParameter)
+
+
+# Return both is_flux and is_fluxratio
+def is_fluxparam_ratio(param):
+    is_flux = is_fluxparam(param)
+    return is_flux, is_flux and param.is_fluxratio
+
+
 def is_fluxratio(param):
-    return isinstance(param, mpfobj.FluxParameter) and param.is_fluxratio
+    return is_fluxparam_ratio(param)[1]
 
 
-def get_param_default(param, value=None, profile=None, fixed=False, is_value_transformed=False,
-                      use_sersic_logit=True, is_multigauss=False):
+def get_param_default(
+        param, value=None, profile=None, fixed=False, is_value_transformed=False, use_sersic_logit=True,
+        is_multigauss=False
+):
+    """ Get a reasonable default instantiation of a parameter by name.
+
+    :param param: str; parameter name.
+    :param value: float; initial value.
+    :param profile: str; a profile name to interpret profile-dependent params like "slope".
+    :param fixed: bool; whether the param should be set to fixed.
+    :param is_value_transformed: bool; whether the input value is transformed or not.
+    :param use_sersic_logit: bool; whether to use a logit transform on the Sersic index. Ignored if profile
+        is not "sersic".
+    :param is_multigauss: bool; whether the profile is a Gaussian mixture approximation.
+    :return: multiprofit.objects.Parameter initialized as specified.
+    """
     transform = transforms_ref["none"]
     limits = limits_ref["none"]
     name = param
@@ -377,9 +401,29 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
     return fit, modeller
 
 
-def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse=None, modellib="scipy",
-            modellibopts=None, plot=False, title='', name_model=None, label=None, do_print_final=True,
-            print_step_interval=100, figaxes=(None, None), row_figure=None, redo=True, logger=None):
+def fit_psf_model(
+    modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse=None, modellib="scipy",
+    modellibopts=None, plot=False, name_model=None, label=None, figure=None, axes=None, redo=True,
+    skip_fit=False, logger=None, **kwargs
+):
+    """Fit a single PSF model to an image.
+
+    :param modeltype: str; the type of model.
+    :param imgpsf: array-like; PSF image (normalized).
+    :param engines: iterable [tuple] of str (engine name) and dict (engine options) pairs
+    :param band: str; the photometric filter/passband.
+    :param fits_model_psf: dict; existing results returned by this function.
+    :param error_inverse: array-like; uncertainty (sigma)
+    :param modellib: string; Model fitting library
+    :param modellibopts: dict; Model fitting library options
+    :param plot: bool; whether to plot
+    :param name_model: str; a name for this model
+    :param redo: bool; whether to redo existing fits
+    :param skip_fit: bool; whether to skip fitting and only setup the model
+    :param logger: logging.Logger; a logger to print messages
+    :param kwargs: Additional keyword arguments to pass to `fit_model`
+    :return: fits_model_psf; dict keyed by engine containing:
+    """
     if fits_model_psf is None:
         fits_model_psf = {}
     if name_model is None:
@@ -396,37 +440,56 @@ def fit_psf(modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse
         else:
             model = fits_model_psf[engine][name_model]['modeller'].model
         model.name = '.'.join(['PSF', band, name_model])
-        if redo or 'fit' not in fits_model_psf[engine][name_model]:
+        fit_done = 'fit' in fits_model_psf[engine][name_model]
+
+        if (redo or not fit_done) and not skip_fit:
             fits_model_psf[engine][name_model]['fit'], fits_model_psf[engine][name_model]['modeller'] = \
                 fit_model(
-                    model, modellib=modellib, modellibopts=modellibopts, do_print_final=do_print_final,
-                    print_step_interval=print_step_interval, plot=plot, title=title, name_model=label,
-                    figure=figaxes[0], axes=figaxes[1], row_figure=row_figure, do_linear=False
+                    model, modellib=modellib, modellibopts=modellibopts, plot=plot, name_model=label,
+                    figure=figure, axes=axes, **kwargs
                 )
-        elif plot:
-            exposure = model.data.exposures[band][0]
-            is_empty = isinstance(exposure.image, ImageEmpty)
-            if is_empty:
-                set_exposure(model, band, image=imgpsf, error_inverse=error_inverse)
-            evaluate_model(
-                model, param_values=fits_model_psf[engine][name_model]['fit']['params_best'],
-                plot=plot, title=title, name_model=label, figure=figaxes[0], axes=figaxes[1],
-                row_figure=row_figure)
-            if is_empty:
-                set_exposure(model, band, image='empty')
+        else:
+            fits_model_psf[engine][name_model]['modeller'] = mpfobj.Modeller(
+                model, modellib, modellibopts=modellibopts)
+            if plot:
+                exposure = model.data.exposures[band][0]
+                is_empty = isinstance(exposure.image, ImageEmpty)
+                if is_empty:
+                    set_exposure(model, band, image=imgpsf, error_inverse=error_inverse)
+                values = None if skip_fit else fits_model_psf[engine][name_model]['fit']['params_best']
+                evaluate_model(
+                    model, param_values=values, plot=plot, title=kwargs.get('plot'),
+                    name_model=kwargs.get('label'), figure=kwargs.get('figure'), axes=kwargs.get('axes'),
+                    row_figure=kwargs.get('row_figure')
+                )
+                if is_empty:
+                    set_exposure(model, band, image='empty')
 
     return fits_model_psf
 
 
-def get_init_from_moments(exposures_psfs, flux_min_obj=1e-3, flux_min_img=None, pixel_min=None,
-                          pixel_sn_min=None, cenx=0, ceny=0, contiguous=True, sigma_min=1e-2, logger=None):
+def get_init_from_moments(
+    exposures_psfs, estimate_moments=True, flux_min_obj=1e-3, flux_min_img=None, sigma_min=1e-2, logger=None,
+    **kwargs
+):
+    """Get model initial parameters from multi-band exposures assumed to contain a single object.
+
+    :param exposures_psfs: iterable of tuple; multiprofit.objects.Exposure, multiprofit.objects.PSF pairs.
+    :param estimate_moments: bool; whether to estimate moments. If False, will only return limits
+    :param flux_min_obj: float; minimum estimated flux for the object.
+    :param flux_min_img: float; minimum total flux in the image required for moment estimation
+    :param sigma_min: float;
+    :param logger: logging.Logger; a logger to print messages
+    :param **kwargs: dict; additional keyword args to pass to mpfutil.estimate_ellipse
+    :return:
+    """
     bands = {}
     fluxes = {}
     num_pix_img = None
-    cens = dict(cenx=0, ceny=0)
+    cens = {'cenx': 0., 'ceny': 0.}
     moments = None
     num_exposures_measured = 0
-    denoise = pixel_min is None and pixel_sn_min is None
+
     for exposure, psf in exposures_psfs:
         band = exposure.band
         img_exp = exposure.image
@@ -437,7 +500,7 @@ def get_init_from_moments(exposures_psfs, flux_min_obj=1e-3, flux_min_img=None, 
             raise RuntimeError(
                 f'get_init_from_moments image (band={band} shape={num_pix_img_exp} '
                 f'not same as first={num_pix_img}')
-        if band not in bands:
+        if estimate_moments and (band not in bands):
             if flux_min_img is None or np.sum(img_exp) > flux_min_img:
                 if psf is None:
                     deconvolution_params = None
@@ -463,10 +526,8 @@ def get_init_from_moments(exposures_psfs, flux_min_obj=1e-3, flux_min_img=None, 
                         flux_factor -= flux_comp
                     deconvolution_params = p_xx, p_yy, p_xy
                 moments_band, cenx_band, ceny_band = mpfutil.estimate_ellipse(
-                    img_exp, denoise=denoise, return_cens=True, validate=False, contiguous=contiguous,
-                    pixel_min=pixel_min, cenx=cenx, ceny=ceny, deconvolution_params=deconvolution_params,
-                    return_as_params=True, weight_min=0 if not denoise else -np.Inf,
-                    sigma_sq_min=0)
+                    img_exp, return_cens=True, validate=False, sigma_inverse=exposure.get_sigma_inverse(),
+                    deconvolution_params=deconvolution_params, return_as_params=True, **kwargs)
                 if logger:
                     logger.info(f'Got moments_band={moments_band} cens={cenx_band, ceny_band} subbing'
                                 f' deconv_params={deconvolution_params}')
@@ -484,18 +545,25 @@ def get_init_from_moments(exposures_psfs, flux_min_obj=1e-3, flux_min_img=None, 
             np.sum(img_exp[exposure.mask_inverse] if exposure.mask_inverse is not None else img_exp),
             flux_min_obj, np.Inf)
 
-    moments_by_name = {
-        name_param: value for name_param, value in zip(
-            mpfobj.names_params_ellipse,
-            Ellipse.covar_terms_as(*list(moments/num_exposures_measured), matrix=False, params=True))
-    }
-
     num_pix_img = np.flip(num_pix_img, axis=0)
-    cens['cenx'] /= num_exposures_measured
-    cens['ceny'] /= num_exposures_measured
 
-    moments_by_name['sigma_x'] = np.max((sigma_to_reff(moments_by_name['sigma_x']), sigma_min))
-    moments_by_name['sigma_y'] = np.max((sigma_to_reff(moments_by_name['sigma_y']), sigma_min))
+    if estimate_moments:
+        moments_by_name = {
+            name_param: value for name_param, value in zip(
+                mpfobj.names_params_ellipse,
+                Ellipse.covar_terms_as(*list(moments/num_exposures_measured), matrix=False, params=True))
+        }
+
+        cens['cenx'] /= num_exposures_measured
+        cens['ceny'] /= num_exposures_measured
+
+        moments_by_name['sigma_x'] = np.max((sigma_to_reff(moments_by_name['sigma_x']), sigma_min))
+        moments_by_name['sigma_y'] = np.max((sigma_to_reff(moments_by_name['sigma_y']), sigma_min))
+    else:
+        moments_by_name = {name_param: 0 for name_param in mpfobj.names_params_ellipse}
+
+    moments_by_name.update(cens)
+
     values_max = {
         "sigma_x": np.sqrt(np.sum((num_pix_img/2.)**2)),
         "sigma_y": np.sqrt(np.sum((num_pix_img/2.)**2)),
@@ -504,19 +572,53 @@ def get_init_from_moments(exposures_psfs, flux_min_obj=1e-3, flux_min_img=None, 
     for band in fluxes.keys():
         values_min["flux_" + band] = 1e-6 * fluxes[band]
         values_max["flux_" + band] = 100 * fluxes[band]
-    moments_by_name.update(cens)
+
     return fluxes, moments_by_name, values_min, values_max, num_pix_img
 
 
-# Engine is galsim; TODO: add options
+def _get_param_name(param):
+    is_flux, is_fluxrat = is_fluxparam_ratio(param)
+    return (
+        param.name if not is_flux else f'flux{("ratio" if is_fluxrat else "")}_{param.band}',
+        is_flux, is_fluxrat
+    )
+
+
+def _get_param_info(param, flag_params_fixed):
+    name_param, is_flux, is_fluxrat = _get_param_name(param)
+    is_fixed = param.fixed
+    if name_param in flag_params_fixed or (is_flux and 'flux' in flag_params_fixed):
+        is_fixed = True
+    # TODO: Figure out a better way to reset modifiers to be free
+    elif name_param == 'rscale':
+        is_fixed = False
+    return name_param, is_flux, is_fluxrat, is_fixed
+
+
+def _reset_params_fixed(model, params_fixed_default, params_inherit, **kwargs):
+    """Reset parameter fixed status to model defaults.
+
+    :param model: multiprofit.objects.Model to retrieve parameters from.
+    :param params_fixed_default: iterable of bool; default fixed status for each param.
+    :param params_inherit: set [str]; names of params that inherit values and therefore should not be reset.
+    :param kwargs: Dict of additional kwargs to pass to model.get_parameters.
+    """
+    params = model.get_parameters(**kwargs)
+    if len(params) != len(params_fixed_default):
+        raise RuntimeError(f'len(params)={len(params)} != len(params_fixed_default)='
+                           f'{len(params_fixed_default)}')
+    for param, fixed in zip(params, params_fixed_default):
+        if param.name not in params_inherit:
+            param.fixed = fixed
+
+
 def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
         do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
-        print_exception=True, prior_specs=None, **kwargs
+        print_exception=True, prior_specs=None, skip_fit=False, **kwargs
 ):
-    """
-    Convenience function to fit a galaxy given some exposures with PSFs.
+    """Convenience function to fit a galaxy given some exposures with PSFs.
 
     :param exposures_psfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
     :param modelspecs: Model specifications as returned by get_modelspecs
@@ -536,6 +638,7 @@ def fit_galaxy(
     :param logger: logging.Logger; a logger to print messages and be passed to model(ler)s
     :param print_exception: bool; whether to print the first exception encountered and the stack trace
     :param prior_specs: dict; prior specifications.
+    :param skip_fit: bool; whether to skip fitting and only setup the model
     :param kwargs: dict; additional keyword arguments to pass to get_init_from_moments
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
@@ -553,8 +656,9 @@ def fit_galaxy(
         prior_specs = {}
     if logger not in kwargs:
         kwargs['logger'] = logger
+    estimate_moments = any(modelinfo.get('inittype') == 'moments' for modelinfo in modelspecs)
     fluxes, moments_by_name, values_min, values_max, num_pix_img = get_init_from_moments(
-        exposures_psfs, **kwargs)
+        exposures_psfs, estimate_moments=estimate_moments, **kwargs)
     bands = list(fluxes.keys())
     logger.info(f"Bands: {bands}; Moment init.: {moments_by_name}")
     engine = 'galsim'
@@ -611,13 +715,17 @@ def fit_galaxy(
                 fit_background=fit_background, repeat_ellipse=True, name_model=name_model, logger=logger
             )
             params_fixed_default[modeltype] = [
-                param.fixed for param in model_default.get_parameters(fixed=True)]
+                param.fixed for param in model_default.get_parameters(free=True, fixed=True)]
             exists_model = modeltype in models
             model = model_default if not exists_model else models[modeltype]
             if not exists_model:
                 models[modeltype] = model
             is_psf_pixelated = mpfutil.str2bool(modelinfo["psfpixel"])
             name_psf = modelinfo["psfmodel"] + ("_pixelated" if is_psf_pixelated else "")
+            params_unlimited = modelinfo.get("unlimitedparams")
+            params_unlimited = {name_param for name_param in params_unlimited.split(";")} if params_unlimited\
+                else {}
+
             if is_psf_pixelated:
                 can_do_no_pixel = True
                 for source in model.sources:
@@ -631,32 +739,26 @@ def fit_galaxy(
                 if can_do_no_pixel:
                     engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine]
             model.data.exposures = {band: [] for band in bands}
+            values_init_psf = modelinfo.get('values_init_psf', {})
+
             for exposure, psfs in exposures_psfs:
                 exposure.psf = psfs[engine][name_psf]['object']
                 model.data.exposures[exposure.band].append(exposure)
+                values_init_psf_band = values_init_psf.get(exposure.band)
+                if values_init_psf_band is not None:
+                    params_psf = exposure.psf.model.get_parameters(fixed=False, free=True)
+                    if len(params_psf) != len(values_init_psf_band):
+                        raise RuntimeError(f'len(params_psf)={len(params_psf)} != len(values_init_psf_band)='
+                                           f'{len(values_init_psf_band)} (band={exposure.band})')
+                    for param, (name_init, value) in zip(params_psf, values_init_psf_band):
+                        __validate_param_name(param.name, name_init)
+                        param.set_value(value, transformed=False)
+
             do_plot_multi = plot and len(bands) > 1
-            if not redo and name_model in fits_by_engine[engine] and \
-                    'fits' in fits_by_engine[engine][name_model]:
-                if plot:
-                    values_best = fits_engine[name_model]['fits'][-1]['params_bestalltransformed']
-                    # TODO: consider how to avoid code repetition here and below
-                    params_postfix_name_model = []
-                    for param, value in zip(model.get_parameters(fixed=True), values_best):
-                        param.set_value(value, transformed=True)
-                        if (param.name == "nser" and (
-                                not param.fixed or param.get_value(transformed=False) != 0.5)) or \
-                            param.name == "re" or (is_fluxratio(param) and param.get_value(
-                                transformed=False) < 1):
-                            params_postfix_name_model += [('{:.2f}', param)]
-                    if title is not None:
-                        plt.suptitle(title)
-                    model.evaluate(
-                        plot=plot, name_model=name_model, params_postfix_name_model=params_postfix_name_model,
-                        figure=figures, axes=axes_list, row_figure=modelidx,
-                        do_plot_as_column=do_plot_as_column, do_plot_multi=do_plot_multi,
-                        img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                        weights_band=weights_band)
-            else:
+            fits_model = None if skip_fit else fits_engine.get(name_model, {}).get('fits')
+
+            do_init = redo or fits_model is None
+            if do_init:
                 # Parse default overrides from model spec
                 flag_param_keys = ['inherit', 'modify']
                 flag_params = {key: [] for key in flag_param_keys}
@@ -675,9 +777,24 @@ def fit_galaxy(
                                 else:
                                     value_split = [np.float(x) for x in value[1].split(',')]
                                     flag_params[flag][value[0]] = value_split
+
                 # Initialize model from estimate of moments (size/ellipticity) or from another fit
                 inittype = modelinfo['inittype']
+                init_with_values = inittype == 'values'
                 guesstype = None
+                params_fixed, params_init = flag_params['fixed'], flag_params['init']
+                values_init = modelinfo.get('values_init')
+
+                # Need to set fixed parameters to fixed to get the right list of free params to init
+                # Other init methods expect default values... I think.
+                if init_with_values:
+                    _reset_params_fixed(
+                        model, params_fixed_default[modeltype], flag_params['inherit'], fixed=True,
+                        modifiers=False)
+
+                # Model may depend on earlier fits to initialize some of the values and fit only a subset
+                init_hybrid = values_init is not None and inittype is not 'values'
+
                 if inittype == 'moments':
                     logger.info(f'Initializing from moments: {moments_by_name}')
                     for param in model.get_parameters(fixed=False):
@@ -687,50 +804,47 @@ def fit_galaxy(
                 else:
                     model, guesstype = init_model(
                         model, modeltype, inittype, models, modelspecs[0:modelidx], fits_engine, bands=bands,
-                        params_inherit=flag_params['inherit'], params_modify=flag_params['modify'])
+                        params_inherit=flag_params['inherit'], params_modify=flag_params['modify'],
+                        params_fixed=params_fixed, values_init=values_init
+                    )
 
-                # Reset parameter fixed status
-                for param, fixed in zip(model.get_parameters(fixed=True, modifiers=False),
-                                        params_fixed_default[modeltype]):
-                    if param.name not in flag_params['inherit']:
-                        param.fixed = fixed
+                # Already done above in this case
+                if not init_with_values:
+                    _reset_params_fixed(
+                        model, params_fixed_default[modeltype], flag_params['inherit'], fixed=True,
+                        modifiers=False)
                 # For printing parameter values when plotting
                 params_postfix_name_model = []
                 # Now actually apply the overrides and the hardcoded maxima
                 times_matched = {}
+
                 for param in model.get_parameters(fixed=True):
-                    is_flux = isinstance(param, mpfobj.FluxParameter)
+                    name_param, is_flux, is_fluxrat, param.fixed = _get_param_info(param, params_fixed)
                     is_fluxrat = is_fluxratio(param)
                     is_bg = param.name == 'background'
-                    name_param = param.name if not is_flux else f'flux{("ratio" if is_fluxrat else "")}' \
-                                                                f'_{param.band}'
-                    if name_param in flag_params['fixed'] or (is_flux and 'flux' in flag_params['fixed']):
-                        param.fixed = True
-                    # TODO: Figure out a better way to reset modifiers to be free
-                    elif name_param == 'rscale':
-                        param.fixed = False
-                    if name_param in flag_params["init"]:
+
+                    # Passing complete init values will override individual params
+                    if (not init_with_values or param.fixed) and name_param in params_init:
                         if name_param not in times_matched:
                             times_matched[name_param] = 0
                         # If there's only one input value, assume it applies to all instances of this param
-                        idx_paraminit = (0 if len(flag_params["init"][name_param]) == 1 else
+                        idx_paraminit = (0 if len(params_init[name_param]) == 1 else
                                          times_matched[name_param])
-                        param.set_value(flag_params["init"][name_param][idx_paraminit],
-                                        transformed=False)
+                        param.set_value(params_init[name_param][idx_paraminit], transformed=False)
                         times_matched[name_param] += 1
-                    if plot and not param.fixed:
-                        if name_param == "nser" or is_fluxrat:
-                            params_postfix_name_model += [('{:.2f}', param)]
+
                     # Try to set a hard limit on params that need them with a logit transform
                     # This way even methods that don't respect bounds will have to until the transformed
                     # value reaches +/-inf, at least
-                    if (name_param in values_max) and (not is_bg):
+                    # The modelspec can override this for e.g. free Gaussian mixtures
+                    if (name_param in values_max) and (not is_bg) and not (name_param in params_unlimited):
                         value_min = 0 if name_param not in values_min else values_min[name_param]
                         value_max = values_max[name_param]
                         transform = param.transform.transform
                         param.limits = mpfobj.Limits(
                             lower=transform(value_min), upper=transform(value_max),
                             transformed=True)
+
                     # Reset non-finite free param values
                     # This occurs e.g. at the limits of a logit transformed param
                     if not param.fixed:
@@ -746,10 +860,18 @@ def fit_galaxy(
                                 value_param = np.nextafter(value_param, direction)
                             param.set_value(value_param, transformed=False)
 
+                    # This has to come after reseting param fixed status above
+                    if plot and not param.fixed:
+                        if name_param == "nser" or is_fluxrat:
+                            params_postfix_name_model += [('{:.2f}', param)]
+
                 values_param = np.array([x.get_value(transformed=False) for x in model.get_parameters(
                     fixed=True)])
                 if not all(np.isfinite(values_param)):
                     raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
+
+                if init_hybrid:
+                    init_model_from_values(model, values_init)
 
                 # Setup priors
                 if prior_specs:
@@ -812,53 +934,88 @@ def fit_galaxy(
                                             mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
                                         )
 
-                logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
-                model.name = name_model
-                sys.stdout.flush()
-                if guesstype is not None:
-                    init_model_by_guessing(model, guesstype, bands, nguesses=3)
-                try:
-                    fits = []
-                    do_second = len(model.sources[0].modelphotometric.components) > 1 or \
-                        not use_modellib_default
-                    if use_modellib_default:
-                        modellibopts = {
-                            "algo": ("lbfgs" if modellib == "pygmo" else "L-BFGS-B") if do_second else
-                            ("neldermead" if modellib == "pygmo" else "Nelder-Mead")
-                        }
-                        if modellib == "scipy":
-                            modellibopts['options'] = {'maxfun': 1e4}
-                    do_second = do_second and not model.can_do_fit_leastsq
-                    fit1, modeller = fit_model(
-                        model, modellib=modellib, modellibopts=modellibopts, do_print_final=True,
-                        print_step_interval=print_step_interval, plot=plot and not do_second,
-                        do_plot_multi=do_plot_multi, figure=figures, axes=axes_list, row_figure=modelidx,
-                        do_plot_as_column=do_plot_as_column, name_model=name_model,
+                if skip_fit:
+                    # Make a dummy fit result in case it's needed for subsequent model initialization
+                    fits_by_engine[engine][name_model] = {
+                        "fits": [{
+                            'params_bestall': [param.get_value(transformed=False)
+                                               for param in model.get_parameters(fixed=True)],
+                            'chisqred': 1.,
+                        }],
+                        "modeltype": modeltype
+                    }
+                    if init_with_values:
+                        params_all = model.get_parameters(fixed=True)
+                else:
+                    logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
+                    model.name = name_model
+                    sys.stdout.flush()
+                    if guesstype is not None:
+                        init_model_by_guessing(model, guesstype, bands, nguesses=3)
+
+                    try:
+                        fits = []
+                        do_second = len(model.sources[0].modelphotometric.components) > 1 or \
+                            not use_modellib_default
+                        if use_modellib_default:
+                            modellibopts = {
+                                "algo": ("lbfgs" if modellib == "pygmo" else "L-BFGS-B") if do_second else
+                                ("neldermead" if modellib == "pygmo" else "Nelder-Mead")
+                            }
+                            if modellib == "scipy":
+                                modellibopts['options'] = {'maxfun': 1e4}
+                        do_second = do_second and not model.can_do_fit_leastsq
+                        fit1, modeller = fit_model(
+                            model, modellib=modellib, modellibopts=modellibopts, do_print_final=True,
+                            print_step_interval=print_step_interval, plot=plot and not do_second,
+                            do_plot_multi=do_plot_multi, figure=figures, axes=axes_list, row_figure=modelidx,
+                            do_plot_as_column=do_plot_as_column, name_model=name_model,
+                            params_postfix_name_model=params_postfix_name_model,
+                            img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
+                            weights_band=weights_band
+                        )
+                        fits.append(fit1)
+                        if do_second:
+                            if use_modellib_default:
+                                modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
+                                    "Nelder-Mead"
+                            fit2, _ = fit_model(
+                                model, modeller, do_print_final=True, print_step_interval=print_step_interval,
+                                plot=plot, do_plot_multi=do_plot_multi, figure=figures, axes=axes_list,
+                                row_figure=modelidx, do_plot_as_column=do_plot_as_column,
+                                name_model=name_model, params_postfix_name_model=params_postfix_name_model,
+                                img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
+                                weights_band=weights_band, do_linear=False,
+                            )
+                            fits.append(fit2)
+                        fits_by_engine[engine][name_model] = {"fits": fits, "modeltype": modeltype}
+                    except Exception as e:
+                        trace = traceback.format_exc()
+                        if print_exception:
+                            print(f"Error fitting galaxy {name}: {e}; traceback: {trace}")
+                        fits_by_engine[engine][name_model] = e, trace
+
+            if plot and (skip_fit or (not redo and fits_model is not None)):
+                if skip_fit:
+                    values_best = (None,)
+                else:
+                    values_best = fits_engine.get(name_model)
+                    if values_best is not None:
+                        values_best = values_best.get('fits')
+                        if values_best is not None:
+                            values_best = values_best[-1]['params_bestalltransformed']
+
+                if values_best is not None:
+                    if title is not None:
+                        plt.suptitle(title)
+                    model.evaluate(
+                        plot=plot, name_model=name_model,
                         params_postfix_name_model=params_postfix_name_model,
+                        figure=figures, axes=axes_list, row_figure=modelidx,
+                        do_plot_as_column=do_plot_as_column, do_plot_multi=do_plot_multi,
                         img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
                         weights_band=weights_band
                     )
-                    fits.append(fit1)
-                    if do_second:
-                        if use_modellib_default:
-                            modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
-                                "Nelder-Mead"
-                        fit2, _ = fit_model(
-                            model, modeller, do_print_final=True, print_step_interval=print_step_interval,
-                            plot=plot, do_plot_multi=do_plot_multi, figure=figures, axes=axes_list,
-                            row_figure=modelidx, do_plot_as_column=do_plot_as_column, name_model=name_model,
-                            params_postfix_name_model=params_postfix_name_model, img_plot_maxs=img_plot_maxs,
-                            img_multi_plot_max=img_multi_plot_max, weights_band=weights_band, do_linear=False,
-                        )
-                        fits.append(fit2)
-                    fits_by_engine[engine][name_model] = {"fits": fits, "modeltype": modeltype}
-                except Exception as e:
-                    trace = traceback.format_exc()
-                    if print_exception:
-                        print("Error fitting galaxy {}:".format(name))
-                        print(e)
-                        print(trace)
-                    fits_by_engine[engine][name_model] = e, trace
     if plot:
         if len(bands) > 1:
             for figure in figures.values():
@@ -871,9 +1028,123 @@ def fit_galaxy(
     return fits_by_engine, models
 
 
+def get_psf_models(modelspecs):
+    """ Return a set of PSF model specifications.
+
+    :param modelspecs: List of dict, each a galaxy model specifications as returned by get_modelspecs.
+    :return: set of tuples of PSF model type string (e.g. "gaussian:1") and pixelization boolean
+    """
+    return set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
+
+
+def fit_psf_exposures(
+    exposures_psfs, model_psfs, bands, results=None, sampling=1., shrink=0., engine=None, engineopts=None,
+    logger=None, redo=True, plot=False, title=None, print_step_interval=None, skip_fit=False
+):
+    """ Fit the PSFs associated with exposures.
+
+    :param exposures_psfs: List of tuples (multiprofit.object.Exposure, nparray with PSF image)
+    :param model_psfs: set of list; PSF model specifications as returned by get_psf_models.
+    :param bands: List of bands
+    :param results: Dict with similar structure as return value.
+    :param sampling: float; sampling factor - fit sizes will be divided by this value.
+    :param shrink: float; Length in pixels to subtract from sigma_{x,y} in quadrature for future source fits.
+    :param engine: String; the rendering engine to pass to fit_model.
+    :param engineopts: Dict; the rendering options to pass to fit_model.
+    :param logger: logging.Logger; a logger to print messages.
+    :param redo: bool; Redo any pre-existing fits in fits_by_engine?
+    :param plot: Boolean; generate plots?
+    :param title: String; title for plots
+    :param print_step_interval: int; fit step interval to pass to fit_model.
+    :return: dict by exposure index containing a dict by engine of the result returned by fit_psf.
+
+    """
+    figure, axes = None, None
+    row = None
+    resample = sampling != 1.
+    resize = shrink > 0
+    if plot:
+        num_psfs = 0
+        for modeltype_psf, _ in model_psfs:
+            num_psfs += modeltype_psf != "empirical"
+        num_psfs *= len(bands)
+        if num_psfs > 1:
+            ncols = 5
+            figure, axes = plt.subplots(nrows=min([ncols, num_psfs]), ncols=max([ncols, num_psfs]))
+            if num_psfs > ncols:
+                axes = np.transpose(axes)
+            row = 0
+    if results is None:
+        results = {}
+    if engine is None:
+        engine = "galsim"
+    if engineopts is None:
+        engineopts = {
+            "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
+        }
+    any_skipped = False
+    for idx, (exposure, psf) in enumerate(exposures_psfs):
+        band = exposure.band
+        if band in bands:
+            if idx not in results:
+                results[idx] = {engine: {}}
+            for modeltype_psf, is_psf_pixelated in model_psfs:
+                name_psf = modeltype_psf + ("_pixelated" if is_psf_pixelated else "")
+                label = modeltype_psf + (" pix." if is_psf_pixelated else "") + " PSF"
+                if modeltype_psf == "empirical":
+                    # TODO: Check if this works
+                    results[idx][engine][name_psf] = {'object': mpfobj.PSF(
+                        band=band, engine=engine, image=psf.image.array)}
+                else:
+                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine] if is_psf_pixelated else None
+                    has_fit = name_psf in results[idx][engine]
+                    do_fit = redo or not has_fit
+                    if do_fit or plot:
+                        if do_fit:
+                            logger.info('Fitting PSF band={} model={} (not in {})'.format(
+                                band, name_psf, results[idx][engine].keys()))
+                        results[idx] = fit_psf_model(
+                            modeltype_psf, psf.image.array if (
+                                    hasattr(psf, "image") and hasattr(psf.image, "array")) else (
+                                psf if isinstance(psf, np.ndarray) else None),
+                            {engine: engineopts}, band=band, fits_model_psf=results[idx], plot=plot,
+                            name_model=name_psf, label=label, title=title, figure=figure, axes=axes,
+                            row_figure=row, redo=do_fit, print_step_interval=print_step_interval,
+                            do_linear=False, logger=logger, skip_fit=skip_fit
+                        )
+
+                        if do_fit or 'object' not in results[idx][engine][name_psf]:
+                            model_psf = results[idx][engine][name_psf]['modeller'].model.sources[0]
+                            results[idx][engine][name_psf]['object'] = mpfobj.PSF(
+                                band=band, engine=engine, model=model_psf,
+                                is_model_pixelated=is_psf_pixelated)
+
+                        if resample or resize:
+                            model_psf = results[idx][engine][name_psf]['modeller'].model.sources[0]
+                            for param in (p for p in model_psf.get_parameters(fixed=True, free=True)
+                                          if p.name.startswith('sigma')):
+                                sigma = param.get_value(transformed=False)
+                                param.set_value(
+                                    np.nanmax((1e-3, np.sqrt((sigma/sampling)**2 - shrink**2))),
+                                    transformed=False)
+                                sigma_new = param.get_value(transformed=False)
+                                logger.info(
+                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
+                                    f' (PSF sampling={sampling}, shrink={shrink})')
+
+                        if plot and row is not None:
+                            row += 1
+
+            exposures_psfs[idx] = (exposure, results[idx])
+        else:
+            any_skipped = True
+    return results, any_skipped
+
+
 def fit_galaxy_exposures(
         exposures_psfs, bands, modelspecs, results=None, plot=False, name_fit=None, redo=False,
-        redo_psfs=False, reset_images=False, psf_sampling=1, psf_shrink=0, loggerPsf=None, **kwargs
+        engine=None, engineopts=None, psf_sampling=1, psf_shrink=0, redo_psfs=False, skip_fit_psf=False,
+        reset_images=False, loggerPsf=None, **kwargs
 ):
     """
     Fit a set of exposures and accompanying PSF images in the given bands with the requested model
@@ -882,15 +1153,17 @@ def fit_galaxy_exposures(
     :param exposures_psfs: List of tuples (multiprofit.object.Exposure, nparray with PSF image)
     :param bands: List of bands
     :param modelspecs: List of dicts; as in get_modelspecs().
-    :param results:
+    :param results: Dict with similar structure as return value.
     :param plot: Boolean; generate plots?
     :param name_fit: String; name of the galaxy/image to use as a title in plots
     :param redo: bool; Redo any pre-existing fits in fits_by_engine?
-    :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
-    :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
+    :param engine: String; the rendering engine to pass to fit_model.
+    :param engineopts: Dict; the rendering options to pass to fit_model.
     :param psf_sampling: float; sampling factor for the PSF - fit sizes will be divided by this value.
     :param psf_shrink: float; Length in pixels to subtract from PSF size_{x,y} in quadrature before fitting
         PSF-convolved models
+    :param redo_psfs: Boolean; Redo any pre-existing PSF fits in results?
+    :param reset_images: Boolean; whether to reset all images in data objects to EmptyImages before returning
     :param loggerPsf: logging.Logger; a logger to print messages for PSF fitting
     :param kwargs: dict; keyword: value arguments to pass on to fit_galaxy()
     :return: results: dict containing the following values:
@@ -903,79 +1176,21 @@ def fit_galaxy_exposures(
         loggerPsf = logging.getLogger(__name__)
     if results is None:
         results = {}
+    if engine is None:
+        engine = "galsim"
+    if engineopts is None:
+        engineopts = {
+            "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
+        }
     metadata = {"bands": bands}
     # Having worked out what the image, psf and variance map are, fit PSFs and images
     psfs = results['psfs'] if 'psfs' in results else {}
-    model_psfs = set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
-    engine = 'galsim'
-    engineopts = {
-        "gsparams": gs.GSParams(kvalue_accuracy=1e-3, integration_relerr=1e-3, integration_abserr=1e-5)
-    }
-    figure, axes = (None, None)
-    row_psf = None
-    resample = psf_sampling != 1
-    resize = psf_shrink > 0
-    if plot:
-        num_psfs = 0
-        for modeltype_psf, _ in model_psfs:
-            num_psfs += modeltype_psf != "empirical"
-        num_psfs *= len(bands)
-        if num_psfs > 1:
-            ncols = 5
-            figure, axes = plt.subplots(nrows=min([ncols, num_psfs]), ncols=max([ncols, num_psfs]))
-            if num_psfs > ncols:
-                axes = np.transpose(axes)
-            row_psf = 0
-    any_skipped = False
-    for idx, (exposure, psf) in enumerate(exposures_psfs):
-        band = exposure.band
-        if band in bands:
-            if idx not in psfs:
-                psfs[idx] = {engine: {}}
-            for modeltype_psf, is_psf_pixelated in model_psfs:
-                name_psf = modeltype_psf + ("_pixelated" if is_psf_pixelated else "")
-                label = modeltype_psf + (" pix." if is_psf_pixelated else "") + " PSF"
-                if modeltype_psf == "empirical":
-                    # TODO: Check if this works
-                    psfs[idx][engine][name_psf] = {'object': mpfobj.PSF(
-                        band=band, engine=engine, image=psf.image.array)}
-                else:
-                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine] if is_psf_pixelated else None
-                    has_fit = name_psf in psfs[idx][engine]
-                    do_fit = redo_psfs or not has_fit
-                    if do_fit or plot:
-                        if do_fit:
-                            loggerPsf.info('Fitting PSF band={} model={} (not in {})'.format(
-                                band, name_psf, psfs[idx][engine].keys()))
-                        psfs[idx] = fit_psf(
-                            modeltype_psf, psf.image.array if (
-                                    hasattr(psf, "image") and hasattr(psf.image, "array")) else (
-                                psf if isinstance(psf, np.ndarray) else None),
-                            {engine: engineopts}, band=band, fits_model_psf=psfs[idx], plot=plot,
-                            name_model=name_psf, label=label, title=name_fit, figaxes=(figure, axes),
-                            row_figure=row_psf, redo=do_fit, print_step_interval=np.Inf, logger=loggerPsf)
-                        if do_fit or 'object' not in psfs[idx][engine][name_psf]:
-                            model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            psfs[idx][engine][name_psf]['object'] = mpfobj.PSF(
-                                band=band, engine=engine, model=model_psf,
-                                is_model_pixelated=is_psf_pixelated)
-                        if resample or resize:
-                            model_psf = psfs[idx][engine][name_psf]['modeller'].model.sources[0]
-                            for param in (p for p in model_psf.get_parameters(fixed=True, free=True)
-                                          if p.name.startswith('sigma')):
-                                sigma = param.get_value(transformed=False)
-                                param.set_value(
-                                    np.nanmax((1e-3, np.sqrt((sigma/psf_sampling)**2 - psf_shrink**2))),
-                                    transformed=False)
-                                sigma_new = param.get_value(transformed=False)
-                                loggerPsf.info(
-                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
-                                    f' (PSF sampling={psf_sampling})')
-                        if plot and row_psf is not None:
-                            row_psf += 1
-            exposures_psfs[idx] = (exposure, psfs[idx])
-        else:
-            any_skipped = True
+    model_psfs = get_psf_models(modelspecs)
+    psfs, any_skipped = fit_psf_exposures(
+        exposures_psfs, model_psfs, bands, results=psfs, engine=engine, engineopts=engineopts,
+        sampling=psf_sampling, shrink=psf_shrink, redo=redo_psfs, logger=loggerPsf,
+        plot=plot, title=name_fit, print_step_interval=np.Inf, skip_fit=skip_fit_psf
+    )
     if plot:
         plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
     fits_by_engine = None if 'fits' not in results else results['fits']
@@ -1242,8 +1457,40 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
             model.name, guesstype_init, time.time() - time_init, like_init, like_best))
 
 
+def __validate_param_name(name_param, name_init):
+    name_postfix = name_init.split('_')
+    prefix = "sigma_" if (len(name_postfix) > 1) and (name_postfix[-2] == "sigma") else ""
+    name_postfix = f'{prefix}{name_postfix[-1]}'
+    if name_postfix == 'instFlux':
+        name_postfix = 'flux'
+    if not name_postfix.startswith(name_param):
+        raise RuntimeError(f"Can't set param with name_postfix='{name_postfix}' !.startswith"
+                           f" name_postfix='{name_param}' (shortened from name_init'{name_init}')")
+
+
+def init_model_from_values(model, values_init, free=True, fixed=False, params_fixed=None):
+    """
+
+    :param model: `multiprofit.objects.Model` to set params for
+    :param values_init: iterable [tuple[str, float]]; param name/value pairs
+    :param free:
+    :param fixed:
+    :return: No return
+    """
+    if params_fixed is None:
+        params_fixed = {}
+    params = [param for param in model.get_parameters(free=free, fixed=fixed)
+              if not _get_param_info(param, params_fixed)[3]]
+    if not values_init or (len(values_init) != len(params)):
+        raise RuntimeError(f"Can't init {len(params)} free params with {len(values_init)} values; "
+                           f"params={params}, values_init={values_init}, params_fixed={params_fixed}")
+    for param, (name_init, value) in zip(params, values_init):
+        __validate_param_name(param.name, name_init)
+        param.set_value(value, transformed=False)
+
+
 def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine, bands=None,
-               params_inherit=None, params_modify=None):
+               params_inherit=None, params_modify=None, params_fixed=None, values_init=None):
     """
     Initialize a multiprofit.objects.Model of a given modeltype with a method inittype.
 
@@ -1258,9 +1505,10 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
     :param bands: String[]; a list of bands to pass to get_profiles when calling get_multigaussians.
     :param params_inherit: Inherited params object to pass to get_multigaussians.
     :param params_modify: Modified params object to pass to get_multigaussians.
+    :param values_init: Initial untransformed parameter values. Required if inittype is 'values', else ignored
     :return: A multiprofit.objects.Model initialized as requested; it may be the original model or a new one.
     """
-    # TODO: Refactor into function
+
     logger = model.logger
     guesstype = None
     if inittype.startswith("guess"):
@@ -1281,6 +1529,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         chisqreds = [fits_engine[name_modelcomp]["fits"][-1]["chisqred"]
                      for name_modelcomp in name_modelcomps]
         inittype = name_modelcomps[np.argmin(chisqreds)]
+    elif inittype == "values":
+        init_model_from_values(model, values_init, params_fixed=params_fixed)
     else:
         inittype = inittype.split(';')
         if len(inittype) > 1:
@@ -1302,12 +1552,13 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         else:
             inittype = inittype[0]
             if inittype not in fits_engine:
-                # TODO: Fail or fall back here?
                 raise RuntimeError("Model={} can't find reference={} "
                                    "to initialize from".format(modeltype, inittype))
-    has_fit_init = inittype and 'fits' in fits_engine[inittype]
+
+    has_fit_init = inittype and 'fits' in fits_engine.get(inittype, {})
     if logger:
-        logger.info('Model {} using inittype={}; hasinitfit={}'.format(modeltype, inittype, has_fit_init))
+        logger.info(f'Init model name={model.name} type-{modeltype} using inittype={inittype};'
+                    f' hasinitfit={has_fit_init}')
     if has_fit_init:
         values_param_init = fits_engine[inittype]["fits"][-1]["params_bestall"]
         # TODO: Find a more elegant method to do this
@@ -1366,6 +1617,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                             model.sources[idx_src].get_profiles(bands=bands, engine='libprofit'),
                             params_inherit=params_inherit, params_modify=params_modify,
                             num_components=num_components, source=model_new.sources[idx_src]))
+
                         components_old = model.sources[idx_src].modelphotometric.components
                         for modeli in [model, model_new]:
                             modeli.sources[idx_src].modelphotometric.components = []
@@ -1379,6 +1631,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                 if not is_sky[idx_src]:
                     model.sources[idx_src].modelphotometric.components = components_new[idx_new]
                     idx_new += 1
+
     return model, guesstype
 
 
@@ -1415,7 +1668,7 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
 
     :param profiles: Dict; key band: value: profiles as formatted by mpf.objects.model.get_profiles()
     :param params_inherit: List of parameter names for Gaussians to inherit the values of (e.g. sigmas, rho)
-    :param params_inherit: List of parameter names modifying the Gaussian (e.g. rscale)
+    :param params_modify: List of parameter names modifying the Gaussian (e.g. rscale)
     :param num_components: Array of ints specifying the number of Gaussian components in each physical
         component. Defaults to the number of Gaussians used to represent profiles, i.e. each Gaussian has
         independent ellipse parameters.
@@ -1428,9 +1681,10 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
             bands[band] = True
     bands = list(bands)
     band_ref = bands[0]
-    params = ['flux', 'sigma_x', 'sigma_y', 'rho', 'nser']
+    params = ('flux', 'sigma_x', 'sigma_y', 'rho', 'nser')
     values = {}
     fluxes = {}
+
     for band in bands:
         # Keep these as lists to make the check against values[band_ref] below easier (no need to call np.all)
         values[band] = {

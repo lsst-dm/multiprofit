@@ -81,8 +81,8 @@ def mag_to_flux(ndarray):
 # TODO: replace with the stack's method (in meas_?)
 def estimate_ellipse(
         img, cenx=None, ceny=None, denoise=True, deconvolution_params=None, sigma_sq_min=1e-8,
-        do_recenter=True, return_cens=False, validate=True, contiguous=False, pixel_min=None, num_pix_min=2,
-        weight_min=-np.Inf, raise_on_fail=False, return_as_params=False):
+        do_recenter=True, return_cens=False, validate=True, contiguous=False, pixel_min=None,
+        pixel_sn_min=None, sigma_inverse=None, num_pix_min=2, raise_on_fail=False, return_as_params=False):
     """
 
     :param img: ndarray; an image of a source to estimate the moments of.
@@ -96,7 +96,10 @@ def estimate_ellipse(
     :param return_cens: bool; whether to return the centroid.
     :param validate: bool; whether to check if the image has positive net flux before processing.
     :param contiguous: bool; whether to keep only the contiguous above-threshold pixels around the centroid.
-    :param pixel_min: float; the minimum threshold pixel value. Default 0.
+    :param pixel_min: float; the minimum threshold pixel value. Default 0. Clipped to positive.
+    :param pixel_sn_min: float; the minimum threshold pixel S/N. Default 0. Clipped to positive. Ignored if
+        sigma_inverse is not supplied.
+    :param sigma_inverse: ndarray; an inverse error map for applying S/N cuts. Must be same size/units as img.
     :param num_pix_min: int; the minimum number of positive pixels required for processing.
     :param raise_on_fail: bool; whether to raise an Exception on any failure instead of attempting to
         continue by not strictly obeying the inputs.
@@ -117,20 +120,20 @@ def estimate_ellipse(
     if ceny is None:
         ceny = img.shape[0]/2.
     pixel_min = 0 if pixel_min is None else np.max([0, pixel_min])
+    pixel_sn_min = 0 if pixel_sn_min is None else np.max([0, pixel_sn_min])
     if denoise and sum_img > 0:
-        img_meas = absconservetotal(np.copy(img))
-        mask = img_meas
-    else:
-        img_meas = img
-        mask = img > pixel_min
+        img = absconservetotal(np.copy(img))
+    mask = img > pixel_min
+    if sigma_inverse is not None:
+        mask &= (img > pixel_sn_min)
     if contiguous:
         pix_cenx, pix_ceny = round(cenx), round(ceny)
-        if img_meas[pix_ceny, pix_cenx] > pixel_min:
+        if img[pix_ceny, pix_cenx] > pixel_min:
             labels, _ = ndimage.label(mask)
             mask = labels == labels[pix_ceny, pix_cenx]
     y_0, x_0 = np.nonzero(mask)
     num_pix = len(y_0)
-    flux = img_meas[y_0, x_0]
+    flux = img[y_0, x_0]
     flux_sum = np.sum(flux)
     if not ((num_pix >= num_pix_min) and (flux_sum > 0)):
         if raise_on_fail:
@@ -139,7 +142,6 @@ def estimate_ellipse(
         finished = True
         i_xx, i_yy, i_xy = sigma_sq_min, sigma_sq_min, 0.
     else:
-        flux = np.clip(flux, weight_min, np.Inf)
         finished = False
         i_xx, i_yy, i_xy = 0., 0., 0.
 
@@ -169,7 +171,8 @@ def estimate_ellipse(
         else:
             finished = True
 
-    if deconvolution_params is not None:
+    deconvolve = deconvolution_params is not None
+    if deconvolve:
         d_xx, d_yy, d_xy = deconvolution_params
         if not ((i_xx > d_xx) and (i_yy > d_yy)):
             if raise_on_fail:
@@ -183,16 +186,21 @@ def estimate_ellipse(
             i_xx -= d_xx
             i_yy -= d_yy
             i_xy -= d_xy
+
+    # Need to clip here before finishing deconvolving or else could get !(-1 < cor_new < 1)
+    i_xx = np.clip(i_xx, sigma_sq_min, np.Inf)
+    i_yy = np.clip(i_yy, sigma_sq_min, np.Inf)
+
+    if deconvolve:
         cor_new = i_xy/np.sqrt(i_xx*i_yy) if (i_xx > 0 and i_yy > 0) else np.nan
         if not (-1 < cor_new < 1):
             if raise_on_fail:
                 raise RuntimeError(f'Deconvolved moments {i_xx},{i_yy},{i_xy} give !(-1<rho={cor_new}<1)')
-            if cor is not None:
+            if cor is not None and -1 < cor < 1:
                 i_xy = cor*np.sqrt(i_xx*i_yy)
             else:
                 i_xy = 0
-    i_xx = np.clip(i_xx, sigma_sq_min, np.Inf)
-    i_yy = np.clip(i_yy, sigma_sq_min, np.Inf)
+
     inertia = np.array(((i_xx, i_xy), (i_xy, i_yy))) if not return_as_params else (i_xx, i_yy, i_xy)
     if not np.all(np.isfinite(inertia)):
         raise RuntimeError(f'Inertia {inertia} not all finite')
