@@ -1040,25 +1040,22 @@ class Model:
                 axes[3], figaxes[0], img_chi, vertical=do_plot_as_column, do_show_labels=do_show_labels)
             if has_mask:
                 axes[3].contour(x, y, z, colors="green")
-                chi = chi[exposure.mask_inverse]
-            Model._plot_chi_hist(chi, axes[4])
+            chi_mask = chi[exposure.mask_inverse] if has_mask else chi
+            Model._plot_chi_hist(chi_mask, axes[4])
             Model._label_figureaxes(axes, chisqred, name_model=name_model, description_model=description_model,
                                     label_img='Band={}'.format(exposure.band), is_first_model=is_first_model,
                                     is_last_model=is_last_model, do_plot_as_column=do_plot_as_column)
         else:
-            if has_mask:
-                chi = (exposure.image[exposure.mask_inverse] - img_model[exposure.mask_inverse]) * \
-                    sigma_inv[exposure.mask_inverse]
-            else:
-                chi = (exposure.image - img_model)*sigma_inv
+            chi = (exposure.image - img_model)*sigma_inv
+            chi_mask = chi[exposure.mask_inverse] if has_mask else chi
 
         if likefunc == "t":
-            variance = chi.var()
+            variance = chi_mask.var()
             dof = 2. * variance / (variance - 1.)
             dof = max(min(dof, float('inf')), 0)
-            likelihood = np.sum(spstats.t.logpdf(chi, dof))
+            likelihood = np.sum(spstats.t.logpdf(chi_mask, dof))
         elif likefunc == "normal":
-            likelihood = np.sum(spstats.norm.logpdf(chi)
+            likelihood = np.sum(spstats.norm.logpdf(chi_mask)
                                 + np.log(sigma_inv[exposure.mask_inverse] if has_mask else sigma_inv))
         else:
             raise ValueError("Unknown likelihood function {:s}".format(self.likefunc))
