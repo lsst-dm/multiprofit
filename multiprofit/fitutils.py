@@ -371,7 +371,7 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
 # Convenience function to fit a model. kwargs are passed on to evaluate_model
 def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
               do_print_final=True, print_step_interval=100, plot=False, do_linear=True,
-              kwargs_fit=None, **kwargs):
+              kwargs_fit=None, params_adjusted=None, **kwargs):
     """
     Convenience function to fit a model with reasonable defaults.
     :param model: multiprofit.Model; default: modeller.model
@@ -382,6 +382,9 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
     :param print_step_interval: Integer; step interval between printing.
     :param plot: Boolean; plot final fit?
     :param do_linear: Boolean; do linear fit?
+    :param params_adjusted: Dict [multiprofit.objects.Parameter, float]; parameter-offset pairs for
+        parameters that were adjusted (with limits) during fitting. Offset values are subtracted from
+        untransformed fit value, then returned after storage in the return value.
     :param kwargs_fit: Dict; additional keyword arguments to pass to modeller.fit().
     :param kwargs: Dict; passed to evaluate_model() after fitting is complete (e.g. plotting options).
     :return: Tuple of modeller.fit and modeller.
@@ -394,6 +397,8 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
         model = modeller.model
     if kwargs_fit is None:
         kwargs_fit = {}
+    if params_adjusted is None:
+        params_adjusted = {}
     fit = modeller.fit(
         do_print_final=do_print_final, print_step_interval=print_step_interval, do_linear=do_linear,
         **kwargs_fit
@@ -405,10 +410,22 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
     params = model.get_parameters()
     for item in ['params_bestall', 'params_bestalltransformed', 'params_allfixed']:
         fit[item] = []
+    idx_free = 0
     for param in params:
-        fit["params_bestall"].append(param.get_value(transformed=False))
+        param_adjust = params_adjusted.get(param)
+        value_untrans = param.get_value(transformed=False)
+        if param_adjust:
+            limits_param = param.limits
+            param.limits = None
+            value_untrans -= param_adjust
+            fit["params_best"][idx_free] = value_untrans
+        fit["params_bestall"].append(value_untrans)
         fit["params_bestalltransformed"].append(param.get_value(transformed=True))
         fit["params_allfixed"].append(param.fixed)
+        if param_adjust:
+            param.set_value(value_untrans)
+            param.limits = limits_param
+            idx_free += 1
 
     return fit, modeller
 
@@ -625,7 +642,7 @@ def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
         do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
-        print_exception=True, prior_specs=None, skip_fit=False, **kwargs
+        print_exception=True, prior_specs=None, skip_fit=False, background_sigma_add=None, **kwargs
 ):
     """Convenience function to fit a galaxy given some exposures with PSFs.
 
@@ -714,6 +731,8 @@ def fit_galaxy(
             figures = None
             axes_list = None
             do_plot_as_column = None
+        params_adjusted = {}
+
         for modelidx, modelinfo in enumerate(modelspecs):
             name_model = modelinfo["name"]
             modeltype = modelinfo["model"]
@@ -890,6 +909,10 @@ def fit_galaxy(
                     priors_comp = {}
                     priors_src = {}
                     prior_background = prior_specs.get('background')
+                    # Adjust the input background prior values
+                    if prior_background is not None and background_sigma_add is not None:
+                        for band, bg_prior_values in prior_background.items():
+                            bg_prior_values['mean'] += background_sigma_add*bg_prior_values['stddev']
 
                     for name_prior, params_prior_type in prior_specs.items():
                         if name_prior != 'background':
@@ -920,6 +943,14 @@ def fit_galaxy(
                                         model.priors.append(
                                             mpfpri.GaussianLsqPrior(param_flux, **prior_background[band])
                                         )
+                                        # Adjust the initial background value if a constant was added
+                                        if background_sigma_add and param_flux not in params_adjusted:
+                                            flux_add = background_sigma_add*prior_background[band]['stddev']
+                                            param_flux.set_value(
+                                                param_flux.get_value(transformed=False) + flux_add,
+                                                transformed=False
+                                            )
+                                            params_adjusted[param_flux] = flux_add
                             else:
                                 params_comp = {p.name: p for p in comp.get_parameters()}
                                 for name_prior, params_prior_type in priors_comp.items():
@@ -953,8 +984,6 @@ def fit_galaxy(
                         }],
                         "modeltype": modeltype
                     }
-                    if init_with_values:
-                        params_all = model.get_parameters(fixed=True)
                 else:
                     logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
                     model.name = name_model
@@ -963,6 +992,13 @@ def fit_galaxy(
                         init_model_by_guessing(model, guesstype, bands, nguesses=3)
 
                     try:
+                        if background_sigma_add is not None:
+                            # Add a flat background level to the image so that the fit background is >0
+                            for exposure, _ in exposures_psfs:
+                                added_bg = background_sigma_add*prior_background[exposure.band]['stddev']
+                                if added_bg != 0:
+                                    exposure.image += added_bg
+                                    exposure.meta['bg_const_added'] = added_bg
                         fits = []
                         do_second = len(model.sources[0].modelphotometric.components) > 1 or \
                             not use_modellib_default
@@ -1005,6 +1041,13 @@ def fit_galaxy(
                         fits_by_engine[engine][name_model] = e, trace
 
             if plot and (skip_fit or (not redo and fits_model is not None)):
+                if background_sigma_add is not None:
+                    for exposure, _ in exposures_psfs:
+                        if 'bg_const_added' not in exposure.meta:
+                            added_bg = background_sigma_add*prior_background[exposure.band][1]
+                            if added_bg != 0:
+                                exposure.image += added_bg
+                                exposure.meta['bg_const_added'] = added_bg
                 if skip_fit:
                     values_best = (None,)
                 else:
@@ -1025,6 +1068,12 @@ def fit_galaxy(
                         img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
                         weights_band=weights_band
                     )
+            if background_sigma_add is not None:
+                for exposure, _ in exposures_psfs:
+                    added_bg = exposure.meta.get('bg_const_added', 0)
+                    if added_bg != 0:
+                        exposure.image -= added_bg
+                        del exposure.meta['bg_const_added']
     if plot:
         if len(bands) > 1:
             for figure in figures.values():
@@ -1300,11 +1349,11 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
             fluxfracs[i] = frac/total
             total -= frac
         fluxfracs[-1] = 1.0
-    model.logger.info('Initializing from best model={} w/fluxfracs: {}'.format(
-        modelfits[model_best]['name'], fluxfracs))
-    paramtree_best = modelfits[model_best]['paramtree']
+    fits_best = modelfits[model_best]
+    model.logger.info(f'Initializing from best model={fits_best["name"]} w/fluxfracs: {fluxfracs}')
+    paramtree_best = fits_best['paramtree']
     fluxcens_init = paramtree_best[0][1][0] + paramtree_best[0][0]
-    # Get fluxes and components for init
+    fluxcens_init_values = [p.get_value(transformed=False) for p in fluxcens_init]
     fluxes_init = []
     comps_init = []
     for modelfit in modelfits:
@@ -1354,8 +1403,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
         if not (fluxcen[num_bands].name == "cenx" and fluxcen[num_bands+1].name == "ceny"):
             raise RuntimeError(f"{name}[{num_bands}:{num_bands+1}] names=({fluxcen[num_bands].name},"
                                f"{fluxcen[num_bands+1].name}) not ('cenx','ceny')")
-    for param_to_set, param_init in zip(fluxcens, fluxcens_init):
-        param_to_set.set_value(param_init.get_value(transformed=False), transformed=False)
+    for param_to_set, value_init in zip(fluxcens, fluxcens_init_values):
+        param_to_set.set_value(value_init, transformed=False)
     # Check if num_comps equal
     if len(comps) != len(comps_init):
         raise RuntimeError(f"Model {model.name} has {len(comps)} components but prereqs "

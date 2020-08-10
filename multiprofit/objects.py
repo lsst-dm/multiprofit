@@ -2068,16 +2068,23 @@ class Modeller:
             idx_param = 0
             for band in bands:
                 exposures = self.model.data.exposures[band]
-                idx_free = None
+                num_free = None
                 for exposure in exposures:
                     idx_end = idx_begin + datasizes[idx_exposure]
                     maskinv = exposure.mask_inverse
                     sigma_inv = exposure.get_sigma_inverse()
                     if maskinv is not None:
                         sigma_inv = sigma_inv[maskinv]
-                    for idx_free, (img_free, _) in enumerate(exposure.meta['img_models_params_free']):
+                    imgs_free = exposure.meta['img_models_params_free']
+                    for idx_free, (img_free, _) in enumerate(imgs_free):
                         x[idx_begin:idx_end, idx_param + idx_free] = (
                             img_free if maskinv is None else img_free[maskinv]).flat * sigma_inv
+                    if num_free is None:
+                        num_free = len(imgs_free)
+                    elif num_free != len(imgs_free):
+                        raise RuntimeError(
+                            f'Expected {num_free} free param/imgs but found {len(imgs_free)}'
+                        )
                     img = exposure.image
                     img_fixed = exposure.meta['img_model_fixed']
                     y[idx_begin:idx_end] = (
@@ -2086,8 +2093,8 @@ class Modeller:
                     ).flat * sigma_inv
                     idx_begin = idx_end
                     idx_exposure += 1
-                if exposures and idx_param:
-                    idx_param += idx_free + 1
+                if exposures:
+                    idx_param += num_free
 
             fluxratios_to_print = None
             fitmethods = {
