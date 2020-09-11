@@ -1040,25 +1040,22 @@ class Model:
                 axes[3], figaxes[0], img_chi, vertical=do_plot_as_column, do_show_labels=do_show_labels)
             if has_mask:
                 axes[3].contour(x, y, z, colors="green")
-                chi = chi[exposure.mask_inverse]
-            Model._plot_chi_hist(chi, axes[4])
+            chi_mask = chi[exposure.mask_inverse] if has_mask else chi
+            Model._plot_chi_hist(chi_mask, axes[4])
             Model._label_figureaxes(axes, chisqred, name_model=name_model, description_model=description_model,
                                     label_img='Band={}'.format(exposure.band), is_first_model=is_first_model,
                                     is_last_model=is_last_model, do_plot_as_column=do_plot_as_column)
         else:
-            if has_mask:
-                chi = (exposure.image[exposure.mask_inverse] - img_model[exposure.mask_inverse]) * \
-                    sigma_inv[exposure.mask_inverse]
-            else:
-                chi = (exposure.image - img_model)*sigma_inv
+            chi = (exposure.image - img_model)*sigma_inv
+            chi_mask = chi[exposure.mask_inverse] if has_mask else chi
 
         if likefunc == "t":
-            variance = chi.var()
+            variance = chi_mask.var()
             dof = 2. * variance / (variance - 1.)
             dof = max(min(dof, float('inf')), 0)
-            likelihood = np.sum(spstats.t.logpdf(chi, dof))
+            likelihood = np.sum(spstats.t.logpdf(chi_mask, dof))
         elif likefunc == "normal":
-            likelihood = np.sum(spstats.norm.logpdf(chi)
+            likelihood = np.sum(spstats.norm.logpdf(chi_mask)
                                 + np.log(sigma_inv[exposure.mask_inverse] if has_mask else sigma_inv))
         else:
             raise ValueError("Unknown likelihood function {:s}".format(self.likefunc))
@@ -2023,7 +2020,7 @@ class Modeller:
         time_start = time.time()
         likelihood = self.evaluate(
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
-            do_verify_jacobian=True, do_compare_likelihoods=True, debug=debug)
+            do_verify_jacobian=not do_linear_only, do_compare_likelihoods=True, debug=debug)
         likelihood_init = likelihood
         self.logger.info(f"Param names   : {name_params}")
         self.logger.info(f"Initial params (transformed): {params_init}")
@@ -2071,26 +2068,33 @@ class Modeller:
             idx_param = 0
             for band in bands:
                 exposures = self.model.data.exposures[band]
-                idx_free = None
+                num_free = None
                 for exposure in exposures:
                     idx_end = idx_begin + datasizes[idx_exposure]
                     maskinv = exposure.mask_inverse
                     sigma_inv = exposure.get_sigma_inverse()
                     if maskinv is not None:
                         sigma_inv = sigma_inv[maskinv]
-                    for idx_free, (img_free, _) in enumerate(exposure.meta['img_models_params_free']):
-                        x[idx_begin:idx_end, idx_param + idx_free] = (
-                            img_free if maskinv is None else img_free[maskinv]).flat * sigma_inv
+                    imgs_free = exposure.meta['img_models_params_free']
+                    for idx_free, (img_free, _) in enumerate(imgs_free):
+                        x[idx_begin:idx_end, idx_param + idx_free] = ((
+                            img_free if maskinv is None else img_free[maskinv]) * sigma_inv).flat
+                    if num_free is None:
+                        num_free = len(imgs_free)
+                    elif num_free != len(imgs_free):
+                        raise RuntimeError(
+                            f'Expected {num_free} free param/imgs but found {len(imgs_free)}'
+                        )
                     img = exposure.image
                     img_fixed = exposure.meta['img_model_fixed']
-                    y[idx_begin:idx_end] = (
+                    y[idx_begin:idx_end] = ((
                         (img if maskinv is None else img[maskinv]) if img_fixed is None else
                         (img - img_fixed if maskinv is None else img[maskinv] - img_fixed[maskinv])
-                    ).flat * sigma_inv
+                    ) * sigma_inv).flat
                     idx_begin = idx_end
                     idx_exposure += 1
-                if exposures and idx_param:
-                    idx_param += idx_free + 1
+                if exposures:
+                    idx_param += num_free
 
             fluxratios_to_print = None
             fitmethods = {
@@ -2357,9 +2361,10 @@ class Source:
             self.modelphotometric.get_parameters(free, fixed)
 
     def get_profiles(self, engine, bands, time=None, engineopts=None):
-        """
+        """ Get profiles for rendering sources.
 
         :param bands: List of bands
+        :param time: A currently-unused time object
         :param engine: Valid rendering engine
         :param engineopts: Dict of engine options
         :return:
