@@ -2077,8 +2077,8 @@ class Modeller:
                         sigma_inv = sigma_inv[maskinv]
                     imgs_free = exposure.meta['img_models_params_free']
                     for idx_free, (img_free, _) in enumerate(imgs_free):
-                        x[idx_begin:idx_end, idx_param + idx_free] = (
-                            img_free if maskinv is None else img_free[maskinv]).flat * sigma_inv
+                        x[idx_begin:idx_end, idx_param + idx_free] = ((
+                            img_free if maskinv is None else img_free[maskinv]) * sigma_inv).flat
                     if num_free is None:
                         num_free = len(imgs_free)
                     elif num_free != len(imgs_free):
@@ -2087,10 +2087,10 @@ class Modeller:
                         )
                     img = exposure.image
                     img_fixed = exposure.meta['img_model_fixed']
-                    y[idx_begin:idx_end] = (
+                    y[idx_begin:idx_end] = ((
                         (img if maskinv is None else img[maskinv]) if img_fixed is None else
                         (img - img_fixed if maskinv is None else img[maskinv] - img_fixed[maskinv])
-                    ).flat * sigma_inv
+                    ) * sigma_inv).flat
                     idx_begin = idx_end
                     idx_exposure += 1
                 if exposures:
