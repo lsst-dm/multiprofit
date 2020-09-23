@@ -404,7 +404,7 @@ class Model:
             if name_param not in description_models:
                 description_models[name_param] = []
             if not is_fluxratio or not param.fixed and param.band in bands:
-                description_models[name_param].append(value.format(param.get_value(transformed=False)))
+                description_models[name_param].append(value.format(param.get_value()))
         # Show the flux ratio if there is only one (otherwise it's painful to work out)
         # Show other parameters if there <= 3 of them otherwise the string is too long
         # TODO: Make a more elegant solution for describing models
@@ -558,14 +558,14 @@ class Model:
             Forces an additional evaluation of the model loglike(x+dx).
         :return: True if successful/False otherwise.
         """
-        value = param.get_value(transformed=True)
+        value = param.get_value_transformed()
         dx = np.clip(value*dx_ratio, dx_min, dx_max)
         # Allow for roundoff errors - it need not be such a strict limit
         dx_min_allowed = 0.99*dx_min
         for sign in [1, -1]:
             value_new = value + dx*sign
-            param.set_value(value_new, transformed=True)
-            dx_actual = param.get_value(transformed=True) - value
+            param.set_value_transformed(value_new)
+            dx_actual = param.get_value_transformed() - value
             if sign*dx_actual >= sign*dx_min_allowed:
                 break
         if sign*dx_actual < dx_min_allowed:
@@ -573,7 +573,7 @@ class Model:
                                f"({dx_min_allowed}, {dx_max}) for validating jacobian (sign={sign})")
         dx = dx_actual
         # This might happen if the parameter is near a limit
-        dparam = param.get_transform_derivative()
+        dparam = param.get_transform_derivative() if isinstance(param, ParameterTransformed) else None
         profiles_new, meta_model_new, engine_new, engineopts_new, _ = \
             self._get_image_model_exposure_setup(
                 exposure, engine=engine, engineopts=engineopts)
@@ -611,9 +611,9 @@ class Model:
         if np.all(passed):
             if dlldxs is not None:
                 dlldxs[1].append((likelihood_new - dlldxs[0])/dx)
-            param.set_value(value, transformed=True)
+            param.set_value_transformed(value)
         else:
-            param.set_value(value, transformed=True)
+            param.set_value_transformed(value)
             if do_plot_if_failed:
                 ncols = 3
                 plots = (
@@ -634,7 +634,7 @@ class Model:
             if do_raise:
                 raise RuntimeError(
                     f'jacobian verification failed on param {param} value_new={value_new:.6e} and '
-                    f'value_true={param.get_value(transformed=False):.6e} with dx={dx} idx={idx_param+1} '
+                    f'value_true={param.get_value():.6e} with dx={dx} idx={idx_param+1} '
                     f'dparam={dparam}'
                 )
             return False
@@ -756,7 +756,7 @@ class Model:
                     len(params), num_params
                 ))
             for paramobj, value_param in zip(params, param_values):
-                paramobj.set_value(value_param, transformed=params_transformed)
+                paramobj.set_value_transformed(value_param)
 
         if get_likelihood:
             likelihood = 1.
@@ -1344,7 +1344,7 @@ class Model:
                         # This is a source profile, not a logical source which might have multiple profiles
                         # TODO: Fix nomenclature. profile -> profile_sub?
                         param_flux = profile["param_flux"]
-                        flux_src = param_flux.get_value(transformed=False)
+                        flux_src = param_flux.get_value()
                         weight = flux_profile/flux_src
                         idx_src = profile["idx_src"]
                         grad_param_map[idx_profile, :] = grad_params_indices[idx_src, :]
@@ -1362,9 +1362,10 @@ class Model:
                                 # We want df/dp, where p(g) is the fit parameter
                                 # df/dp = df/dg * dg/dp = df/dg / dp/dg
                                 # Skip the derivative if this profile has a flux ratio - it'll be added later
+                                has_derivative = isinstance(param, ParameterTransformed) and not (
+                                        is_flux and not param_flux_ratio_is_none)
                                 derivative = param.get_transform_derivative(
-                                    verify=verify_derivative, rtol=1e-3) if not (
-                                    is_flux and not param_flux_ratio_is_none) else None
+                                    verify=verify_derivative, rtol=1e-3) if has_derivative else None
                                 if derivative is not None:
                                     weight_grad /= derivative
                                 # TODO: Revisit for fitting rscale
@@ -1460,14 +1461,14 @@ class Model:
                     if do_fit_leastsq_prep:
                         grad_param_fixed = []
                     for param_flux, ratios in param_flux_ratios.items():
-                        flux = param_flux.get_value(transformed=False)
+                        flux = param_flux.get_value()
                         flux_remaining = np.zeros(1+len(ratios))
                         flux_ratios_neg_p_one = np.zeros(len(ratios))
                         flux_remaining[0] = flux
                         is_flux_fixed = param_flux.fixed
                         for ratio_iter, (param_flux_ratio, idx_ratio, profile) in enumerate(ratios):
                             idx_component = grad_param_map[idx_ratio, order_flux]
-                            flux_ratio = param_flux_ratio.get_value(transformed=False)
+                            flux_ratio = param_flux_ratio.get_value()
                             flux_ratios_neg_p_one[ratio_iter] = 1 - flux_ratio
                             flux_remaining[ratio_iter + 1] = flux_remaining[ratio_iter] * (1-flux_ratio)
                             if not is_flux_fixed:
@@ -1764,7 +1765,7 @@ class Model:
 
         return image, model, times, likelihood
 
-    def get_limits(self, free=True, fixed=True, transformed=True):
+    def get_limits(self, free=True, fixed=True):
         """
         Get parameter limits.
 
@@ -1774,7 +1775,7 @@ class Model:
         :return:
         """
         params = self.get_parameters(free=free, fixed=fixed)
-        return [param.get_limits(transformed=transformed) for param in params]
+        return [param.get_limits() for param in params]
 
     def get_profiles(self, **kwargs):
         """
@@ -1988,7 +1989,7 @@ class Modeller:
 
         params_free = self.model.get_parameters(fixed=False)
         if params_init is None:
-            params_init = np.array([param.get_value(transformed=True) for param in params_free])
+            params_init = np.array([param.get_value_transformed() for param in params_free])
 
         name_params = [param.name for param in params_free]
         is_flux_params_free = [isinstance(param, FluxParameter) for param in params_free]
@@ -2024,7 +2025,7 @@ class Modeller:
         likelihood_init = likelihood
         self.logger.info(f"Param names   : {name_params}")
         self.logger.info(f"Initial params (transformed): {params_init}")
-        self.logger.info(f"Initial params: {[param.get_value(transformed=False) for param in params_free]}")
+        self.logger.info(f"Initial params: {[param.get_value() for param in params_free]}")
         self.logger.info(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
         sys.stdout.flush()
 
@@ -2104,7 +2105,7 @@ class Modeller:
                 #'numpy.linalg.lstsq': [None],#, 1e-3, 1, 100],
                 #'fastnnls.fnnls': [None],
             }
-            values_init = [param.get_value(transformed=False) for param in params]
+            values_init = [param.get_value() for param in params]
             reset = True
 
             for method, params_to_fit in fitmethods.items():
@@ -2131,8 +2132,8 @@ class Modeller:
                         value_set = None
                         for frac in np.linspace(1, 0, 10+1):
                             value_new = value_init*(frac*ratio + 1. - frac)
-                            param.set_value(value_new, transformed=False)
-                            if np.isfinite(param.get_value(transformed=False)):
+                            param.set_value(value_new)
+                            if np.isfinite(param.get_value()):
                                 values_new.append(value_new)
                                 value_set = value_new
                                 break
@@ -2152,7 +2153,7 @@ class Modeller:
 
             if reset:
                 for value_init, param in zip(values_init, params):
-                    param.set_value(value_init, transformed=False)
+                    param.set_value(value_init)
 
             self.logger.info("Model '{}' linear fit elapsed time: {:.3e}".format(
                 self.model.name, time.time() - time_init))
@@ -2168,8 +2169,8 @@ class Modeller:
                         f' lens={(len(fluxratios), len(params), len(values_init))}'
                     )
             else:
-                params_init = np.array([param.get_value(transformed=True) for param in params_free])
-                params_init_true = np.array([param.get_value(transformed=False) for param in params_free])
+                params_init = np.array([param.get_value_transformed() for param in params_free])
+                params_init_true = np.array([param.get_value() for param in params_free])
                 self.logger.info(f"Final loglike, logprior: {likelihood}")
                 self.logger.info(f"New initial parameters from method {method_best}: {params_init}")
                 self.logger.info(f"New initial parameter values from method {method_best}: "
@@ -2185,7 +2186,7 @@ class Modeller:
         # (even if they're Gaussian, e.g. if applied to transforms/non-linear combinations of params)
         do_fit_leastsq_cleanup = False
         if do_nonlinear:
-            limits = self.model.get_limits(fixed=False, transformed=True)
+            limits = self.model.get_limits(fixed=False)
             algo = self.modellibopts["algo"] if "algo" in self.modellibopts else (
                 "neldermead" if self.modellib == "pygmo" else "Nelder-Mead")
             if self.modellib == "scipy":
@@ -2290,7 +2291,7 @@ class Modeller:
                 params_all = self.model.get_parameters(fixed=True)
                 self.logger.info(f"Param names (all): "
                                  f"{','.join(['{:11s}'.format(p.name) for p in params_all])}")
-                values_all = ','.join(['{:+.4e}'.format(p.get_value(transformed=False)) for p in params_all])
+                values_all = ','.join(['{:+.4e}'.format(p.get_value()) for p in params_all])
                 self.logger.info(f"Values untransfo.: {values_all}")
         else:
             params_best = params_init
@@ -2409,7 +2410,7 @@ class PhotometricModel:
                         flux = FluxParameter(
                             band=flux.band, value=0, name=flux.name, is_fluxratio=False,
                             unit=self.fluxes[flux.band].unit, **kwargs)
-                        flux.set_value(profile_band['flux'], transformed=False)
+                        flux.set_value(profile_band['flux'])
                         comp.fluxes[i] = flux
                 comp.fluxes_dict = {flux.band: flux for flux in comp.fluxes}
         if use_fluxfracs:
@@ -2419,7 +2420,7 @@ class PhotometricModel:
                 fixed = []
                 units = []
                 for idx, flux in enumerate(fluxes):
-                    values[idx] = flux.get_value(transformed=False)
+                    values[idx] = flux.get_value()
                     fixed[idx] = flux.fixed
                     units[idx] = flux.units
                 if all(fixed):
@@ -2478,7 +2479,7 @@ class PhotometricModel:
         # TODO: Check if this should skip entirely instead of adding a None for non-included bands
         if bands is None:
             bands = self.fluxes.keys()
-        flux_by_band = {band: self.fluxes[band].get_value(transformed=False) if
+        flux_by_band = {band: self.fluxes[band].get_value() if
                         band in self.fluxes else None for band in bands}
         profiles = []
         for comp in self.components:
@@ -2495,7 +2496,7 @@ class PhotometricModel:
                 profile_band["param_flux_ratios"] = params_fluxratio
                 profile_band["param_flux_idx"] = idx
         for flux in comp.fluxes:
-            if flux.is_fluxratio and flux.get_value(transformed=False) != 1.:
+            if flux.is_fluxratio and flux.get_value() != 1.:
                 raise RuntimeError('Non-unity flux ratio for final component')
         return profiles
 
@@ -2548,8 +2549,7 @@ class AstrometricModel:
                 (value.fixed and fixed) or (not value.fixed and free)]
 
     def get_position(self, time=None):
-        return self.params["cenx"].get_value(transformed=False), self.params["ceny"].get_value(
-            transformed=False)
+        return self.params["cenx"].get_value(), self.params["ceny"].get_value()
 
     def __init__(self, params):
         for i, param in enumerate(params):
@@ -2627,22 +2627,22 @@ class EllipseParameters(Ellipse):
         return sqrt(self.get_sigma_x()**2 + self.get_sigma_y()**2)
 
     def get_sigma_x(self):
-        return self.sigma_x.get_value(transformed=False)
+        return self.sigma_x.get_value()
 
     def get_sigma_y(self):
-        return self.sigma_y.get_value(transformed=False)
+        return self.sigma_y.get_value()
 
     def get_rho(self):
-        return self.rho.get_value(transformed=False)
+        return self.rho.get_value()
 
     def _set_sigma_x(self, x):
-        self.sigma_x.set_value(x, transformed=False)
+        self.sigma_x.set_value(x)
 
     def _set_sigma_y(self, x):
-        self.sigma_y.set_value(x, transformed=False)
+        self.sigma_y.set_value(x)
 
     def _set_rho(self, x):
-        self.rho.set_value(x, transformed=False)
+        self.rho.set_value(x)
 
     def __init__(self, sigma_x, sigma_y, rho):
         isparams = [isinstance(x, Parameter) for x in [sigma_x, sigma_y, rho]]
@@ -2665,7 +2665,7 @@ class EllipticalComponent(Component):
             profile["params"].update(params)
         for modifier in self.params_ellipse.rho.modifiers:
             if modifier.name == "rscale":
-                factor = modifier.get_value(transformed=False)
+                factor = modifier.get_value()
                 profile["sigma_x"] *= factor
                 profile["sigma_y"] *= factor
                 profile["params"]["rscale"] = modifier
@@ -2760,7 +2760,7 @@ class EllipticalParametricComponent(EllipticalComponent):
         for band in flux_by_band.keys():
             flux_param_band = self.fluxes_dict[band]
             profile = profile_base.copy()
-            flux = flux_param_band.get_value(transformed=False)
+            flux = flux_param_band.get_value()
             if flux_param_band.is_fluxratio:
                 if not 0 <= flux <= 1:
                     raise ValueError(f"flux ratio not 0 <= {flux} <= 1")
@@ -2772,7 +2772,7 @@ class EllipticalParametricComponent(EllipticalComponent):
                 profile["ang"] = ang
             profile['can_do_fit_leastsq'] = self.profile == "gaussian"
             for param in self.parameters.values():
-                profile[param.name] = param.get_value(transformed=False)
+                profile[param.name] = param.get_value()
 
             if not flux >= 0:
                 raise ValueError(f"flux {flux}!>=0")
@@ -2933,7 +2933,7 @@ class PointSourceProfile(Component):
         # TODO: Ensure that this is getting copies - it isn't right now
         profiles = psf.model.get_profiles(engine=engine, bands=flux_by_band.keys())
         for band in flux_by_band.keys():
-            flux = self.fluxes_dict[band].get_value(transformed=False)
+            flux = self.fluxes_dict[band].get_value()
             for profile in profiles[band]:
                 if engine == "galsim":
                     profile["profile"].flux *= flux
@@ -2987,7 +2987,7 @@ class Background(Component):
                 raise ValueError(
                     "Called Background (name={:s}) get_profiles() for band={:s} not in "
                     "bands with fluxes {}", self.name, band, self.fluxes_dict)
-            flux = self.fluxes_dict[band].get_value(transformed=False)
+            flux = self.fluxes_dict[band].get_value()
             if engine == "libprofit":
                 profile[band] = {
                     "background": True,
@@ -3017,6 +3017,67 @@ class Parameter:
     """
         A parameter with all the info about itself that you would need when fitting.
     """
+    def get_limits(self):
+        return self.limits.lower, self.limits.upper
+
+    def get_value(self):
+        return float(self.value)
+
+    def get_value_transformed(self):
+        return float(self.value)
+
+    def set_value(self, value):
+        if value is None:
+            raise RuntimeError(f"Tried to set Parameter {self} to None")
+        if self.limits is not None:
+            value = self.limits.clip(value)
+        try:
+            if np.isnan(value):
+                raise RuntimeError(f"Tried to set Parameter {self} to nan")
+            self.value = value
+            # TODO: Error checking, etc. There are probably better ways to do this
+            for param in self.inheritors:
+                param.value = self.value
+        except Exception:
+            print(f"Failed to set {self} to value={value}")
+            raise
+
+    def set_value_transformed(self, value):
+        self.set_value(value)
+
+    def __repr__(self):
+        attrs = ', '.join([
+            f'{var}={value!r}' for var, value in dict(
+                name=self.name,
+                value=self.value,
+                unit=self.unit,
+                limits=self.limits,
+                fixed=self.fixed,
+                inheritors=self.inheritors,
+                modifiers=self.modifiers,
+            ).items()
+        ])
+        return f'Parameter({attrs})'
+
+    def __call__(self):
+        return self.get_value()
+
+    def __init__(
+            self, *, name="", value=None, unit="", limits=None, fixed=False, inheritors=None, modifiers=None,
+    ):
+        self.fixed = fixed
+        self.name = name
+        self.unit = unit
+        self.limits = limits
+        # List of parameters that should inherit values from this one
+        self.inheritors = [] if inheritors is None else inheritors
+        # List of parameters that can modify this parameter's value - user decides what to do with them
+        self.modifiers = [] if modifiers is None else modifiers
+        self.value = value
+        self.set_value(value)
+
+
+class ParameterTransformed(Parameter):
     def get_transform_derivative(self, return_finite_diff=False, dx=None, verify=False,
                                  verify_derivative_abs_max=1e6, dx_ratios=None, **kwargs):
         """
@@ -3039,17 +3100,17 @@ class Parameter:
             if not return_finite_diff:
                 return None
             else:
-                value = self.get_value(transformed=False)
+                value = self.get_value()
                 if dx is None:
                     if dx_ratios is None:
                         raise ValueError('Finite difference derivative for parameter {} must specify one of'
                                          'dx or dx_ratios'.format(self))
                     dx = dx_ratios[0]*value
-                return (self.transform(value + dx) - self.get_value(transformed=True))/dx
-        value = self.get_value(transformed=False)
+                return (self.transform(value + dx) - self.get_value_transformed())/dx
+        value = self.get_value()
         derivative = self.transform.derivative(value)
         if verify:
-            value_transformed = self.get_value(transformed=True)
+            value_transformed = self.get_value_transformed()
             # Skip testing finite differencing if the derivative is very large
             # This might happen e.g. near the limits of the transformation
             # TODO: Check if better finite differencing is possible for large values
@@ -3076,40 +3137,24 @@ class Parameter:
                     ))
         return derivative
 
-    def get_value(self, transformed=False):
-        if transformed and not self.transformed:
-            return self.transform.transform(self.value)
-        elif not transformed and self.transformed:
-            return self.transform.reverse(self.value)
-        return np.float64(self.value)
+    def get_value(self):
+        return self.transform.reverse(self.value)
 
-    def get_limits(self, transformed=False):
-        lower = self.limits.lower
-        upper = self.limits.upper
-        if transformed and not self.limits.transformed:
-            lower = self.transform.transform(lower)
-            upper = self.transform.transform(upper)
-        elif not transformed and self.limits.transformed:
-            lower = self.transform.reverse(lower)
-            upper = self.transform.reverse(upper)
-        return lower, upper
+    def get_value_transformed(self):
+        return float(self.value)
 
-    def set_value(self, value, transformed=False):
+    def set_value(self, value):
+        value = self.transform.transform(value)
+        self.set_value_transformed(value)
+
+    def set_value_transformed(self, value):
         if value is None:
-            raise RuntimeError(f"Tried to set Parameter {self} to None")
-        if transformed == self.limits.transformed:
-            if self.limits is not None:
-                value = self.limits.clip(value)
-        else:
-            if transformed:
-                value = self.transform.reverse(value)
-            else:
-                value = self.transform.transform(value)
-            if self.limits is not None:
-                value = self.limits.clip(value)
+            raise RuntimeError(f"Tried to set ParameterTransformed {self} to None")
+        if self.limits is not None:
+            value = self.limits.clip(value)
         try:
             if np.isnan(value):
-                raise RuntimeError(f"Tried to set Parameter {self} to nan")
+                raise RuntimeError(f"Tried to set ParameterTransformed {self} to nan")
             self.value = value
             # TODO: Error checking, etc. There are probably better ways to do this
             for param in self.inheritors:
@@ -3118,50 +3163,26 @@ class Parameter:
             print(f"Failed to set {self} to value={value}")
             raise
 
-    def __repr__(self):
-        attrs = ', '.join([
-            f'{var}={value!r}' for var, value in dict(
-                name=self.name,
-                value=self.value,
-                unit=self.unit,
-                limits=self.limits,
-                transform=self.transform,
-                transformed=self.transformed,
-                fixed=self.fixed,
-                inheritors=self.inheritors,
-                modifiers=self.modifiers,
-            ).items()
-        ])
-        return f'Parameter({attrs})'
-
-    def __call__(self, *args, **kwargs):
-        return self.get_value(*args, **kwargs)
-
-    def __init__(self, name, value, unit="", limits=None, transform=None, transformed=True,
-                 fixed=False, inheritors=None, modifiers=None):
-        if transform is None:
-            transform = Transform()
-        if limits is None:
-            limits = Limits(transformed=transformed)
-        if limits.transformed != transformed:
-            raise ValueError("limits.transformed={} != Param[{:s}].transformed={}".format(
-                limits.transformed, name, transformed
-            ))
-        self.fixed = fixed
+    def __init__(
+            self, *, name="", value=None, unit="", limits=None, fixed=False, inheritors=None, modifiers=None,
+            transform=None
+    ):
         self.name = name
         self.unit = unit
-        self.limits = limits
-        self.transform = transform
-        self.transformed = transformed
+        self.limits = Limits(transformed=True) if limits is None else limits
+        if not self.limits.transformed:
+            raise ValueError("ParameterTransformed limits must also be transformed")
+        self.fixed = fixed
         # List of parameters that should inherit values from this one
         self.inheritors = [] if inheritors is None else inheritors
         # List of parameters that can modify this parameter's value - user decides what to do with them
         self.modifiers = [] if modifiers is None else modifiers
+        self.transform = Transform() if transform is None else transform
         self.value = None
-        self.set_value(value, transformed=transformed)
+        self.set_value_transformed(value)
 
 
-class FluxParameter(Parameter):
+class FluxParameter(ParameterTransformed):
     """
         A flux, magnitude or flux ratio, all of which one could conceivably fit.
         TODO: name seems a bit redundant, but I don't want to commit to storing the band as a string now
@@ -3182,11 +3203,14 @@ class FluxParameter(Parameter):
         ])
         return f'FluxParameter (name={self.name}):({attrs})'
 
-    def __init__(self, band, name, value, unit, limits, transform=None, transformed=True,
-                 fixed=None, is_fluxratio=None):
-        if is_fluxratio is None:
-            is_fluxratio = False
-        Parameter.__init__(self, name=name, value=value, unit=unit, limits=limits, transform=transform,
-                           transformed=transformed, fixed=fixed)
+    def __init__(
+            self, *, name="", value=None, unit="", limits=None, fixed=False, inheritors=None, modifiers=None,
+            transform=None, is_fluxratio=None, band=None,
+    ):
+        ParameterTransformed.__init__(
+            self, name=name, value=value, unit=unit, limits=limits, fixed=fixed,
+            inheritors=inheritors, modifiers=modifiers, transform=transform,
+        )
         self.band = band
-        self.is_fluxratio = is_fluxratio
+        self.is_fluxratio = is_fluxratio if is_fluxratio is not None else False
+

@@ -1580,7 +1580,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
                     "Asked for EllipticalComponent (profile={:s}, name={:s}) model for band={:s} not in "
                     "bands with fluxes {}".format(self.profile, self.name, band, self.fluxes_dict))
 
-        profile = {param.name: param.get_value(transformed=False) for param in
+        profile = {param.name: param.get_value() for param in
                    self.parameters.values()}
         is_sersic = self.profile == "sersic"
         slope = profile["nser"] if is_sersic else None
@@ -1626,7 +1626,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
         profile_base['nser'] = 0.5
         profile_base['can_do_fit_leastsq'] = True
         for band in flux_by_band.keys():
-            flux = self.fluxes_dict[band].get_value(transformed=False)
+            flux = self.fluxes_dict[band].get_value()
             profile = profile_base.copy()
             if self.fluxes_dict[band].is_fluxratio:
                 fluxratio = np.float(flux)
@@ -1716,7 +1716,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             if param.name in name_params_needed:
                 mandatory[param.name] = True
                 if param.name == "nser":
-                    nser = param.get_value(transformed=False)
+                    nser = param.get_value()
                     nsers = [x for x in MultiGaussianApproximationComponent.weights[profile][order]]
                     nser_min = min(nsers)
                     nser_max = max(nsers)

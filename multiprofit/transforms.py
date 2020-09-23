@@ -83,7 +83,7 @@ def negativeinversesquare(x):
 
 
 def logstretch(x, lower, factor=1.0):
-    return np.log10(x-lower)*factor
+    return math.log10(x-lower)*factor
 
 
 def powstretch(x, lower, factor=1.0):
@@ -131,7 +131,7 @@ def expitlimited(x, lower, extent, factor=1.0):
     # things will go badly well before then
     if y > 709.7827:
         return lower
-    y = 1+math.exp(y)
+    y = 1 + math.exp(y)
     if y == 0:
         return np.Inf
     return extent/y + lower

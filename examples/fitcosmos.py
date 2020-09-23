@@ -221,8 +221,8 @@ def get_exposures_hst2hsc(
             params_ell = {}
             names_param_ell = ["sigma_x", "sigma_y", "rho"]
             for param, value in zip(model_to_use.get_parameters(fixed=True), params_best):
-                param.set_value(value, transformed=True)
-                value_to_set = param.get_value(transformed=False)
+                param.set_value_transformed(value)
+                value_to_set = param.get_value()
                 if param.name == "cenx":
                     value_to_set = (scale_hst*(value_to_set - img_hst_shape[1]/2) + result.x[1] + nx/2)
                 elif param.name == "ceny":
@@ -232,9 +232,9 @@ def get_exposures_hst2hsc(
                 elif param.name == "sigma_x" or param.name == "sigma_y":
                     params_ell[param.name] = param
                     value_to_set *= scale_hst
-                param.set_value(value_to_set, transformed=False)
+                param.set_value(value_to_set)
             covar = np.array([
-                p.get_value(transformed=False) for p in [params_ell[x] for x in names_param_ell]
+                p.get_value() for p in [params_ell[x] for x in names_param_ell]
             ])
             covar[2] *= covar[0]*covar[1]
             covar[1] *= covar[1]
@@ -244,7 +244,7 @@ def get_exposures_hst2hsc(
             sigma_x, sigma_y, rho = mpfgauss.ellipse_to_covar(
                 sigma, axrat, ang, return_as_matrix=False, return_as_params=True)
             for param, value in zip([params_ell[x] for x in names_param_ell], [sigma_x, sigma_y, rho]):
-                param.set_value(value, transformed=False)
+                param.set_value(value)
             image_model_exposure = model_to_use.data.exposures[bandhst][0]
             image_model_exposure.image = mpffit.ImageEmpty((ny, nx))
             # Save the GalSim model object

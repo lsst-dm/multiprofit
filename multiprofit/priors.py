@@ -60,8 +60,7 @@ class LsqPrior(metaclass=ABCMeta):
 
 class GaussianLsqPrior(LsqPrior):
     def calc_residual(self, calc_jacobian=False, delta_jacobian=None):
-        value = self.param.get_value(transformed=self.transformed)
-        residual = (value - self.mean)/self.stddev
+        residual = (self.param.value - self.mean)/self.stddev
         if not np.isfinite(residual):
             raise RuntimeError(f'Infinite axis ratio prior residual from y={value},'
                                f' mean={self.mean} stddev={self.stddev}')
@@ -101,9 +100,9 @@ class ShapeLsqPrior(LsqPrior):
         residuals = []
         jacobians = {}
         if self.size_mean_std or self.axrat_params:
-            size_x = self.size_x.get_value(transformed=False)
-            size_y = self.size_y.get_value(transformed=False)
-            rho = self.rho.get_value(transformed=False)
+            size_x = self.size_x.get_value()
+            size_y = self.size_y.get_value()
+            rho = self.rho.get_value()
             size_maj, axrat, _ = mpfgauss.covar_to_ellipse(Ellipse(size_x, size_y, rho))
             if not axrat > 0:
                 raise RuntimeError(f'r_eff={size_maj}, axrat={axrat} from x={size_x}, y={size_y}, rho={rho}')
@@ -130,14 +129,13 @@ class ShapeLsqPrior(LsqPrior):
             dsize_x = delta_jacobian*np.max((size_x, 1e-3))
             dsize_y = delta_jacobian*np.max((size_y, 1e-3))
             drho = -delta_jacobian*(np.sign(rho) + (rho == 0))
-            values = {x: x.get_value(transformed=x.transformed)
-                      for x in (self.size_x, self.size_y, self.rho)}
+            values = {x: float(x.value) for x in (self.size_x, self.size_y, self.rho)}
             for param, delta in ((self.size_x, dsize_x), (self.size_y, dsize_y), (self.rho, drho)):
                 good = False
                 for sign in (1, -1):
                     try:
                         eps = sign*delta
-                        param.set_value(param.get_value(transformed=False) + eps, transformed=False)
+                        param.set_value(param.get_value() + eps)
                         good = True
                         delta = eps
                         break
@@ -152,8 +150,8 @@ class ShapeLsqPrior(LsqPrior):
                 jacobians[param] = jacobian
                 # Reset to original value
                 value_reset = values[param]
-                param.set_value(value_reset, transformed=param.transformed)
-                if param.get_value(transformed=param.transformed) != value_reset:
+                param.set_value_transformed(value_reset)
+                if param.value != value_reset:
                     raise RuntimeError(f'Failed to reset param {param} to value={value_reset}; check limits')
 
         return prior, residuals, jacobians
