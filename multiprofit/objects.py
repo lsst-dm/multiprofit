@@ -35,6 +35,8 @@ from multiprofit.limits import Limits
 from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
 import numpy as np
+from numpy.random import default_rng
+rng = default_rng()
 import scipy.stats as spstats
 import scipy.optimize as spopt
 import seaborn as sns
@@ -1963,7 +1965,8 @@ class Modeller:
         return rv
 
     def fit(self, params_init=None, do_print_final=True, timing=None, walltime_max=np.Inf,
-            print_step_interval=None, do_linear=True, do_linear_only=False, debug=False):
+            print_step_interval=None, do_linear=True, do_linear_only=False, debug=False,
+            replace_data_by_model=False):
         """
         Fit the Model to the data and return a dict with assorted fit information.
 
@@ -2155,8 +2158,8 @@ class Modeller:
                 for value_init, param in zip(values_init, params):
                     param.set_value(value_init)
 
-            self.logger.info("Model '{}' linear fit elapsed time: {:.3e}".format(
-                self.model.name, time.time() - time_init))
+            self.logger.info(f"Model '{self.model.name}' linear fit elapsed time: "
+                             f"{time.time() - time_init:.3e}")
             if fluxratios_to_print is None:
                 self.logger.info("Linear fit failed to improve on initial parameters")
                 likelihood_new = self.evaluate()
@@ -2179,6 +2182,16 @@ class Modeller:
             if not is_linear:
                 for param in params_free:
                     param.fixed = False
+
+        if replace_data_by_model:
+            for band, exposures in self.model.data.exposures.items():
+                for exposure in exposures:
+                    img, *_ = self.model.get_image_model_exposure(exposure)
+                    scale = 1./exposure.get_sigma_inverse()
+                    scale[~np.isfinite(scale)] = 0
+                    img += rng.normal(scale=scale, size=img.shape)
+                    exposure.meta["img_orig"] = exposure.image
+                    exposure.image = img
 
         # Skip non-linear fit if asked to or if it's a linear least squares problem,
         # for which it's unnecessary

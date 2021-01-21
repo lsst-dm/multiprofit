@@ -646,7 +646,8 @@ def fit_galaxy(
         exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
         fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
         do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
-        print_exception=True, prior_specs=None, skip_fit=False, background_sigma_add=None, **kwargs
+        print_exception=True, prior_specs=None, skip_fit=False, background_sigma_add=None,
+        replace_data_by_model=False, **kwargs
 ):
     """Convenience function to fit a galaxy given some exposures with PSFs.
 
@@ -669,6 +670,9 @@ def fit_galaxy(
     :param print_exception: bool; whether to print the first exception encountered and the stack trace
     :param prior_specs: dict; prior specifications.
     :param skip_fit: bool; whether to skip fitting and only setup the model
+    :param background_sigma_add: float; factor to multiply the sky background prior standard deviation before
+        adding to the prior's mean (which is otherwise zero). Default zero.
+    :param replace_data_by_model: bool; whether to replace the real data by the initial model
     :param kwargs: dict; additional keyword arguments to pass to get_init_from_moments
 
     :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
@@ -701,6 +705,7 @@ def fit_galaxy(
     title = name if plot else None
     if modellib is None:
         modellib = "scipy"
+    kwargs_fit = {'replace_data_by_model': replace_data_by_model}
 
     models = {} if (models is None) else models
     params_fixed_default = {}
@@ -1018,7 +1023,7 @@ def fit_galaxy(
                             do_plot_as_column=do_plot_as_column, name_model=name_model,
                             params_postfix_name_model=params_postfix_name_model,
                             img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                            weights_band=weights_band
+                            weights_band=weights_band, kwargs_fit=kwargs_fit,
                         )
                         fits.append(fit1)
                         if do_second:
