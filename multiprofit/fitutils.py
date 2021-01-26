@@ -37,6 +37,7 @@ from scipy import stats
 import sys
 import time
 import traceback
+from typing import List, NamedTuple
 
 
 class ImageEmpty:
@@ -44,6 +45,19 @@ class ImageEmpty:
 
     def __init__(self, shape=(0, 0)):
         self.shape = shape
+
+
+class ModelSpec(NamedTuple):
+    name: str
+    model: str
+    fixedparams: str = ""
+    initparams: str = ""
+    inittype: str = ""
+    psfmodel: str = ""
+    psfpixel: bool = True
+    unlimitedparams: str = ""
+    values_init: dict = None
+    values_init_psf: dict = None
 
 
 # For priors
@@ -690,7 +704,7 @@ def fit_galaxy(
         prior_specs = {}
     if logger not in kwargs:
         kwargs['logger'] = logger
-    estimate_moments = any(modelinfo.get('inittype') == 'moments' for modelinfo in modelspecs)
+    estimate_moments = any(modelinfo.inittype == 'moments' for modelinfo in modelspecs)
     fluxes, moments_by_name, values_min, values_max, num_pix_img = get_init_from_moments(
         exposures_psfs, estimate_moments=estimate_moments, **kwargs)
     bands = list(fluxes.keys())
@@ -743,8 +757,8 @@ def fit_galaxy(
         params_adjusted = {}
 
         for modelidx, modelinfo in enumerate(modelspecs):
-            name_model = modelinfo["name"]
-            modeltype = modelinfo["model"]
+            name_model = modelinfo.name
+            modeltype = modelinfo.model
             model_default = get_model(
                 fluxes, modeltype, num_pix_img, [moments_by_name["sigma_x"]],
                 [moments_by_name["sigma_y"]], [moments_by_name["rho"]],
@@ -757,9 +771,9 @@ def fit_galaxy(
             model = model_default if not exists_model else models[modeltype]
             if not exists_model:
                 models[modeltype] = model
-            is_psf_pixelated = mpfutil.str2bool(modelinfo["psfpixel"])
-            name_psf = modelinfo["psfmodel"] + ("_pixelated" if is_psf_pixelated else "")
-            params_unlimited = modelinfo.get("unlimitedparams")
+            is_psf_pixelated = modelinfo.psfpixel
+            name_psf = modelinfo.psfmodel + ("_pixelated" if is_psf_pixelated else "")
+            params_unlimited = modelinfo.unlimitedparams
             params_unlimited = {name_param for name_param in params_unlimited.split(";")} if params_unlimited\
                 else {}
 
@@ -776,20 +790,23 @@ def fit_galaxy(
                 if can_do_no_pixel:
                     engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine]
             model.data.exposures = {band: [] for band in bands}
-            values_init_psf = modelinfo.get('values_init_psf', {})
+            values_init_psf = modelinfo.values_init_psf
 
             for exposure, psfs in exposures_psfs:
                 exposure.psf = psfs[engine][name_psf]['object']
                 model.data.exposures[exposure.band].append(exposure)
-                values_init_psf_band = values_init_psf.get(exposure.band)
-                if values_init_psf_band is not None:
-                    params_psf = exposure.psf.model.get_parameters(fixed=False, free=True)
-                    if len(params_psf) != len(values_init_psf_band):
-                        raise RuntimeError(f'len(params_psf)={len(params_psf)} != len(values_init_psf_band)='
-                                           f'{len(values_init_psf_band)} (band={exposure.band})')
-                    for param, (name_init, value) in zip(params_psf, values_init_psf_band):
-                        __validate_param_name(param.name, name_init)
-                        param.set_value(value)
+                if values_init_psf is not None:
+                    values_init_psf_band = values_init_psf.get(exposure.band)
+                    if values_init_psf_band is not None:
+                        params_psf = exposure.psf.model.get_parameters(fixed=False, free=True)
+                        if len(params_psf) != len(values_init_psf_band):
+                            raise RuntimeError(
+                                f'len(params_psf)={len(params_psf)} != len(values_init_psf_band)='
+                                f'{len(values_init_psf_band)} (band={exposure.band})'
+                            )
+                        for param, (name_init, value) in zip(params_psf, values_init_psf_band):
+                            __validate_param_name(param.name, name_init)
+                            param.set_value(value)
 
             do_plot_multi = plot and len(bands) > 1
             fits_model = None if skip_fit else fits_engine.get(name_model, {}).get('fits')
@@ -799,9 +816,8 @@ def fit_galaxy(
                 # Parse default overrides from model spec
                 flag_param_keys = ['inherit', 'modify']
                 flag_params = {key: [] for key in flag_param_keys}
-                for flag in ['fixed', 'init']:
+                for flag, values in (('fixed', modelinfo.fixedparams), ('init', modelinfo.initparams)):
                     flag_params[flag] = {}
-                    values = modelinfo[flag + 'params']
                     if values:
                         for flag_value in values.split(";"):
                             if flag == "fixed":
@@ -816,11 +832,11 @@ def fit_galaxy(
                                     flag_params[flag][value[0]] = value_split
 
                 # Initialize model from estimate of moments (size/ellipticity) or from another fit
-                inittype = modelinfo['inittype']
+                inittype = modelinfo.inittype
                 init_with_values = inittype == 'values'
                 guesstype = None
                 params_fixed, params_init = flag_params['fixed'], flag_params['init']
-                values_init = modelinfo.get('values_init')
+                values_init = modelinfo.values_init
 
                 # Need to set fixed parameters to fixed to get the right list of free params to init
                 # Other init methods expect default values... I think.
@@ -830,7 +846,7 @@ def fit_galaxy(
                         modifiers=False)
 
                 # Model may depend on earlier fits to initialize some of the values and fit only a subset
-                init_hybrid = values_init is not None and inittype is not 'values'
+                init_hybrid = values_init is not None and inittype != 'values'
 
                 if inittype == 'moments':
                     logger.info(f'Initializing from moments: {moments_by_name}')
@@ -1080,6 +1096,7 @@ def fit_galaxy(
                     if added_bg != 0:
                         exposure.image -= added_bg
                         del exposure.meta['bg_const_added']
+
     if plot:
         if len(bands) > 1:
             for figure in figures.values():
@@ -1098,7 +1115,7 @@ def get_psf_models(modelspecs):
     :param modelspecs: List of dict, each a galaxy model specifications as returned by get_modelspecs.
     :return: set of tuples of PSF model type string (e.g. "gaussian:1") and pixelization boolean
     """
-    return set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
+    return set([(x.psfmodel, x.psfpixel) for x in modelspecs])
 
 
 def fit_psf_exposures(
@@ -1315,7 +1332,7 @@ def get_psfmodel(
     return model
 
 
-def get_modelspecs(filename=None):
+def get_modelspecs(filename) -> List[ModelSpec]:
     """
     Read a model specification file, the format of which is to be described.
 
@@ -1323,17 +1340,33 @@ def get_modelspecs(filename=None):
     :return: modelspecs; list of dicts of key specification name: value specification value.
     """
     if filename is None:
-        modelspecs = io.StringIO("\n".join([
+        rows = io.StringIO("\n".join([
             ",".join(["name", "model", "fixedparams", "initparams", "inittype", "psfmodel", "psfpixel"]),
             ",".join(["gausspix", "sersic:1", "nser", "nser=0.5", "moments", "gaussian:2", "T"]),
             ",".join(["gauss", "sersic:1",  "nser", "nser=0.5", "moments", "gaussian:2", "F"]),
             ",".join(["gaussinitpix ", "sersic:1", "nser", "", "gausspix", "gaussian:2", "F"]),
         ]))
-    with modelspecs if filename is None else open(filename, 'r') as filecsv:
-        modelspecs = [row for row in csv.reader(filecsv)]
-    header = modelspecs[0]
-    del modelspecs[0]
-    modelspecs = [{name: modelspec[i] for i, name in enumerate(header)} for modelspec in modelspecs]
+    with rows if filename is None else open(filename, 'r') as filecsv:
+        rows = [row for row in csv.reader(filecsv)]
+    header = rows[0]
+    header_set = set(header)
+    if len(header_set) != len(header):
+        raise RuntimeError(f"Modelspecs from filename={filename} header={header} contains duplicates")
+    if not header_set.issubset(set(ModelSpec._fields)):
+        raise RuntimeError(f"Modelspecs from filename={filename} header={header}"
+                           f" not subset of {ModelSpec._fields}")
+    modelspecs = []
+    fieldtypes = list(ModelSpec._field_types[x] for x in header)
+    for row in rows[1:]:
+        kwargs = {}
+        for idx, name in enumerate(header):
+            value = row[idx]
+            type_var = fieldtypes[idx]
+            value = value if type_var is str else (mpfutil.str2bool(value) if type_var is bool else None)
+            if value is None:
+                raise RuntimeError(f'Got invalid modelspec value None from type_var={type_var}')
+            kwargs[name] = value
+        modelspecs.append(ModelSpec(**kwargs))
     # TODO: Validate modelspecs
     return modelspecs
 
@@ -1552,8 +1585,16 @@ def init_model_from_values(model, values_init, free=True, fixed=False, params_fi
         param.set_value(value)
 
 
-def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine, bands=None,
-               params_inherit=None, params_modify=None, params_fixed=None, values_init=None):
+def init_model(
+    model: mpfobj.Model,
+    modeltype: str,
+    inittype: str,
+    models,
+    modelinfo_comps: List[ModelSpec],
+    fits_engine,
+    bands=None,
+    params_inherit=None, params_modify=None, params_fixed=None, values_init=None
+):
     """
     Initialize a multiprofit.objects.Model of a given modeltype with a method inittype.
 
@@ -1584,8 +1625,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
 
             # Loop through all previous models and add ones of the same type
             for modelinfo_comp in modelinfo_comps:
-                if modelinfo_comp["model"] == modeltype:
-                    name_modelcomps.append(modelinfo_comp['name'])
+                if modelinfo_comp.model == modeltype:
+                    name_modelcomps.append(modelinfo_comp.name)
         else:
             # TODO: Check this more thoroughly
             name_modelcomps = inittype.split(":")[1].split(";")
