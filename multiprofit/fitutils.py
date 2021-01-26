@@ -1746,7 +1746,7 @@ def set_exposure(model, band, index=0, image=None, error_inverse=None, psf=None,
     if band not in model.data.exposures:
         model.data.exposures[band] = [mpfobj.Exposure(band=band, image=None)]
     exposure = model.data.exposures[band][index]
-    is_empty_image = image is "empty"
+    is_empty_image = image == "empty"
     exposure.image = image if not is_empty_image else ImageEmpty(exposure.image.shape)
     if is_empty_image:
         exposure.error_inverse = exposure.image
