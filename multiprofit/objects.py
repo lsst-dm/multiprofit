@@ -321,11 +321,9 @@ class Model:
     def _plot_chi_hist(cls, chi, axis):
         good_chi = chi[np.isfinite(chi)]
         n_bins = 2*np.max([20, np.int(np.round(len(good_chi)/50))])
-        sns.distplot(good_chi, bins=n_bins, ax=axis,
-                     hist_kws={"log": True, "histtype": "step"},
-                     kde_kws={"kernel": "tri", "gridsize": n_bins//2}).set(
-            xlim=(-5, 5), ylim=(1e-4, 1)
-        )
+        sns.histplot(
+            good_chi, bins=n_bins, ax=axis,  element="step", kde_kws={"kernel": "tri", "gridsize": n_bins//2}
+        ).set(xlim=(-5, 5), ylim=(1e-4, 1), yscale="log")
         x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
         axis.plot(x, spstats.norm.pdf(x))
 
