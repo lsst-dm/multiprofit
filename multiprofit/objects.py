@@ -25,6 +25,7 @@ import copy
 import galsim as gs
 import logging
 from math import sqrt
+import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit as mpf
@@ -36,12 +37,12 @@ from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
 import numpy as np
 from numpy.random import default_rng
-rng = default_rng()
 import scipy.stats as spstats
 import scipy.optimize as spopt
 import seaborn as sns
 import sys
 import time
+from typing import Any, Dict, NamedTuple
 
 try:
     import pygmo as pg
@@ -53,6 +54,8 @@ try:
 except ImportError:
     pyp = None
 
+rng = default_rng()
+
 
 # TODO: Make this a class?
 def get_gsparams(engineopts=None):
@@ -63,6 +66,11 @@ draw_method_pixel = {
     "galsim": "no_pixel",
     "libprofit": "rough",
 }
+
+
+class FigAxes(NamedTuple):
+    figure: matplotlib.figure.Figure = None
+    axes: Any = None
 
 
 # TODO: Implement WCS
@@ -330,9 +338,9 @@ class Model:
 
     @classmethod
     def _plot_exposures_color(
-            cls, images, img_models, chis, figaxes, bands=None, band_string=None,
+            cls, images, img_models, chis, figaxes: FigAxes, bands=None, band_string=None,
             max_img=None, name_model='Model', description_model=None, params_postfix_name_model=None,
-            is_first_model=True, is_last_model=True, do_plot_as_column=False, origin_img='bottom',
+            is_first_model=True, is_last_model=True, do_plot_as_column=False, origin_img='lower',
             weight_per_img=None, asinhscale=16, imgdiffscale=0.05):
         if bands is None:
             bands = []
@@ -343,7 +351,7 @@ class Model:
                 description_model = ''
             description_model += Model._formatmodelparams(params_postfix_name_model, bands)
         # TODO: verify lengths
-        axes = figaxes[1]
+        axes = figaxes.axes
         images_all = [np.copy(images), np.copy(img_models)]
         for images_of_type in images_all:
             for idx, img in enumerate(images_of_type):
@@ -673,7 +681,7 @@ class Model:
     def evaluate(self, param_values=None, data=None, bands=None, engine=None, engineopts=None,
                  params_transformed=True, get_likelihood=True, is_likelihood_log=True, keep_likelihood=False,
                  keep_images=False, keep_models=False, plot=False,
-                 do_plot_multi=False, figure=None, axes=None, row_figure=None, name_model="Model",
+                 do_plot_multi=False, figaxes: Dict[str, FigAxes]=None, row_figure=None, name_model="Model",
                  description_model=None, params_postfix_name_model=None, do_draw_image=False, scale=1,
                  clock=False, do_plot_as_column=False,
                  img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
@@ -701,9 +709,7 @@ class Model:
         :param keep_models: bool; store each exposure's model specification in its metadata?
         :param plot: bool; plot the model and residuals for each exposure?
         :param do_plot_multi: bool; plot colour images if fitting multiband? Ignored otherwise.
-        :param figure: matplotlib figure handle. If data has multiple bands, must be a dict keyed by band.
-        :param axes: iterable of matplotlib axis handles. If data has multiple bands, must be a dict keyed by
-            band.
+        :param figaxes: Dict keyed by band of FigAxes objects.
         :param row_figure: non-negative integer; the index of the axis handle to plot this model on.
         :param name_model: string; a name for the model to appear in plots.
         :param description_model: string; a description of the model to appear in plots.
@@ -769,31 +775,31 @@ class Model:
             bands = data.exposures.keys()
         if plot:
             num_plots = 0
-            is_single_model = figure is None or axes is None or row_figure is None
+            is_single_model = figaxes is None or (len(figaxes) < 1) or row_figure is None
             if is_single_model:
                 for band in bands:
                     num_plots += len(data.exposures[band])
-                num_rows = num_plots + do_plot_multi
-                num_rows_band = {band: num_rows for band in bands}
-                figure, axes = plt.subplots(nrows=num_rows, ncols=5, figsize=(10, 2*num_rows), dpi=100)
+                n_rows = num_plots + do_plot_multi
+                n_rows_band = {band: n_rows for band in bands}
+                figure, axes = plt.subplots(nrows=n_rows, ncols=5, figsize=(10, 2*n_rows), dpi=100)
                 if num_plots == 1:
                     axes.shape = (1, 5)
                 row_figure = 0
+                figaxes = FigAxes(figure=figure, axes=axes)
             else:
-                num_bands = len(bands)
-                num_rows_band = {band: (axes[band] if num_bands > 1 else axes).shape[0] for band in bands}
-            figaxes = (figure, axes)
+                n_rows_band = {band: fa.axes.shape[0] for band, fa in figaxes.items()}
             is_first_model = row_figure is None or row_figure == 0
             is_last_model_band = {
-                band: row_figure is None or axes is None or (row_figure + 1) == num_rows_band[band]
+                band: row_figure is None or (figaxes if is_single_model else figaxes[band]).axes is None or (
+                        row_figure + 1) == n_rows_band[band]
                 for band in bands
             }
         else:
-            figaxes = None
             is_first_model = None
             is_last_model_band = None
-        if plot and (figaxes is None or any(x is None for x in figaxes)):
-            raise RuntimeError("Plot is true but there are None figaxes: {}".format(figaxes))
+        if plot and (figaxes is None or
+                     any(x is None for x in ((figaxes,) if is_single_model else figaxes.values()))):
+            raise RuntimeError(f"Plot is true but there are None figaxes: {figaxes}")
         chis = []
         imgs_clip = []
         models_clip = []
@@ -841,10 +847,10 @@ class Model:
                 if keep_models:
                     exposure.meta["model"] = model
                 if plot:
-                    if do_plot_multi:
-                        figaxes = (figure[band], axes[band][row_figure])
-                    else:
-                        figaxes = (figure, axes[row_figure])
+                    figaxes_ref = figaxes[band] if not is_single_model else figaxes
+                    figaxes_exp = FigAxes(figure=figaxes_ref.figure, axes=figaxes_ref.axes[row_figure])
+                else:
+                    figaxes_exp = None
 
                 gaussians = None
                 has_bg, background = None, None
@@ -882,9 +888,10 @@ class Model:
                                 break
                         if not passed:
                             failed.append(str(param))
-                    if failed:
-                        self.logger.warning(f'Failed jacobian validation: {failed}')
-                    self.logger.info(f'DLLs: [{", ".join(f"{dlldx:.3e}" for dlldx in dlldxs)}]')
+                    if self.logger:
+                        if failed:
+                            self.logger.warning(f'Failed jacobian validation: {failed}')
+                        self.logger.debug(f'DLLs: [{", ".join(f"{dlldx:.3e}" for dlldx in dlldxs)}]')
 
                 missing_likelihood = (get_likelihood or do_compare_likelihoods) and (
                     likelihood_exposure is None)
@@ -911,7 +918,7 @@ class Model:
                     # Also generate chi and clipped images for plotting
                     likelihood_validate, chi, img_clip, model_clip = \
                         self.get_exposure_likelihood(
-                            exposure, image, log=is_likelihood_log, figaxes=figaxes,
+                            exposure, image, log=is_likelihood_log, figaxes=figaxes_exp,
                             name_model=name_model, description_model=description_model,
                             params_postfix_name_model=params_postfix_name_model,
                             do_plot_as_column=do_plot_as_column, is_first_model=is_first_model,
@@ -955,29 +962,23 @@ class Model:
         # Color images! whooo
         if plot:
             if do_plot_multi:
-                if is_single_model:
-                    Model._plot_exposures_color(
-                        imgs_clip, models_clip, chis, (figure, axes[row_figure]),
-                        bands=bands, name_model=name_model, description_model=description_model,
-                        params_postfix_name_model=params_postfix_name_model, is_first_model=is_first_model,
-                        is_last_model=is_last_model, do_plot_as_column=do_plot_as_column,
-                        max_img=img_multi_plot_max, weight_per_img=weight_per_img)
-                else:
-                    Model._plot_exposures_color(
-                        imgs_clip, models_clip, chis, (figure['multi'], axes['multi'][row_figure]),
-                        bands=bands, name_model=name_model, description_model=description_model,
-                        params_postfix_name_model=params_postfix_name_model, is_first_model=is_first_model,
-                        is_last_model=is_last_model, do_plot_as_column=do_plot_as_column,
-                        max_img=img_multi_plot_max, weight_per_img=weight_per_img)
+                figaxes_ref = figaxes['multi'] if not is_single_model else figaxes
+                figaxes_exp = FigAxes(figure=figaxes_ref.figure, axes=figaxes_ref.axes[row_figure])
+                Model._plot_exposures_color(
+                    imgs_clip, models_clip, chis, figaxes_exp,
+                    bands=bands, name_model=name_model, description_model=description_model,
+                    params_postfix_name_model=params_postfix_name_model, is_first_model=is_first_model,
+                    is_last_model=is_last_model, do_plot_as_column=do_plot_as_column,
+                    max_img=img_multi_plot_max, weight_per_img=weight_per_img)
                 row_figure += 1
         if clock:
-            self.logger.info(','.join([f'{name}={value:.2e}' for name, value in times.items()]))
+            self.logger.debug(','.join([f'{name}={value:.2e}' for name, value in times.items()]))
         return likelihood, param_values, chis, times
 
     def get_exposure_likelihood(
-            self, exposure, img_model, log=True, likefunc=None, figaxes=None, max_img=None, min_img=None,
+            self, exposure, img_model, log=True, likefunc=None, figaxes: FigAxes=None, max_img=None, min_img=None,
             name_model="Model", description_model=None, params_postfix_name_model=None, is_first_model=True,
-            is_last_model=True, do_plot_as_column=False, origin_img='bottom', norm_img_diff=None,
+            is_last_model=True, do_plot_as_column=False, origin_img='lower', norm_img_diff=None,
             norm_chi=None
     ):
         if likefunc is None:
@@ -990,7 +991,7 @@ class Model:
                     description_model = ""
                 description_model += Model._formatmodelparams(params_postfix_name_model, {exposure.band})
 
-            axes = figaxes[1]
+            axes = figaxes.axes
             if has_mask:
                 xlist = np.arange(img_model.shape[1])
                 ylist = np.arange(img_model.shape[0])
@@ -1009,7 +1010,7 @@ class Model:
             do_show_labels = is_last_model
             for i, img in enumerate([exposure.image, img_model]):
                 img_handle = axes[i].imshow(img, cmap='gray', origin=origin_img, norm=norm)
-                _sidecolorbar(axes[i], figaxes[0], img_handle, vertical=do_plot_as_column,
+                _sidecolorbar(axes[i], figaxes.figure, img_handle, vertical=do_plot_as_column,
                               do_show_labels=do_show_labels)
                 if has_mask:
                     axes[i].contour(x, y, z, colors='green')
@@ -1021,7 +1022,7 @@ class Model:
                                                      stretch=mpfasinh.AsinhStretchSigned(0.1))
             imgdiff = axes[2].imshow(chi, cmap='gray', origin=origin_img, norm=norm_img_diff)
             _sidecolorbar(
-                axes[2], figaxes[0], imgdiff, vertical=do_plot_as_column, do_show_labels=do_show_labels)
+                axes[2], figaxes.figure, imgdiff, vertical=do_plot_as_column, do_show_labels=do_show_labels)
             if has_mask:
                 axes[2].contour(x, y, z, colors='green')
             # The chi (data-model)/error map
@@ -1290,7 +1291,8 @@ class Model:
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv[mask]/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
-                    self.logger.info(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
+                    if self.logger:
+                        self.logger.debug(f"Setting exposure.meta['like_const']={exposure.meta['like_const']}")
                 do_grad_any = do_jacobian or do_fit_leastsq_prep
                 profiles_band_bad = 0
                 profiles_band = []
@@ -1860,6 +1862,7 @@ class Model:
         Model._checkengine(engine)
         if logger is None:
             logger = logging.getLogger(__name__)
+            logger.level = 21
         self.can_do_fit_leastsq = False
         self.data = data
         self.engine = engine
@@ -1958,8 +1961,8 @@ class Modeller:
             self.fitinfo["log"].append(loginfo)
         if log_step:
             stepnum = len(self.fitinfo["log"])
-            if stepnum % self.fitinfo["print_step_interval"] == 0:
-                self.logger.info(f"Step {stepnum}: rv={rv}, loginfo={loginfo}")
+            if self.logger and (stepnum % self.fitinfo["print_step_interval"] == 0):
+                self.logger.debug(f"Step {stepnum}: rv={rv}, loginfo={loginfo}")
         return rv
 
     def fit(self, params_init=None, do_print_final=True, timing=None, walltime_max=np.Inf,
@@ -2024,10 +2027,11 @@ class Modeller:
             params_init, do_fit_linear_prep=do_linear, do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True,
             do_verify_jacobian=not do_linear_only, do_compare_likelihoods=True, debug=debug)
         likelihood_init = likelihood
-        self.logger.info(f"Param names   : {name_params}")
-        self.logger.info(f"Initial params (transformed): {params_init}")
-        self.logger.info(f"Initial params: {[param.get_value() for param in params_free]}")
-        self.logger.info(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
+        if self.logger:
+            self.logger.debug(f"Param names   : {name_params}")
+            self.logger.debug(f"Initial params (transformed): {params_init}")
+            self.logger.debug(f"Initial params: {[param.get_value() for param in params_free]}")
+            self.logger.debug(f"Initial likelihood in t={time.time() - time_start:.3e}: {likelihood}")
         sys.stdout.flush()
 
         do_nonlinear = not (do_linear_only or (is_linear and do_linear and self.model.can_do_fit_leastsq))
@@ -2041,7 +2045,8 @@ class Modeller:
                 for param in params_free:
                     if not isinstance(param, FluxParameter):
                         param.fixed = True
-            self.logger.info("Beginning linear fit")
+            if self.logger:
+                self.logger.debug("Beginning linear fit")
             time_init = time.time()
             datasizes = []
             params = []
@@ -2156,10 +2161,11 @@ class Modeller:
                 for value_init, param in zip(values_init, params):
                     param.set_value(value_init)
 
-            self.logger.info(f"Model '{self.model.name}' linear fit elapsed time: "
-                             f"{time.time() - time_init:.3e}")
+            if self.logger:
+                self.logger.debug(f"Model '{self.model.name}' linear fit elapsed time: "
+                                 f"{time.time() - time_init:.3e}")
             if fluxratios_to_print is None:
-                self.logger.info("Linear fit failed to improve on initial parameters")
+                self.logger.debug("Linear fit failed to improve on initial parameters")
                 likelihood_new = self.evaluate()
                 if np.abs(likelihood_new[0] - likelihood_init[0]) > 1e-2:
                     sigma_inv = exposure.get_sigma_inverse()
@@ -2172,11 +2178,12 @@ class Modeller:
             else:
                 params_init = np.array([param.get_value_transformed() for param in params_free])
                 params_init_true = np.array([param.get_value() for param in params_free])
-                self.logger.info(f"Final loglike, logprior: {likelihood}")
-                self.logger.info(f"New initial parameters from method {method_best}: {params_init}")
-                self.logger.info(f"New initial parameter values from method {method_best}: "
-                                 f"{params_init_true}")
-                self.logger.info(f"Linear flux ratios: {fluxratios_to_print}")
+                if self.logger:
+                    self.logger.debug(f"Final loglike, logprior: {likelihood}")
+                    self.logger.debug(f"New initial parameters from method {method_best}: {params_init}")
+                    self.logger.debug(f"New initial parameter values from method {method_best}: "
+                                     f"{params_init_true}")
+                    self.logger.debug(f"Linear flux ratios: {fluxratios_to_print}")
             if not is_linear:
                 for param in params_free:
                     param.fixed = False
@@ -2287,23 +2294,23 @@ class Modeller:
             else:
                 raise RuntimeError("Unknown optimization library " + self.modellib)
             likelihood = self.evaluate(params_best, debug=debug)
-            if do_print_final:
-                self.logger.info(
+            if self.logger and do_print_final:
+                self.logger.debug(
                     "Model '{}' nonlinear fit elapsed time: {:.3e} after {},{} function,gradient "
                     "evaluations ({} logged)".format(
                         self.model.name, time_run, self.fitinfo["n_eval_func"],
                         self.fitinfo["n_eval_grad"],
                         (len(timing) if timing is not None else 0) - self.fitinfo["n_timings"]))
-                self.logger.info(f"Final loglike, logprior: {likelihood}")
-                self.logger.info(f"Param names (fit): "
-                                 f"{','.join(['{:11s}'.format(i) for i in name_params])}")
-                self.logger.info(f"Values transfo.:   " 
-                                 f"{','.join(['{:+1.4e}'.format(i) for i in params_best])}")
+                self.logger.debug(f"Final loglike, logprior: {likelihood}")
+                self.logger.debug(f"Param names (fit): "
+                                  f"{','.join(['{:11s}'.format(i) for i in name_params])}")
+                self.logger.debug(f"Values transfo.:   " 
+                                  f"{','.join(['{:+1.4e}'.format(i) for i in params_best])}")
                 params_all = self.model.get_parameters(fixed=True)
-                self.logger.info(f"Param names (all): "
-                                 f"{','.join(['{:11s}'.format(p.name) for p in params_all])}")
+                self.logger.debug(f"Param names (all): "
+                                  f"{','.join(['{:11s}'.format(p.name) for p in params_all])}")
                 values_all = ','.join(['{:+.4e}'.format(p.get_value()) for p in params_all])
-                self.logger.info(f"Values untransfo.: {values_all}")
+                self.logger.debug(f"Values untransfo.: {values_all}")
         else:
             params_best = params_init
             result = None
