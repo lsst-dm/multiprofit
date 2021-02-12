@@ -717,7 +717,8 @@ def fit_galaxy(
     estimate_moments = any(modelinfo.inittype == 'moments' for modelinfo in modelspecs)
     init_moments = get_init_from_moments(exposures_psfs, estimate_moments=estimate_moments, **kwargs_moments)
     bands = list(init_moments.fluxes.keys())
-    logger.info(f"Bands: {bands}; Moment init.: {init_moments.moments_by_name}")
+    if logger:
+        logger.debug(f"Bands: {bands}; Moment init.: {init_moments.moments_by_name}")
     engine = 'galsim'
     engines = {
         engine: {
@@ -813,6 +814,7 @@ def fit_galaxy_model(
         fits = {}
     if logger is None:
         logger = logging.getLogger(__name__)
+        logger.level = 21
     if modellib is None:
         modellib = "scipy"
     if modelspecs_prior is None:
@@ -924,7 +926,8 @@ def fit_galaxy_model(
         init_hybrid = values_init is not None and inittype != 'values'
 
         if inittype == 'moments':
-            logger.info(f'Initializing from moments: {init_moments.moments_by_name}')
+            if logger:
+                logger.debug(f'Initializing from moments: {init_moments.moments_by_name}')
             for param in model.get_parameters(fixed=False):
                 value = init_moments.moments_by_name.get(param.name)
                 if value is not None:
@@ -1085,7 +1088,8 @@ def fit_galaxy_model(
                 modeltype=modeltype,
             )
         else:
-            logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
+            if logger:
+                logger.debug(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
             model.name = name_model
             sys.stdout.flush()
             if guesstype is not None:
@@ -1250,8 +1254,8 @@ def fit_psf_exposures(
                     has_fit = name_psf in results[idx][engine]
                     do_fit = redo or not has_fit
                     if do_fit or plot:
-                        if do_fit:
-                            logger.info('Fitting PSF band={} model={} (not in {})'.format(
+                        if logger and do_fit:
+                            logger.debug('Fitting PSF band={} model={} (not in {})'.format(
                                 band, name_psf, results[idx][engine].keys()))
                         results[idx] = fit_psf_model(
                             modeltype_psf, psf.image.array if (
@@ -1278,9 +1282,10 @@ def fit_psf_exposures(
                                     np.nanmax((1e-3, np.sqrt((sigma/sampling)**2 - shrink**2))),
                                 )
                                 sigma_new = param.get_value()
-                                logger.info(
-                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
-                                    f' (PSF sampling={sampling}, shrink={shrink})')
+                                if logger:
+                                    logger.debug(
+                                        f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
+                                        f' (PSF sampling={sampling}, shrink={shrink})')
 
                         if plot and row is not None:
                             row += 1
@@ -1323,7 +1328,7 @@ def fit_galaxy_exposures(
         metadata: dict containing general, model-independent metadata such as the filters used in the fit
     """
     if loggerPsf is None:
-        loggerPsf = logging.getLogger(__name__)
+        loggerPsf = kwargs.get('logger', logging.getLogger(__name__))
     if results is None:
         results = {}
     if engine is None:
@@ -1378,7 +1383,7 @@ def get_psfmodel(
     sigma_x, sigma_y, rho = Ellipse.covar_terms_as(*mpfutil.estimate_ellipse(image, return_as_params=True),
                                                    matrix=False, params=True)
     if logger:
-        logger.info(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
+        logger.debug(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
     sigma_x = reff_to_sigma(sigma_x)
     sigma_y = reff_to_sigma(sigma_y)
     sigma_xs = np.repeat(sigma_x, num_comps)
@@ -1459,7 +1464,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
             total -= frac
         fluxfracs[-1] = 1.0
     fits_best = modelfits[model_best]
-    model.logger.info(f'Initializing from best model={fits_best["name"]} w/fluxfracs: {fluxfracs}')
+    if model.logger:
+        model.logger.debug(f'Initializing from best model={fits_best["name"]} w/fluxfracs: {fluxfracs}')
     paramtree_best = fits_best['paramtree']
     fluxcens_init = paramtree_best[0][1][0] + paramtree_best[0][0]
     fluxcens_init_values = [p.get_value() for p in fluxcens_init]
@@ -1619,8 +1625,11 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
         if values_best:
             for param, value in values_best.items():
                 param.set_value_transformed(value)
-        model.logger.info("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
-            model.name, guesstype_init, time.time() - time_init, like_init, like_best))
+        if model.logger:
+            model.logger.debug(
+                f"Model '{model.name}' init by guesstype={guesstype_init} took {time.time() - time_init:.3e}s"
+                f" to change like from {like_init} to {like_best}"
+            )
 
 
 def __validate_param_name(name_param, name_init):
@@ -1735,7 +1744,7 @@ def init_model(
     fit_init = fits_engine.get(inittype)
     has_fit_init = fit_init is not None
     if logger:
-        logger.info(f'Init model name={model.name} type-{modeltype} using inittype={inittype};'
+        logger.debug(f'Init model name={model.name} type-{modeltype} using inittype={inittype};'
                     f' hasinitfit={has_fit_init}')
     if has_fit_init:
         values_param_init = fit_init.fits[-1]["params_bestall"]
@@ -1760,16 +1769,17 @@ def init_model(
             model_new = model
             model = models[fit_init.modeltype]
             components_new = []
-        logger.info(f"Initializing from best model={inittype}"
-                    f"{' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''}")
+        if logger:
+            logger.debug(f"Initializing from best model={inittype}"
+                         f"{' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''}")
         # For mgtogauss, first we turn the mgsersic model into a true GMM
         # Then we take the old model and get the parameters that don't depend on components (mostly source
         # centers) and set those as appropriate
         for i in range(1+is_mg_to_gauss):
             params_all = model.get_parameters(fixed=True, modifiers=not is_mg_to_gauss)
-            if is_mg_to_gauss:
-                logger.info(f"Param values init: {values_param_init}")
-                logger.info(f"Param names:       {[x.name for x in params_all]}")
+            if logger and is_mg_to_gauss:
+                logger.debug(f"Param values init: {values_param_init}")
+                logger.debug(f"Param names:       {[x.name for x in params_all]}")
             if len(values_param_init) != len(params_all):
                 raise RuntimeError('len(values_param_init)={} != len(params)={}, params_all={}'.format(
                     len(values_param_init), len(params_all), [x.name for x in params_all]))
@@ -1781,9 +1791,8 @@ def init_model(
                 if is_mg_to_gauss and param.name == 'nser' and value <= 0.55:
                     value = 0.55
                 param.set_value(value)
-            if is_mg_to_gauss:
-                logger.info(f"Param values: "
-                            f"{[param.get_value()for param in model.get_parameters()]}")
+            if logger and is_mg_to_gauss:
+                logger.debug(f"Param values: {[param.get_value() for param in model.get_parameters()]}")
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if is_mg_to_gauss and i == 0:
