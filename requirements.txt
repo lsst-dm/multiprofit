@@ -1,5 +1,6 @@
 astropy
 galsim
+gauss2d
 matplotlib
 numpy
 scipy

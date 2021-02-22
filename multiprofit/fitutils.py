@@ -21,11 +21,11 @@
 
 import csv
 import galsim as gs
+import gauss2d
 import io
 import logging
 import matplotlib.pyplot as plt
-from multiprofit.ellipse import Ellipse
-from multiprofit.gaussutils import reff_to_sigma, sigma_to_reff
+import multiprofit.ellipse as mpfell
 from multiprofit.limits import limits_ref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
@@ -597,7 +597,7 @@ def get_init_from_moments(
                         ell = comp.params_ellipse
                         p_x, p_y, p_rho = (param.get_value()
                                            for param in (ell.sigma_x, ell.sigma_y, ell.rho))
-                        p_x, p_y = (reff_to_sigma(p) for p in (p_x, p_y))
+                        p_x, p_y = (p*gauss2d.M_SIGMA_HWHM for p in (p_x, p_y))
                         p_xx += flux_comp * p_x * p_x
                         p_yy += flux_comp * p_y * p_y
                         p_xy += flux_comp * p_rho * p_x * p_y
@@ -627,14 +627,15 @@ def get_init_from_moments(
         moments_by_name = {
             name_param: value for name_param, value in zip(
                 mpfobj.names_params_ellipse,
-                Ellipse.covar_terms_as(*list(moments/num_exposures_measured), matrix=False, params=True))
+                mpfell.covar_terms_as(*list(moments/num_exposures_measured), matrix=False, params=True))
         }
 
         cens['cenx'] /= num_exposures_measured
         cens['ceny'] /= num_exposures_measured
 
-        moments_by_name['sigma_x'] = np.max((sigma_to_reff(moments_by_name['sigma_x']), sigma_min))
-        moments_by_name['sigma_y'] = np.max((sigma_to_reff(moments_by_name['sigma_y']), sigma_min))
+        # moments_by_name is in units of HWHM; convert to sigma TODO: verify this
+        moments_by_name['sigma_x'] = np.max((gauss2d.M_HWHM_SIGMA*moments_by_name['sigma_x'], sigma_min))
+        moments_by_name['sigma_y'] = np.max((gauss2d.M_HWHM_SIGMA*moments_by_name['sigma_y'], sigma_min))
     else:
         moments_by_name = {name_param: 0 for name_param in mpfobj.names_params_ellipse}
 
@@ -1380,12 +1381,12 @@ def fit_galaxy_exposures(
 def get_psfmodel(
         engine, engineopts, num_comps, band, model, image, error_inverse=None, ratios_size=None,
         factor_sigma=1, logger=None):
-    sigma_x, sigma_y, rho = Ellipse.covar_terms_as(*mpfutil.estimate_ellipse(image, return_as_params=True),
-                                                   matrix=False, params=True)
+    sigma_x, sigma_y, rho = mpfell.covar_terms_as(*mpfutil.estimate_ellipse(image, return_as_params=True),
+                                                  matrix=False, params=True)
     if logger:
         logger.debug(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
-    sigma_x = reff_to_sigma(sigma_x)
-    sigma_y = reff_to_sigma(sigma_y)
+    sigma_x *= gauss2d.M_SIGMA_HWHM
+    sigma_y *= gauss2d.M_SIGMA_HWHM
     sigma_xs = np.repeat(sigma_x, num_comps)
     sigma_ys = np.repeat(sigma_y, num_comps)
     rhos = np.repeat(rho, num_comps)
