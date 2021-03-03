@@ -37,6 +37,7 @@ from scipy import stats
 import sys
 import time
 import traceback
+from typing import Dict, List, NamedTuple
 
 
 class ImageEmpty:
@@ -44,6 +45,40 @@ class ImageEmpty:
 
     def __init__(self, shape=(0, 0)):
         self.shape = shape
+
+
+class ModelSpec(NamedTuple):
+    name: str
+    model: str
+    fixedparams: str = ""
+    initparams: str = ""
+    inittype: str = ""
+    psfmodel: str = ""
+    psfpixel: bool = True
+    unlimitedparams: str = ""
+    values_init: dict = None
+    values_init_psf: dict = None
+
+
+class ModelFits(NamedTuple):
+    fits: List[dict]
+    modeltype: str = ""
+
+
+class MomentResult(NamedTuple):
+    fluxes: dict
+    moments_by_name: dict
+    values_min: dict
+    values_max: dict
+    num_pix_img: int
+
+
+class PlotInfo(NamedTuple):
+    figaxes: Dict[str, mpfobj.FigAxes] = {}
+    do_plot_as_column: bool = False
+    num_rows: int = 0
+    num_cols: int = 0
+    title: str = None
 
 
 # For priors
@@ -373,9 +408,12 @@ def evaluate_model(model, plot=False, title=None, **kwargs):
 
 
 # Convenience function to fit a model. kwargs are passed on to evaluate_model
-def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
-              do_print_final=True, print_step_interval=100, plot=False, do_linear=True,
-              kwargs_fit=None, params_adjusted=None, **kwargs):
+def fit_model(
+    model=None, modeller=None, modellib="scipy", modellibopts=None, do_print_final=True,
+    print_step_interval=100, plot=False, do_linear=True, params_adjusted=None, logger_modeller=None,
+    kwargs_fit=None,
+    **kwargs
+):
     """
     Convenience function to fit a model with reasonable defaults.
     :param model: multiprofit.Model; default: modeller.model
@@ -389,12 +427,14 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
     :param params_adjusted: Dict [multiprofit.objects.Parameter, float]; parameter-offset pairs for
         parameters that were adjusted (with limits) during fitting. Offset values are subtracted from
         untransformed fit value, then returned after storage in the return value.
+    :param logger_modeller: logging.Logger; a logger to initialize the modeller with if it modeller is None.
     :param kwargs_fit: Dict; additional keyword arguments to pass to modeller.fit().
     :param kwargs: Dict; passed to evaluate_model() after fitting is complete (e.g. plotting options).
     :return: Tuple of modeller.fit and modeller.
     """
     if modeller is None:
-        modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts)
+        modeller = mpfobj.Modeller(model=model, modellib=modellib, modellibopts=modellibopts,
+                                   logger=logger_modeller)
     elif model is None:
         raise ValueError('fit_model must be passed a non-None model or modeller')
     else:
@@ -436,7 +476,7 @@ def fit_model(model=None, modeller=None, modellib="scipy", modellibopts=None,
 
 def fit_psf_model(
     modeltype, imgpsf, engines, band, fits_model_psf=None, error_inverse=None, modellib="scipy",
-    modellibopts=None, plot=False, name_model=None, label=None, figure=None, axes=None, redo=True,
+    modellibopts=None, plot=False, name_model=None, label=None, redo=True,
     skip_fit=False, logger=None, **kwargs
 ):
     """Fit a single PSF model to an image.
@@ -479,9 +519,13 @@ def fit_psf_model(
             fits_model_psf[engine][name_model]['fit'], fits_model_psf[engine][name_model]['modeller'] = \
                 fit_model(
                     model, modellib=modellib, modellibopts=modellibopts, plot=plot, name_model=label,
-                    figure=figure, axes=axes, **kwargs
+                    logger_modeller=logger, **kwargs
                 )
         else:
+            params_free = model.get_parameters(fixed=False)
+            fits_model_psf[engine][name_model]['fit'] = {
+                'name_params': [param.name for param in params_free],
+            }
             fits_model_psf[engine][name_model]['modeller'] = mpfobj.Modeller(
                 model, modellib, modellibopts=modellibopts)
             if plot:
@@ -492,7 +536,7 @@ def fit_psf_model(
                 values = None if skip_fit else fits_model_psf[engine][name_model]['fit']['params_best']
                 evaluate_model(
                     model, param_values=values, plot=plot, title=kwargs.get('plot'),
-                    name_model=kwargs.get('label'), figure=kwargs.get('figure'), axes=kwargs.get('axes'),
+                    name_model=kwargs.get('label'), figure=kwargs.get('figaxes'),
                     row_figure=kwargs.get('row_figure')
                 )
                 if is_empty:
@@ -511,10 +555,11 @@ def get_init_from_moments(
     :param estimate_moments: bool; whether to estimate moments. If False, will only return limits
     :param flux_min_obj: float; minimum estimated flux for the object.
     :param flux_min_img: float; minimum total flux in the image required for moment estimation
-    :param sigma_min: float;
+    :param sigma_min: float; minimum sigma_x/y to return
+
     :param logger: logging.Logger; a logger to print messages
     :param kwargs: dict; additional keyword args to pass to mpfutil.estimate_ellipse
-    :return:
+    :return: result: MomentResult with estimated moments
     """
     bands = {}
     fluxes = {}
@@ -562,8 +607,8 @@ def get_init_from_moments(
                     img_exp, return_cens=True, validate=False, sigma_inverse=exposure.get_sigma_inverse(),
                     deconvolution_params=deconvolution_params, return_as_params=True, **kwargs)
                 if logger:
-                    logger.info(f'Got moments_band={moments_band} cens={cenx_band, ceny_band} subbing'
-                                f' deconv_params={deconvolution_params}')
+                    logger.debug(f'Got moments_band={moments_band} cens={cenx_band, ceny_band} subbing'
+                                 f' deconv_params={deconvolution_params}')
                 cens['cenx'] += cenx_band
                 cens['ceny'] += ceny_band
                 # TODO: subtract PSF moments from object
@@ -603,7 +648,10 @@ def get_init_from_moments(
         values_min["flux_" + band] = 1e-6 * fluxes[band]
         values_max["flux_" + band] = 100 * fluxes[band]
 
-    return fluxes, moments_by_name, values_min, values_max, num_pix_img
+    return MomentResult(
+        fluxes=fluxes, moments_by_name=moments_by_name, values_min=values_min, values_max=values_max,
+        num_pix_img=num_pix_img,
+    )
 
 
 def _get_param_name(param):
@@ -643,58 +691,34 @@ def _reset_params_fixed(model, params_fixed_default, params_inherit, **kwargs):
 
 
 def fit_galaxy(
-        exposures_psfs, modelspecs, modellib=None, modellibopts=None, plot=False, name=None, models=None,
-        fits_by_engine=None, redo=False, img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
-        do_fit_fluxfracs=False, fit_background=False, print_step_interval=100, logger=None,
-        print_exception=True, prior_specs=None, skip_fit=False, background_sigma_add=None,
-        replace_data_by_model=False, **kwargs
+        exposures_psfs, modelspecs, plot=False, name=None, models=None,
+        fits_by_engine=None, logger=None, kwargs_moments=None, **kwargs
 ):
     """Convenience function to fit a galaxy given some exposures with PSFs.
 
     :param exposures_psfs: Iterable of tuple(mpfobj.Exposure, dict; key=psftype: value=mpfobj.PSF)
     :param modelspecs: Model specifications as returned by get_modelspecs
-    :param modellib: string; Model fitting library
-    :param modellibopts: dict; Model fitting library options
     :param plot: bool; whether to plot
     :param name: string; Name of the model for plot labelling
     :param models: dict; key=model name: value=mpfobj.Model
     :param fits_by_engine: dict; same format as return value
-    :param redo: bool; Redo any pre-existing fits in fits_by_engine
-    :param img_plot_maxs: dict; key=band: value=float (Maximum value when plotting images in this band)
-    :param img_multi_plot_max: float; Maximum value of summed images when plotting multi-band.
-    :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB)
-    :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
-    :param fit_background: bool; whether to fit a flat background level per band
-    :param print_step_interval: int; number of steps to run before printing output
     :param logger: logging.Logger; a logger to print messages and be passed to model(ler)s
-    :param print_exception: bool; whether to print the first exception encountered and the stack trace
-    :param prior_specs: dict; prior specifications.
-    :param skip_fit: bool; whether to skip fitting and only setup the model
-    :param background_sigma_add: float; factor to multiply the sky background prior standard deviation before
-        adding to the prior's mean (which is otherwise zero). Default zero.
-    :param replace_data_by_model: bool; whether to replace the real data by the initial model
-    :param kwargs: dict; additional keyword arguments to pass to get_init_from_moments
+    :param kwargs_moments: dict; additional keyword arguments to pass to get_init_from_moments
+    :param kwargs: dict; additional keyword arguments to pass to fit_galaxy_model
 
-    :return: fits_by_engine: dict; key=engine: value=dict; key=name_model: value=dict;
-        key='fits': value=array of fit results, key='modeltype': value =
-        fits_by_engine[engine][name_model] = {"fits": fits, "modeltype": modeltype}
-        , models: tuple of complicated structures:
-
-        modelinfos: dict; key=model name: value=dict; TBD
-        models: dict; key=model name: value=mpfobj.Model
-        psfmodels: dict: TBD
+    :return: fits_by_engine: dict[str, FitResult]
     """
     if logger is None:
         logger = logging.getLogger(__name__)
-    if prior_specs is None:
-        prior_specs = {}
     if logger not in kwargs:
         kwargs['logger'] = logger
-    estimate_moments = any(modelinfo.get('inittype') == 'moments' for modelinfo in modelspecs)
-    fluxes, moments_by_name, values_min, values_max, num_pix_img = get_init_from_moments(
-        exposures_psfs, estimate_moments=estimate_moments, **kwargs)
-    bands = list(fluxes.keys())
-    logger.info(f"Bands: {bands}; Moment init.: {moments_by_name}")
+    if kwargs_moments is None:
+        kwargs_moments = {}
+    estimate_moments = any(modelinfo.inittype == 'moments' for modelinfo in modelspecs)
+    init_moments = get_init_from_moments(exposures_psfs, estimate_moments=estimate_moments, **kwargs_moments)
+    bands = list(init_moments.fluxes.keys())
+    if logger:
+        logger.debug(f"Bands: {bands}; Moment init.: {init_moments.moments_by_name}")
     engine = 'galsim'
     engines = {
         engine: {
@@ -703,22 +727,18 @@ def fit_galaxy(
                 maximum_fft_size=32768)}
     }
     title = name if plot else None
-    if modellib is None:
-        modellib = "scipy"
-    kwargs_fit = {'replace_data_by_model': replace_data_by_model}
 
     models = {} if (models is None) else models
-    params_fixed_default = {}
     fits_by_engine = {} if ((models is None) or (fits_by_engine is None)) else fits_by_engine
-    use_modellib_default = modellibopts is None
+
     for engine, engineopts in engines.items():
         if engine not in fits_by_engine:
             fits_by_engine[engine] = {}
         fits_engine = fits_by_engine[engine]
+
         if plot:
             num_rows, num_cols = len(modelspecs), 0
-            figures = {}
-            axes_list = {}
+            figaxes = {}
             for band in bands + (['multi'] if len(bands) > 1 else []):
                 num_cols = 5
                 # Change to landscape
@@ -729,367 +749,435 @@ def fit_galaxy(
                 if num_rows == 1:
                     axes = np.array([axes])
                 if title is not None:
-                    plt.suptitle(title + " {} model".format(engine))
-                figures[band] = figure
-                axes_list[band] = axes
-            if len(bands) == 1:
-                figures = figures[band]
-                axes_list = axes_list[band]
-            do_plot_as_column = num_rows > num_cols
+                    plt.suptitle(f"{title} {engine} model")
+                figaxes[band] = mpfobj.FigAxes(figure=figure, axes=axes)
+            plotinfo = PlotInfo(
+                figaxes=figaxes, do_plot_as_column=num_rows > num_cols, num_rows=num_rows, num_cols=num_cols)
         else:
-            figures = None
-            axes_list = None
-            do_plot_as_column = None
+            plotinfo = PlotInfo()
         params_adjusted = {}
 
-        for modelidx, modelinfo in enumerate(modelspecs):
-            name_model = modelinfo["name"]
-            modeltype = modelinfo["model"]
-            model_default = get_model(
-                fluxes, modeltype, num_pix_img, [moments_by_name["sigma_x"]],
-                [moments_by_name["sigma_y"]], [moments_by_name["rho"]],
-                engine=engine, engineopts=engineopts, convertfluxfracs=not do_fit_fluxfracs,
-                fit_background=fit_background, repeat_ellipse=True, name_model=name_model, logger=logger
+        for idx_model, modelinfo in enumerate(modelspecs):
+            fit_galaxy_model(
+                modelinfo, bands, exposures_psfs, init_moments, engine=engine, engineopts=engineopts,
+                fits=fits_engine, models=models, modelspecs_prior=modelspecs[0:idx_model], plot=plot,
+                params_adjusted=params_adjusted, plotinfo=plotinfo, idx_model=idx_model,
+                **kwargs,
             )
-            params_fixed_default[modeltype] = [
-                param.fixed for param in model_default.get_parameters(free=True, fixed=True)]
-            exists_model = modeltype in models
-            model = model_default if not exists_model else models[modeltype]
-            if not exists_model:
-                models[modeltype] = model
-            is_psf_pixelated = mpfutil.str2bool(modelinfo["psfpixel"])
-            name_psf = modelinfo["psfmodel"] + ("_pixelated" if is_psf_pixelated else "")
-            params_unlimited = modelinfo.get("unlimitedparams")
-            params_unlimited = {name_param for name_param in params_unlimited.split(";")} if params_unlimited\
-                else {}
-
-            if is_psf_pixelated:
-                can_do_no_pixel = True
-                for source in model.sources:
-                    if can_do_no_pixel:
-                        for component in source.modelphotometric.components:
-                            if not component.is_gaussian_mixture():
-                                can_do_no_pixel = False
-                                break
-                    else:
-                        break
-                if can_do_no_pixel:
-                    engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine]
-            model.data.exposures = {band: [] for band in bands}
-            values_init_psf = modelinfo.get('values_init_psf', {})
-
-            for exposure, psfs in exposures_psfs:
-                exposure.psf = psfs[engine][name_psf]['object']
-                model.data.exposures[exposure.band].append(exposure)
-                values_init_psf_band = values_init_psf.get(exposure.band)
-                if values_init_psf_band is not None:
-                    params_psf = exposure.psf.model.get_parameters(fixed=False, free=True)
-                    if len(params_psf) != len(values_init_psf_band):
-                        raise RuntimeError(f'len(params_psf)={len(params_psf)} != len(values_init_psf_band)='
-                                           f'{len(values_init_psf_band)} (band={exposure.band})')
-                    for param, (name_init, value) in zip(params_psf, values_init_psf_band):
-                        __validate_param_name(param.name, name_init)
-                        param.set_value(value)
-
-            do_plot_multi = plot and len(bands) > 1
-            fits_model = None if skip_fit else fits_engine.get(name_model, {}).get('fits')
-
-            do_init = redo or fits_model is None
-            if do_init:
-                # Parse default overrides from model spec
-                flag_param_keys = ['inherit', 'modify']
-                flag_params = {key: [] for key in flag_param_keys}
-                for flag in ['fixed', 'init']:
-                    flag_params[flag] = {}
-                    values = modelinfo[flag + 'params']
-                    if values:
-                        for flag_value in values.split(";"):
-                            if flag == "fixed":
-                                flag_params[flag][flag_value] = None
-                            elif flag == "init":
-                                value = flag_value.split("=")
-                                # TODO: improve input handling here or just revamp the whole system later
-                                if value[1] in flag_param_keys:
-                                    flag_params[value[1]].append(value[0])
-                                else:
-                                    value_split = [np.float(x) for x in value[1].split(',')]
-                                    flag_params[flag][value[0]] = value_split
-
-                # Initialize model from estimate of moments (size/ellipticity) or from another fit
-                inittype = modelinfo['inittype']
-                init_with_values = inittype == 'values'
-                guesstype = None
-                params_fixed, params_init = flag_params['fixed'], flag_params['init']
-                values_init = modelinfo.get('values_init')
-
-                # Need to set fixed parameters to fixed to get the right list of free params to init
-                # Other init methods expect default values... I think.
-                if init_with_values:
-                    _reset_params_fixed(
-                        model, params_fixed_default[modeltype], flag_params['inherit'], fixed=True,
-                        modifiers=False)
-
-                # Model may depend on earlier fits to initialize some of the values and fit only a subset
-                init_hybrid = values_init is not None and inittype is not 'values'
-
-                if inittype == 'moments':
-                    logger.info(f'Initializing from moments: {moments_by_name}')
-                    for param in model.get_parameters(fixed=False):
-                        value = moments_by_name.get(param.name)
-                        if value is not None:
-                            param.set_value(value)
-                else:
-                    model, guesstype = init_model(
-                        model, modeltype, inittype, models, modelspecs[0:modelidx], fits_engine, bands=bands,
-                        params_inherit=flag_params['inherit'], params_modify=flag_params['modify'],
-                        params_fixed=params_fixed, values_init=values_init
-                    )
-
-                # Already done above in this case
-                if not init_with_values:
-                    _reset_params_fixed(
-                        model, params_fixed_default[modeltype], flag_params['inherit'], fixed=True,
-                        modifiers=False)
-                # For printing parameter values when plotting
-                params_postfix_name_model = []
-                # Now actually apply the overrides and the hardcoded maxima
-                times_matched = {}
-
-                for param in model.get_parameters(fixed=True):
-                    name_param, is_flux, is_fluxrat, param.fixed = _get_param_info(param, params_fixed)
-                    is_fluxrat = is_fluxratio(param)
-                    is_bg = param.name == 'background'
-
-                    # Passing complete init values will override individual params
-                    if (not init_with_values or param.fixed) and name_param in params_init:
-                        if name_param not in times_matched:
-                            times_matched[name_param] = 0
-                        # If there's only one input value, assume it applies to all instances of this param
-                        idx_paraminit = (0 if len(params_init[name_param]) == 1 else
-                                         times_matched[name_param])
-                        param.set_value(params_init[name_param][idx_paraminit])
-                        times_matched[name_param] += 1
-
-                    # Try to set a hard limit on params that need them with a logit transform
-                    # This way even methods that don't respect bounds will have to until the transformed
-                    # value reaches +/-inf, at least
-                    # The modelspec can override this for e.g. free Gaussian mixtures
-                    if (name_param in values_max) and (not is_bg) and not (name_param in params_unlimited):
-                        value_min = 0 if name_param not in values_min else values_min[name_param]
-                        value_max = values_max[name_param]
-                        transform = param.transform.transform
-                        param.limits = mpfobj.Limits(
-                            lower=transform(value_min), upper=transform(value_max),
-                            transformed=True)
-
-                    # Reset non-finite free param values
-                    # This occurs e.g. at the limits of a logit transformed param
-                    if not param.fixed:
-                        value_param = param.get_value()
-                        value_param_transformed = param.get_value_transformed()
-                        if not np.isfinite(value_param_transformed):
-                            # Get the next float in the direction of inf if -inf else -inf
-                            # This works for nans too, otherwise we could use -value_param
-                            # TODO: Deal with nans explicitly - they may not be recoverable
-                            direction = -np.inf * np.sign(value_param_transformed)
-                            # This is probably excessive but this ought to allow for a non-zero init. gradient
-                            for _ in range(100):
-                                value_param = np.nextafter(value_param, direction)
-                            param.set_value(value_param)
-
-                    # This has to come after resetting param fixed status above
-                    if plot and not param.fixed:
-                        if name_param == "nser" or is_fluxrat:
-                            params_postfix_name_model += [('{:.2f}', param)]
-
-                values_param = np.array([x.get_value() for x in model.get_parameters(
-                    fixed=True)])
-                if not all(np.isfinite(values_param)):
-                    raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
-
-                if init_hybrid:
-                    init_model_from_values(model, values_init)
-
-                # Setup priors
-                if prior_specs:
-                    # Value is whether prior is applied per component or not
-                    priors_avail_per = {'shape': True, 'cenx': False, 'ceny': False}
-                    model.priors = []
-                    priors_comp = {}
-                    priors_src = {}
-                    prior_background = prior_specs.get('background')
-                    # Adjust the input background prior values
-                    if prior_background is not None and background_sigma_add is not None:
-                        for band, bg_prior_values in prior_background.items():
-                            bg_prior_values['mean'] += background_sigma_add*bg_prior_values['stddev']
-
-                    for name_prior, params_prior_type in prior_specs.items():
-                        if name_prior != 'background':
-                            prior_type = priors_avail_per.get(name_prior)
-                            if prior_type is None:
-                                raise RuntimeError(f'Unknown prior type {name_prior}')
-                            (priors_comp if prior_type else priors_src)[name_prior] = params_prior_type
-
-                    for src in model.sources:
-                        all_gauss = all(comp.is_gaussian() for comp in src.modelphotometric.components)
-                        # TODO: There should be a better way of getting source-specific parameters
-                        # This hack will do for now
-                        params_src = {p.name: p for p in src.modelastrometric.get_parameters()}
-                        for name_prior, params_prior_type in priors_src.items():
-                            params_prior = params_prior_type[all_gauss]
-                            param = params_src[name_prior]
-                            transformed = params_prior_type.get('transformed', False)
-                            mean = params_prior.get(
-                                'mean', param.get_value_transformed() if transformed else param.get_value(),
-                            )
-                            model.priors.append(
-                                mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
-                            )
-                        for comp in src.modelphotometric.components:
-                            if isinstance(comp, mpfobj.Background):
-                                if prior_background:
-                                    for band, param_flux in comp.fluxes_dict.items():
-                                        model.priors.append(
-                                            mpfpri.GaussianLsqPrior(param_flux, **prior_background[band])
-                                        )
-                                        # Adjust the initial background value if a constant was added
-                                        if background_sigma_add and param_flux not in params_adjusted:
-                                            flux_add = background_sigma_add*prior_background[band]['stddev']
-                                            param_flux.set_value(param_flux.get_value() + flux_add)
-                                            params_adjusted[param_flux] = flux_add
-                            else:
-                                params_comp = {p.name: p for p in comp.get_parameters()}
-                                for name_prior, params_prior_type in priors_comp.items():
-                                    params_prior = params_prior_type[all_gauss]
-                                    if name_prior == 'shape':
-                                        ell = comp.params_ellipse
-                                        model.priors.append(
-                                            mpfpri.ShapeLsqPrior(
-                                                ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
-                                            )
-                                        )
-                                    else:
-                                        param = params_comp[name_prior]
-                                        mean = params_prior.get(
-                                            'mean',
-                                            param.get_value(
-                                                transformed=params_prior.get('transformed', False)
-                                            ),
-                                        )
-                                        model.priors.append(
-                                            mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
-                                        )
-
-                if skip_fit:
-                    # Make a dummy fit result in case it's needed for subsequent model initialization
-                    fits_by_engine[engine][name_model] = {
-                        "fits": [{
-                            'params_bestall': [param.get_value()
-                                               for param in model.get_parameters(fixed=True)],
-                            'chisqred': 1.,
-                        }],
-                        "modeltype": modeltype
-                    }
-                else:
-                    logger.info(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
-                    model.name = name_model
-                    sys.stdout.flush()
-                    if guesstype is not None:
-                        init_model_by_guessing(model, guesstype, bands, nguesses=3)
-
-                    try:
-                        if background_sigma_add is not None:
-                            # Add a flat background level to the image so that the fit background is >0
-                            for exposure, _ in exposures_psfs:
-                                added_bg = background_sigma_add*prior_background[exposure.band]['stddev']
-                                if added_bg != 0:
-                                    exposure.image += added_bg
-                                    exposure.meta['bg_const_added'] = added_bg
-                        fits = []
-                        do_second = len(model.sources[0].modelphotometric.components) > 1 or \
-                            not use_modellib_default
-                        if use_modellib_default:
-                            modellibopts = {
-                                "algo": ("lbfgs" if modellib == "pygmo" else "L-BFGS-B") if do_second else
-                                ("neldermead" if modellib == "pygmo" else "Nelder-Mead")
-                            }
-                            if modellib == "scipy":
-                                modellibopts['options'] = {'maxfun': 1e4}
-                        do_second = do_second and not model.can_do_fit_leastsq
-                        fit1, modeller = fit_model(
-                            model, modellib=modellib, modellibopts=modellibopts, do_print_final=True,
-                            print_step_interval=print_step_interval, plot=plot and not do_second,
-                            do_plot_multi=do_plot_multi, figure=figures, axes=axes_list, row_figure=modelidx,
-                            do_plot_as_column=do_plot_as_column, name_model=name_model,
-                            params_postfix_name_model=params_postfix_name_model,
-                            img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                            weights_band=weights_band, kwargs_fit=kwargs_fit,
-                        )
-                        fits.append(fit1)
-                        if do_second:
-                            if use_modellib_default:
-                                modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
-                                    "Nelder-Mead"
-                            fit2, _ = fit_model(
-                                model, modeller, do_print_final=True, print_step_interval=print_step_interval,
-                                plot=plot, do_plot_multi=do_plot_multi, figure=figures, axes=axes_list,
-                                row_figure=modelidx, do_plot_as_column=do_plot_as_column,
-                                name_model=name_model, params_postfix_name_model=params_postfix_name_model,
-                                img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                                weights_band=weights_band, do_linear=False,
-                            )
-                            fits.append(fit2)
-                        fits_by_engine[engine][name_model] = {"fits": fits, "modeltype": modeltype}
-                    except Exception as e:
-                        trace = traceback.format_exc()
-                        if print_exception:
-                            print(f"Error fitting galaxy {name}: {e}; traceback: {trace}")
-                        fits_by_engine[engine][name_model] = e, trace
-
-            if plot and (skip_fit or (not redo and fits_model is not None)):
-                if background_sigma_add is not None:
-                    for exposure, _ in exposures_psfs:
-                        if 'bg_const_added' not in exposure.meta:
-                            added_bg = background_sigma_add*prior_background[exposure.band][1]
-                            if added_bg != 0:
-                                exposure.image += added_bg
-                                exposure.meta['bg_const_added'] = added_bg
-                if skip_fit:
-                    values_best = (None,)
-                else:
-                    values_best = fits_engine.get(name_model)
-                    if values_best is not None:
-                        values_best = values_best.get('fits')
-                        if values_best is not None:
-                            values_best = values_best[-1]['params_bestalltransformed']
-
-                if values_best is not None:
-                    if title is not None:
-                        plt.suptitle(title)
-                    model.evaluate(
-                        plot=plot, name_model=name_model,
-                        params_postfix_name_model=params_postfix_name_model,
-                        figure=figures, axes=axes_list, row_figure=modelidx,
-                        do_plot_as_column=do_plot_as_column, do_plot_multi=do_plot_multi,
-                        img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
-                        weights_band=weights_band
-                    )
-            if background_sigma_add is not None:
-                for exposure, _ in exposures_psfs:
-                    added_bg = exposure.meta.get('bg_const_added', 0)
-                    if added_bg != 0:
-                        exposure.image -= added_bg
-                        del exposure.meta['bg_const_added']
-    if plot:
-        if len(bands) > 1:
-            for figure in figures.values():
-                plt.figure(figure.number)
-                plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
-        else:
-            plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96, wspace=0.02, hspace=0.15)
-        plt.show(block=False)
+        if plot:
+            do_figure = len(bands) > 1
+            for figaxis in plotinfo.figaxes.values():
+                figure = figaxis.figure
+                if do_figure:
+                    plt.figure(figure.number)
+                plt.subplots_adjust(left=0.04, bottom=0.04, right=0.96, top=0.96,
+                                    wspace=0.02, hspace=0.15)
+            plt.show(block=False)
 
     return fits_by_engine, models
+
+
+def fit_galaxy_model(
+        modelinfo: ModelSpec, bands, exposures_psfs, init_moments, engine=None, engineopts=None,
+        modellib=None, modellibopts=None, fits: Dict[str, ModelFits] = None,
+        models=None, modelspecs_prior=None, redo=False,
+        params_adjusted=None, logger=None, plot=False, plotinfo: PlotInfo=None, idx_model=None, name=None,
+        img_plot_maxs=None, img_multi_plot_max=None, weights_band=None,
+        do_fit_fluxfracs=False, fit_background=False, print_step_interval=100,
+        print_exception=True, prior_specs=None, skip_fit=False, background_sigma_add=None,
+        replace_data_by_model=False,
+):
+    """
+
+    :param modelinfo: ModelSpec; the model specification
+    :param modellib: string; Model fitting library
+    :param modellibopts: dict; Model fitting library options
+    :param fits: dict; Previous fit results
+    :param redo: bool; Redo any pre-existing fits in fits_by_engine
+    :param plot: bool; whether to plot
+    :param name: str; Name of the source for plotting/logging
+    :param img_plot_maxs: dict; key=band: value=float (Maximum value when plotting images in this band)
+    :param img_multi_plot_max: float; Maximum value of summed images when plotting multi-band.
+    :param weights_band: dict; key=band: value=float (Multiplicative weight when plotting multi-band RGB)
+    :param do_fit_fluxfracs: bool; fit component flux ratios instead of absolute fluxes?
+    :param fit_background: bool; whether to fit a flat background level per band
+    :param print_step_interval: int; number of steps to run before printing output
+    :param print_exception: bool; whether to print the first exception encountered and the stack trace
+    :param prior_specs: dict; prior specifications.
+    :param skip_fit: bool; whether to skip fitting and only setup the model
+    :param background_sigma_add: float; factor to multiply the sky background prior standard deviation before
+        adding to the prior's mean (which is otherwise zero). Default zero.
+    :param replace_data_by_model: bool; whether to replace the real data by the initial model
+    :return:
+    """
+    if fits is None:
+        fits = {}
+    if logger is None:
+        logger = logging.getLogger(__name__)
+        logger.level = 21
+    if modellib is None:
+        modellib = "scipy"
+    if modelspecs_prior is None:
+        modelspecs_prior = []
+    if params_adjusted is None:
+        params_adjusted = {}
+    if prior_specs is None:
+        prior_specs = {}
+    kwargs_fit = {'replace_data_by_model': replace_data_by_model}
+    use_modellib_default = modellibopts is None
+    name_model = modelinfo.name
+    modeltype = modelinfo.model
+    model_default = get_model(
+        init_moments.fluxes, modeltype, init_moments.num_pix_img, [init_moments.moments_by_name["sigma_x"]],
+        [init_moments.moments_by_name["sigma_y"]], [init_moments.moments_by_name["rho"]],
+        engine=engine, engineopts=engineopts, convertfluxfracs=not do_fit_fluxfracs,
+        fit_background=fit_background, repeat_ellipse=True, name_model=name_model, logger=logger
+    )
+    params_fixed_default = [param.fixed for param in model_default.get_parameters(free=True, fixed=True)]
+    exists_model = modeltype in models
+    model = model_default if not exists_model else models[modeltype]
+    if not exists_model:
+        models[modeltype] = model
+    is_psf_pixelated = modelinfo.psfpixel
+    name_psf = modelinfo.psfmodel + ("_pixelated" if is_psf_pixelated else "")
+    params_unlimited = modelinfo.unlimitedparams
+    params_unlimited = {name_param for name_param in params_unlimited.split(";")} if params_unlimited\
+        else {}
+
+    if is_psf_pixelated:
+        can_do_no_pixel = True
+        for source in model.sources:
+            if can_do_no_pixel:
+                for component in source.modelphotometric.components:
+                    if not component.is_gaussian_mixture():
+                        can_do_no_pixel = False
+                        break
+            else:
+                break
+        if can_do_no_pixel:
+            engineopts["drawmethod"] = mpfobj.draw_method_pixel[engine]
+    model.data.exposures = {band: [] for band in bands}
+    values_init_psf = modelinfo.values_init_psf
+
+    for exposure, psfs in exposures_psfs:
+        exposure.psf = psfs[engine][name_psf]['object']
+        model.data.exposures[exposure.band].append(exposure)
+        if values_init_psf is not None:
+            values_init_psf_band = values_init_psf.get(exposure.band)
+            if values_init_psf_band is not None:
+                params_psf = exposure.psf.model.get_parameters(fixed=False, free=True)
+                if len(params_psf) != len(values_init_psf_band):
+                    raise RuntimeError(
+                        f'len(params_psf)={len(params_psf)} != len(values_init_psf_band)='
+                        f'{len(values_init_psf_band)} (band={exposure.band})'
+                    )
+                for param, (name_init, value) in zip(params_psf, values_init_psf_band):
+                    __validate_param_name(param.name, name_init)
+                    param.set_value(value)
+
+    do_plot_multi = plot and len(bands) > 1
+    if skip_fit:
+        fits_model = []
+    else:
+        fits_model = fits.get(name_model)
+        if fits_model is None:
+            fits_model = ModelFits(modeltype=modeltype, fits=[])
+            fits[name_model] = fits_model
+        if fits_model.fits is None:
+            fits_model.fits = []
+        fits_model = fits_model.fits
+    # For printing parameter values when plotting
+    params_postfix_name_model = []
+    do_init = redo or len(fits_model) == 0
+
+    if do_init:
+        # Parse default overrides from model spec
+        flag_param_keys = ['inherit', 'modify']
+        flag_params = {key: [] for key in flag_param_keys}
+        for flag, values in (('fixed', modelinfo.fixedparams), ('init', modelinfo.initparams)):
+            flag_params[flag] = {}
+            if values:
+                for flag_value in values.split(";"):
+                    if flag == "fixed":
+                        flag_params[flag][flag_value] = None
+                    elif flag == "init":
+                        value = flag_value.split("=")
+                        # TODO: improve input handling here or just revamp the whole system later
+                        if value[1] in flag_param_keys:
+                            flag_params[value[1]].append(value[0])
+                        else:
+                            value_split = [np.float(x) for x in value[1].split(',')]
+                            flag_params[flag][value[0]] = value_split
+
+        # Initialize model from estimate of moments (size/ellipticity) or from another fit
+        inittype = modelinfo.inittype
+        init_with_values = inittype == 'values'
+        guesstype = None
+        params_fixed, params_init = flag_params['fixed'], flag_params['init']
+        values_init = modelinfo.values_init
+
+        # Need to set fixed parameters to fixed to get the right list of free params to init
+        # Other init methods expect default values... I think.
+        if init_with_values:
+            _reset_params_fixed(
+                model, params_fixed_default, flag_params['inherit'], fixed=True, modifiers=False)
+
+        # Model may depend on earlier fits to initialize some of the values and fit only a subset
+        init_hybrid = values_init is not None and inittype != 'values'
+
+        if inittype == 'moments':
+            if logger:
+                logger.debug(f'Initializing from moments: {init_moments.moments_by_name}')
+            for param in model.get_parameters(fixed=False):
+                value = init_moments.moments_by_name.get(param.name)
+                if value is not None:
+                    param.set_value(value)
+        else:
+            model, guesstype = init_model(
+                model, modeltype, inittype, models, modelspecs_prior, fits, bands=bands,
+                params_inherit=flag_params['inherit'], params_modify=flag_params['modify'],
+                params_fixed=params_fixed, values_init=values_init
+            )
+
+        # Already done above in this case
+        if not init_with_values:
+            _reset_params_fixed(
+                model, params_fixed_default, flag_params['inherit'], fixed=True, modifiers=False)
+        # Now actually apply the overrides and the hardcoded maxima
+        times_matched = {}
+
+        for param in model.get_parameters(fixed=True):
+            name_param, is_flux, is_fluxrat, param.fixed = _get_param_info(param, params_fixed)
+            is_fluxrat = is_fluxratio(param)
+            is_bg = param.name == 'background'
+
+            # Passing complete init values will override individual params
+            if (not init_with_values or param.fixed) and name_param in params_init:
+                if name_param not in times_matched:
+                    times_matched[name_param] = 0
+                # If there's only one input value, assume it applies to all instances of this param
+                idx_paraminit = (0 if len(params_init[name_param]) == 1 else
+                                 times_matched[name_param])
+                param.set_value(params_init[name_param][idx_paraminit])
+                times_matched[name_param] += 1
+
+            # Try to set a hard limit on params that need them with a logit transform
+            # This way even methods that don't respect bounds will have to until the transformed
+            # value reaches +/-inf, at least
+            # The modelspec can override this for e.g. free Gaussian mixtures
+            if (name_param in init_moments.values_max) and (not is_bg) and not (
+                    name_param in params_unlimited):
+                value_min = 0 if name_param not in init_moments.values_min else \
+                    init_moments.values_min[name_param]
+                value_max = init_moments.values_max[name_param]
+                transform = param.transform.transform
+                param.limits = mpfobj.Limits(
+                    lower=transform(value_min), upper=transform(value_max),
+                    transformed=True)
+
+            # Reset non-finite free param values
+            # This occurs e.g. at the limits of a logit transformed param
+            if not param.fixed:
+                value_param = param.get_value()
+                value_param_transformed = param.get_value_transformed()
+                if not np.isfinite(value_param_transformed):
+                    # Get the next float in the direction of inf if -inf else -inf
+                    # This works for nans too, otherwise we could use -value_param
+                    # TODO: Deal with nans explicitly - they may not be recoverable
+                    direction = -np.inf * np.sign(value_param_transformed)
+                    # This is probably excessive but this ought to allow for a non-zero init. gradient
+                    for _ in range(100):
+                        value_param = np.nextafter(value_param, direction)
+                    param.set_value(value_param)
+
+            # This has to come after resetting param fixed status above
+            if plot and not param.fixed:
+                if name_param == "nser" or is_fluxrat:
+                    params_postfix_name_model += [('{:.2f}', param)]
+
+        values_param = np.array([x.get_value() for x in model.get_parameters(
+            fixed=True)])
+        if not all(np.isfinite(values_param)):
+            raise RuntimeError(f'Not all params finite for model {name_model}', values_param)
+
+        if init_hybrid:
+            init_model_from_values(model, values_init)
+
+        # Setup priors
+        if prior_specs:
+            # Value is whether prior is applied per component or not
+            priors_avail_per = {'shape': True, 'cenx': False, 'ceny': False}
+            model.priors = []
+            priors_comp = {}
+            priors_src = {}
+            prior_background = prior_specs.get('background')
+            # Adjust the input background prior values
+            if prior_background is not None and background_sigma_add is not None:
+                for band, bg_prior_values in prior_background.items():
+                    bg_prior_values['mean'] += background_sigma_add*bg_prior_values['stddev']
+
+            for name_prior, params_prior_type in prior_specs.items():
+                if name_prior != 'background':
+                    prior_type = priors_avail_per.get(name_prior)
+                    if prior_type is None:
+                        raise RuntimeError(f'Unknown prior type {name_prior}')
+                    (priors_comp if prior_type else priors_src)[name_prior] = params_prior_type
+
+            for src in model.sources:
+                all_gauss = all(comp.is_gaussian() for comp in src.modelphotometric.components)
+                # TODO: There should be a better way of getting source-specific parameters
+                # This hack will do for now
+                params_src = {p.name: p for p in src.modelastrometric.get_parameters()}
+                for name_prior, params_prior_type in priors_src.items():
+                    params_prior = params_prior_type[all_gauss]
+                    param = params_src[name_prior]
+                    transformed = params_prior_type.get('transformed', False)
+                    mean = params_prior.get(
+                        'mean', param.get_value_transformed() if transformed else param.get_value(),
+                    )
+                    model.priors.append(
+                        mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                    )
+                for comp in src.modelphotometric.components:
+                    if isinstance(comp, mpfobj.Background):
+                        if prior_background:
+                            for band, param_flux in comp.fluxes_dict.items():
+                                model.priors.append(
+                                    mpfpri.GaussianLsqPrior(param_flux, **prior_background[band])
+                                )
+                                # Adjust the initial background value if a constant was added
+                                if background_sigma_add and param_flux not in params_adjusted:
+                                    flux_add = background_sigma_add*prior_background[band]['stddev']
+                                    param_flux.set_value(param_flux.get_value() + flux_add)
+                                    params_adjusted[param_flux] = flux_add
+                    else:
+                        params_comp = {p.name: p for p in comp.get_parameters()}
+                        for name_prior, params_prior_type in priors_comp.items():
+                            params_prior = params_prior_type[all_gauss]
+                            if name_prior == 'shape':
+                                ell = comp.params_ellipse
+                                model.priors.append(
+                                    mpfpri.ShapeLsqPrior(
+                                        ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
+                                    )
+                                )
+                            else:
+                                param = params_comp[name_prior]
+                                mean = params_prior.get(
+                                    'mean',
+                                    param.get_value(
+                                        transformed=params_prior.get('transformed', False)
+                                    ),
+                                )
+                                model.priors.append(
+                                    mpfpri.GaussianLsqPrior(param, mean=mean, **params_prior)
+                                )
+
+        if skip_fit:
+            # Make a dummy fit result in case it's needed for subsequent model initialization
+            params_all = model.get_parameters(fixed=True)
+            params_free = model.get_parameters(fixed=False)
+            fits[name_model] = ModelFits(
+                fits=[{
+                    'name_params': [param.name for param in params_free],
+                    'params': params_all,
+                    'params_allfixed': [param.fixed for param in params_all],
+                    'params_bestall': [param.get_value() for param in params_all],
+                    'chisqred': 1.,
+                }],
+                modeltype=modeltype,
+            )
+        else:
+            if logger:
+                logger.debug(f"Fitting model {name_model} of type {modeltype} with engine {engine}")
+            model.name = name_model
+            sys.stdout.flush()
+            if guesstype is not None:
+                init_model_by_guessing(model, guesstype, bands, nguesses=3)
+
+            try:
+                if background_sigma_add is not None:
+                    # Add a flat background level to the image so that the fit background is >0
+                    for exposure, _ in exposures_psfs:
+                        added_bg = background_sigma_add*prior_background[exposure.band]['stddev']
+                        if added_bg != 0:
+                            exposure.image += added_bg
+                            exposure.meta['bg_const_added'] = added_bg
+                do_second = len(model.sources[0].modelphotometric.components) > 1 or \
+                    not use_modellib_default
+                if use_modellib_default:
+                    modellibopts = {
+                        "algo": ("lbfgs" if modellib == "pygmo" else "L-BFGS-B") if do_second else
+                        ("neldermead" if modellib == "pygmo" else "Nelder-Mead")
+                    }
+                    if modellib == "scipy":
+                        modellibopts['options'] = {'maxfun': 1e4}
+                do_second = do_second and not model.can_do_fit_leastsq
+                fit1, modeller = fit_model(
+                    model, modellib=modellib, modellibopts=modellibopts, do_print_final=True,
+                    print_step_interval=print_step_interval, plot=plot and not do_second,
+                    do_plot_multi=do_plot_multi, figaxes=plotinfo.figaxes,
+                    row_figure=idx_model, do_plot_as_column=plotinfo.do_plot_as_column,
+                    name_model=name_model, params_postfix_name_model=params_postfix_name_model,
+                    img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
+                    weights_band=weights_band, kwargs_fit=kwargs_fit, logger_modeller=logger,
+                )
+                fits_model.append(fit1)
+                if do_second:
+                    if use_modellib_default:
+                        modeller.modellibopts["algo"] = "neldermead" if modellib == "pygmo" else \
+                            "Nelder-Mead"
+                    fit2, _ = fit_model(
+                        model, modeller, do_print_final=True,
+                        print_step_interval=print_step_interval, plot=plot,
+                        do_plot_multi=do_plot_multi, figaxes=plotinfo.figaxes,
+                        row_figure=idx_model, do_plot_as_column=plotinfo.do_plot_as_column,
+                        name_model=name_model, params_postfix_name_model=params_postfix_name_model,
+                        img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
+                        weights_band=weights_band, do_linear=False,
+                    )
+                    fits_model.append(fit2)
+            except Exception as e:
+                trace = traceback.format_exc()
+                if print_exception:
+                    print(f"Error fitting galaxy {name}: {e}; traceback: {trace}")
+                fits_model.append((e, trace))
+
+    if plot and (skip_fit or (not redo and fits_model is not None)):
+        if background_sigma_add is not None:
+            for exposure, _ in exposures_psfs:
+                if 'bg_const_added' not in exposure.meta:
+                    added_bg = background_sigma_add*prior_background[exposure.band][1]
+                    if added_bg != 0:
+                        exposure.image += added_bg
+                        exposure.meta['bg_const_added'] = added_bg
+        if skip_fit:
+            values_best = (None,)
+        else:
+            values_best = fits.get(name_model)
+            if values_best is not None:
+                values_best = values_best.fits
+                if values_best is not None and len(values_best) > 0:
+                    values_best = values_best[-1]['params_bestalltransformed']
+
+        if values_best is not None:
+            if plotinfo.title is not None:
+                plt.suptitle(plotinfo.title)
+            model.evaluate(
+                plot=plot, name_model=name_model,
+                params_postfix_name_model=params_postfix_name_model,
+                figaxes=plotinfo.figaxes, row_figure=idx_model,
+                do_plot_as_column=plotinfo.do_plot_as_column, do_plot_multi=do_plot_multi,
+                img_plot_maxs=img_plot_maxs, img_multi_plot_max=img_multi_plot_max,
+                weights_band=weights_band
+            )
+    if background_sigma_add is not None:
+        for exposure, _ in exposures_psfs:
+            added_bg = exposure.meta.get('bg_const_added', 0)
+            if added_bg != 0:
+                exposure.image -= added_bg
+                del exposure.meta['bg_const_added']
+    return fits, params_adjusted
 
 
 def get_psf_models(modelspecs):
@@ -1098,7 +1186,7 @@ def get_psf_models(modelspecs):
     :param modelspecs: List of dict, each a galaxy model specifications as returned by get_modelspecs.
     :return: set of tuples of PSF model type string (e.g. "gaussian:1") and pixelization boolean
     """
-    return set([(x["psfmodel"], mpfutil.str2bool(x["psfpixel"])) for x in modelspecs])
+    return set([(x.psfmodel, x.psfpixel) for x in modelspecs])
 
 
 def fit_psf_exposures(
@@ -1123,7 +1211,7 @@ def fit_psf_exposures(
     :return: dict by exposure index containing a dict by engine of the result returned by fit_psf.
 
     """
-    figure, axes = None, None
+    figaxes = None
     row = None
     resample = sampling != 1.
     resize = shrink > 0
@@ -1137,6 +1225,8 @@ def fit_psf_exposures(
             figure, axes = plt.subplots(nrows=min([ncols, num_psfs]), ncols=max([ncols, num_psfs]))
             if num_psfs > ncols:
                 axes = np.transpose(axes)
+            figaxes = mpfobj.FigAxes(figure=figure, axes=axes)
+            figaxes = {band: figaxes for band in bands}
             row = 0
     if results is None:
         results = {}
@@ -1164,15 +1254,15 @@ def fit_psf_exposures(
                     has_fit = name_psf in results[idx][engine]
                     do_fit = redo or not has_fit
                     if do_fit or plot:
-                        if do_fit:
-                            logger.info('Fitting PSF band={} model={} (not in {})'.format(
+                        if logger and do_fit:
+                            logger.debug('Fitting PSF band={} model={} (not in {})'.format(
                                 band, name_psf, results[idx][engine].keys()))
                         results[idx] = fit_psf_model(
                             modeltype_psf, psf.image.array if (
                                     hasattr(psf, "image") and hasattr(psf.image, "array")) else (
                                 psf if isinstance(psf, np.ndarray) else None),
                             {engine: engineopts}, band=band, fits_model_psf=results[idx], plot=plot,
-                            name_model=name_psf, label=label, title=title, figure=figure, axes=axes,
+                            name_model=name_psf, label=label, title=title, figaxes=figaxes,
                             row_figure=row, redo=do_fit, print_step_interval=print_step_interval,
                             do_linear=False, logger=logger, skip_fit=skip_fit
                         )
@@ -1192,9 +1282,10 @@ def fit_psf_exposures(
                                     np.nanmax((1e-3, np.sqrt((sigma/sampling)**2 - shrink**2))),
                                 )
                                 sigma_new = param.get_value()
-                                logger.info(
-                                    f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
-                                    f' (PSF sampling={sampling}, shrink={shrink})')
+                                if logger:
+                                    logger.debug(
+                                        f'Changed {param.name} value from {sigma:.5e} to {sigma_new:.5e}'
+                                        f' (PSF sampling={sampling}, shrink={shrink})')
 
                         if plot and row is not None:
                             row += 1
@@ -1237,7 +1328,7 @@ def fit_galaxy_exposures(
         metadata: dict containing general, model-independent metadata such as the filters used in the fit
     """
     if loggerPsf is None:
-        loggerPsf = logging.getLogger(__name__)
+        loggerPsf = kwargs.get('logger', logging.getLogger(__name__))
     if results is None:
         results = {}
     if engine is None:
@@ -1263,7 +1354,8 @@ def fit_galaxy_exposures(
     fits, models = fit_galaxy(
         exposures_psfs if not any_skipped else [x for x in exposures_psfs if x[0].band in bands],
         modelspecs=modelspecs, name=name_fit, plot=plot, models=models, fits_by_engine=fits_by_engine,
-        **kwargs)
+        **kwargs
+    )
     if reset_images:
         for idx, psfs_by_engine in psfs.items():
             if engine in psfs_by_engine:
@@ -1291,7 +1383,7 @@ def get_psfmodel(
     sigma_x, sigma_y, rho = Ellipse.covar_terms_as(*mpfutil.estimate_ellipse(image, return_as_params=True),
                                                    matrix=False, params=True)
     if logger:
-        logger.info(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
+        logger.debug(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
     sigma_x = reff_to_sigma(sigma_x)
     sigma_y = reff_to_sigma(sigma_y)
     sigma_xs = np.repeat(sigma_x, num_comps)
@@ -1315,7 +1407,7 @@ def get_psfmodel(
     return model
 
 
-def get_modelspecs(filename=None):
+def get_modelspecs(filename) -> List[ModelSpec]:
     """
     Read a model specification file, the format of which is to be described.
 
@@ -1323,17 +1415,33 @@ def get_modelspecs(filename=None):
     :return: modelspecs; list of dicts of key specification name: value specification value.
     """
     if filename is None:
-        modelspecs = io.StringIO("\n".join([
+        rows = io.StringIO("\n".join([
             ",".join(["name", "model", "fixedparams", "initparams", "inittype", "psfmodel", "psfpixel"]),
             ",".join(["gausspix", "sersic:1", "nser", "nser=0.5", "moments", "gaussian:2", "T"]),
             ",".join(["gauss", "sersic:1",  "nser", "nser=0.5", "moments", "gaussian:2", "F"]),
             ",".join(["gaussinitpix ", "sersic:1", "nser", "", "gausspix", "gaussian:2", "F"]),
         ]))
-    with modelspecs if filename is None else open(filename, 'r') as filecsv:
-        modelspecs = [row for row in csv.reader(filecsv)]
-    header = modelspecs[0]
-    del modelspecs[0]
-    modelspecs = [{name: modelspec[i] for i, name in enumerate(header)} for modelspec in modelspecs]
+    with rows if filename is None else open(filename, 'r') as filecsv:
+        rows = [row for row in csv.reader(filecsv)]
+    header = rows[0]
+    header_set = set(header)
+    if len(header_set) != len(header):
+        raise RuntimeError(f"Modelspecs from filename={filename} header={header} contains duplicates")
+    if not header_set.issubset(set(ModelSpec._fields)):
+        raise RuntimeError(f"Modelspecs from filename={filename} header={header}"
+                           f" not subset of {ModelSpec._fields}")
+    modelspecs = []
+    fieldtypes = list(ModelSpec._field_types[x] for x in header)
+    for row in rows[1:]:
+        kwargs = {}
+        for idx, name in enumerate(header):
+            value = row[idx]
+            type_var = fieldtypes[idx]
+            value = value if type_var is str else (mpfutil.str2bool(value) if type_var is bool else None)
+            if value is None:
+                raise RuntimeError(f'Got invalid modelspec value None from type_var={type_var}')
+            kwargs[name] = value
+        modelspecs.append(ModelSpec(**kwargs))
     # TODO: Validate modelspecs
     return modelspecs
 
@@ -1356,7 +1464,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
             total -= frac
         fluxfracs[-1] = 1.0
     fits_best = modelfits[model_best]
-    model.logger.info(f'Initializing from best model={fits_best["name"]} w/fluxfracs: {fluxfracs}')
+    if model.logger:
+        model.logger.debug(f'Initializing from best model={fits_best["name"]} w/fluxfracs: {fluxfracs}')
     paramtree_best = fits_best['paramtree']
     fluxcens_init = paramtree_best[0][1][0] + paramtree_best[0][0]
     fluxcens_init_values = [p.get_value() for p in fluxcens_init]
@@ -1516,8 +1625,11 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
         if values_best:
             for param, value in values_best.items():
                 param.set_value_transformed(value)
-        model.logger.info("Model '{}' init by guesstype={} took {:.3e}s to change like from {} to {}".format(
-            model.name, guesstype_init, time.time() - time_init, like_init, like_best))
+        if model.logger:
+            model.logger.debug(
+                f"Model '{model.name}' init by guesstype={guesstype_init} took {time.time() - time_init:.3e}s"
+                f" to change like from {like_init} to {like_best}"
+            )
 
 
 def __validate_param_name(name_param, name_init):
@@ -1552,8 +1664,16 @@ def init_model_from_values(model, values_init, free=True, fixed=False, params_fi
         param.set_value(value)
 
 
-def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine, bands=None,
-               params_inherit=None, params_modify=None, params_fixed=None, values_init=None):
+def init_model(
+    model: mpfobj.Model,
+    modeltype: str,
+    inittype: str,
+    models,
+    modelinfo_comps: List[ModelSpec],
+    fits_engine: Dict[str, ModelFits],
+    bands=None,
+    params_inherit=None, params_modify=None, params_fixed=None, values_init=None
+):
     """
     Initialize a multiprofit.objects.Model of a given modeltype with a method inittype.
 
@@ -1564,7 +1684,7 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
         TODO: review if/when this is necessary.
     :param modelinfo_comps: Model specifications to map onto individual components of the model,
         e.g. to initialize a two-component model from two single-component fits.
-    :param fits_engine: Dict; key=engine: value=dict with fit results.
+    :param fits_engine: Dict; key=init/model type: value=FitResult.
     :param bands: String[]; a list of bands to pass to get_profiles when calling get_multigaussians.
     :param params_inherit: Inherited params object to pass to get_multigaussians.
     :param params_modify: Modified params object to pass to get_multigaussians.
@@ -1584,13 +1704,12 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
 
             # Loop through all previous models and add ones of the same type
             for modelinfo_comp in modelinfo_comps:
-                if modelinfo_comp["model"] == modeltype:
-                    name_modelcomps.append(modelinfo_comp['name'])
+                if modelinfo_comp.model == modeltype:
+                    name_modelcomps.append(modelinfo_comp.name)
         else:
             # TODO: Check this more thoroughly
             name_modelcomps = inittype.split(":")[1].split(";")
-        chisqreds = [fits_engine[name_modelcomp]["fits"][-1]["chisqred"]
-                     for name_modelcomp in name_modelcomps]
+        chisqreds = [fits_engine[name_modelcomp].fits[-1]["chisqred"] for name_modelcomp in name_modelcomps]
         inittype = name_modelcomps[np.argmin(chisqreds)]
     elif inittype == "values":
         init_model_from_values(model, values_init, params_fixed=params_fixed)
@@ -1600,16 +1719,20 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
             # Example:
             # mg8devexppx,mgsersic8:2,nser,"nser=4,1",mg8dev2px;mg8exppx,gaussian:3,T
             # ... means init two mgsersic8 profiles from some combination of the m8dev and mg8exp fits
-            modelfits = [{
-                'values_param': fits_engine[initname]['fits'][-1]['params_bestall'],
-                'paramtree': models[fits_engine[initname]['modeltype']].get_parameters(
-                    fixed=True, flatten=False),
-                'params': models[fits_engine[initname]['modeltype']].get_parameters(fixed=True),
-                'chisqred': fits_engine[initname]['fits'][-1]['chisqred'],
-                'modeltype': fits_engine[initname]['modeltype'],
-                'name': initname, }
-                for initname in inittype
-            ]
+            modelfits = []
+            for initname in inittype:
+                fitresult = fits_engine[initname]
+                fit_last = fitresult.fits[-1]
+                type_model = fitresult.modeltype
+                model_init = models[type_model]
+                modelfits.append({
+                    'values_param': fit_last['params_bestall'],
+                    'paramtree': model_init.get_parameters(fixed=True, flatten=False),
+                    'params': model_init.get_parameters(fixed=True),
+                    'chisqred': fit_last['chisqred'],
+                    'modeltype': type_model,
+                    'name': initname,
+                })
             init_model_from_model_fits(model, modelfits)
             inittype = None
         else:
@@ -1618,14 +1741,15 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                 raise RuntimeError("Model={} can't find reference={} "
                                    "to initialize from".format(modeltype, inittype))
 
-    has_fit_init = inittype and 'fits' in fits_engine.get(inittype, {})
+    fit_init = fits_engine.get(inittype)
+    has_fit_init = fit_init is not None
     if logger:
-        logger.info(f'Init model name={model.name} type-{modeltype} using inittype={inittype};'
+        logger.debug(f'Init model name={model.name} type-{modeltype} using inittype={inittype};'
                     f' hasinitfit={has_fit_init}')
     if has_fit_init:
-        values_param_init = fits_engine[inittype]["fits"][-1]["params_bestall"]
+        values_param_init = fit_init.fits[-1]["params_bestall"]
         # TODO: Find a more elegant method to do this
-        inittype_mod = fits_engine[inittype]['modeltype'].split('+')
+        inittype_mod = fit_init.modeltype.split('+')
         inittype_split = inittype_mod[0].split(':')
         inittype_order = None if not inittype_split[0].startswith('mgsersic') else \
             np.int(inittype_split[0].split('mgsersic')[1])
@@ -1643,18 +1767,19 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
             num_components = np.repeat(inittype_order, inittype_split[1])
             num_sources = len(model.sources)
             model_new = model
-            model = models[fits_engine[inittype]['modeltype']]
+            model = models[fit_init.modeltype]
             components_new = []
-        logger.info(f"Initializing from best model={inittype}"
-                    f"{' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''}")
+        if logger:
+            logger.debug(f"Initializing from best model={inittype}"
+                         f"{' (MGA to {} GMM)'.format(num_components) if is_mg_to_gauss else ''}")
         # For mgtogauss, first we turn the mgsersic model into a true GMM
         # Then we take the old model and get the parameters that don't depend on components (mostly source
         # centers) and set those as appropriate
         for i in range(1+is_mg_to_gauss):
             params_all = model.get_parameters(fixed=True, modifiers=not is_mg_to_gauss)
-            if is_mg_to_gauss:
-                logger.info(f"Param values init: {values_param_init}")
-                logger.info(f"Param names:       {[x.name for x in params_all]}")
+            if logger and is_mg_to_gauss:
+                logger.debug(f"Param values init: {values_param_init}")
+                logger.debug(f"Param names:       {[x.name for x in params_all]}")
             if len(values_param_init) != len(params_all):
                 raise RuntimeError('len(values_param_init)={} != len(params)={}, params_all={}'.format(
                     len(values_param_init), len(params_all), [x.name for x in params_all]))
@@ -1666,9 +1791,8 @@ def init_model(model, modeltype, inittype, models, modelinfo_comps, fits_engine,
                 if is_mg_to_gauss and param.name == 'nser' and value <= 0.55:
                     value = 0.55
                 param.set_value(value)
-            if is_mg_to_gauss:
-                logger.info(f"Param values: "
-                            f"{[param.get_value()for param in model.get_parameters()]}")
+            if logger and is_mg_to_gauss:
+                logger.debug(f"Param values: {[param.get_value() for param in model.get_parameters()]}")
             # Set the ellipse parameters fixed the first time through
             # The second time through, uh, ...? TODO Remember what happens
             if is_mg_to_gauss and i == 0:
@@ -1705,7 +1829,7 @@ def set_exposure(model, band, index=0, image=None, error_inverse=None, psf=None,
     if band not in model.data.exposures:
         model.data.exposures[band] = [mpfobj.Exposure(band=band, image=None)]
     exposure = model.data.exposures[band][index]
-    is_empty_image = image is "empty"
+    is_empty_image = image == "empty"
     exposure.image = image if not is_empty_image else ImageEmpty(exposure.image.shape)
     if is_empty_image:
         exposure.error_inverse = exposure.image
