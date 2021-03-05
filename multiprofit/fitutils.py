@@ -1056,12 +1056,7 @@ def fit_galaxy_model(
                         for name_prior, params_prior_type in priors_comp.items():
                             params_prior = params_prior_type[all_gauss]
                             if name_prior == 'shape':
-                                ell = comp.params_ellipse
-                                model.priors.append(
-                                    mpfpri.ShapeLsqPrior(
-                                        ell.sigma_x, ell.sigma_y, ell.rho, **params_prior
-                                    )
-                                )
+                                model.priors.append(mpfpri.ShapeLsqPrior(comp.params_ellipse, **params_prior))
                             else:
                                 param = params_comp[name_prior]
                                 mean = params_prior.get(

@@ -127,13 +127,11 @@ class ShapeLsqPrior(LsqPrior):
 
         if calc_jacobian:
             ell = self.ellipse
-            size_x, size_y, rho = ell.sigma_x, self.ellipse.sigma_y, self.ellipse.rho
-            value_x, value_y, value_rho = (x.get_value() for x in (size_x, size_y, rho))
-            dsize_x = delta_jacobian*np.max((size_x, 1e-3))
-            dsize_y = delta_jacobian*np.max((size_y, 1e-3))
-            drho = -delta_jacobian*(np.sign(value_rho) + (value_rho == 0))
-            values = {x: float(x.get_value_transformed()) for x in (ell.size_x, ell.size_y, ell.rho)}
-            for param, delta in ((ell.size_x, dsize_x), (ell.size_y, dsize_y), (ell.rho, drho)):
+            for param in (ell.sigma_x, ell.sigma_y, ell.rho):
+                value = float(param.get_value())
+                value_trans = float(param.get_value_transformed())
+                is_rho = param is ell.rho
+                delta = -delta_jacobian*(np.sign(value) + (value == 0)) if is_rho else np.max((value, 1e-3))
                 good = False
                 for sign in (1, -1):
                     try:
@@ -147,19 +145,17 @@ class ShapeLsqPrior(LsqPrior):
                 if not good or not np.abs(eps) > 0:
                     raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
                 _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
-                jacobian = (residuals_new[0] - residuals[0])/eps, (residuals_new[1] - residuals[1])/eps
-                derivative = param.transform.get_transform_derivative(verify=True) if isinstance(
-                    param, ParameterTransformed) else None
-                if derivative:
-                    jacobian /= derivative
+                denom_jac = float(eps)
+                if isinstance(param, ParameterTransformed):
+                    denom_jac *= param.transform.derivative(value)
+                jacobian = [(new - old)/denom_jac for new, old in zip(residuals_new, residuals)]
                 if not all(np.isfinite(jacobian)):
                     raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
                 jacobians[param] = jacobian
                 # Reset to original value
-                value_reset = values[param]
-                param.set_value_transformed(value_reset)
-                if param.value != value_reset:
-                    raise RuntimeError(f'Failed to reset param {param} to value={value_reset}; check limits')
+                param.set_value_transformed(value_trans)
+                if param.value != value_trans:
+                    raise RuntimeError(f'Failed to reset param {param} to value={value_trans}; check limits')
 
         return prior, residuals, jacobians
 
