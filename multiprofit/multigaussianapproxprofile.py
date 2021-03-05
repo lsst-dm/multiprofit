@@ -22,13 +22,49 @@
 
 import copy
 import galsim as gs
-import multiprofit.gaussutils as mpfgauss
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 import numpy as np
 import scipy.interpolate as spinterp
+import scipy.optimize as spopt
 
 ln10 = np.log(10)
+
+
+# Compute the fraction of the integrated flux within x for a sum of Gaussians
+# x is a length in arbitrary units
+# Weightsizes is a list of tuples of the weight (flux) and size (r_eff in the units of x) of each gaussian
+# Note that gauss2dint expects x/sigma, but size is re, so we pass x/re*re/sigma = x/sigma
+# 0 > quant > 1 turns it into a function that returns zero
+#   at the value of x containing a fraction quant of the total flux
+# This is so you can use root finding algorithms to find x for a given quant (see below)
+def multigauss2dint(x, weightsizes, quant=0):
+    re_to_sigma = np.sqrt(2.*np.log(2.))
+    weight_sum_to_x = 0
+    weight_sum = 0
+    for weight, size in weightsizes:
+        weight_sum_to_x += weight*(gauss2dint(x/size*re_to_sigma) if size > 0 else 1)
+        weight_sum += weight
+    return weight_sum_to_x/weight_sum - quant
+
+
+# Compute x_quant for a sum of Gaussians, where 0<quant<1
+# There's probably an analytic solution to this if you care to work it out
+# Weightsizes and quant are as above
+# Choose xmin, xmax so that xmin < x_quant < xmax.
+# Ideally we'd just set xmax=np.inf but brentq doesn't work then; a very large number like 1e5 suffices.
+def multigauss2drquant(weightsizes, quant=0.5, xmin=0, xmax=1e5):
+    if not 0 <= quant <= 1:
+        raise ValueError('Quant {} not >=0 & <=1'.format(quant, quant))
+    weight_sum_zero_size = 0
+    weight_sum = 0
+    for weight, size in weightsizes:
+        if not (size > 0):
+            weight_sum_zero_size += weight
+        weight_sum += weight
+    if weight_sum_zero_size/weight_sum >= quant:
+        return 0
+    return spopt.brentq(multigauss2dint, a=xmin, b=xmax, args=(weightsizes, quant))
 
 
 class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
@@ -1621,8 +1657,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
 
         profile_base = super().get_profiles(flux_by_band, engine, cenx, ceny, params, engineopts)[0]
         skip_covar = engineopts is not None and engineopts.get("get_profile_skip_covar", False)
-        reff, axrat, ang = (np.Inf, None, None) if skip_covar else \
-            mpfgauss.covar_to_ellipse(self.params_ellipse)
+        reff, axrat, ang = (np.Inf, None, None) if skip_covar else self.params_ellipse.make_major()
         profile_base['nser'] = 0.5
         profile_base['can_do_fit_leastsq'] = True
         for band in flux_by_band.keys():

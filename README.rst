@@ -24,8 +24,9 @@ models convolved with arbitrary PSFs images or models.
 currently limited to pixel-matched images of identical dimensions. Unlike ProFit, Bayesian MCMC is not
 available (yet).
 
-*multiprofit* requires Python 3, along with `pybind11 <https://github.com/pybind/pybind11>`_ for C++ bindings.
-It can be installed using setup.py like so:
+*multiprofit* requires Python 3, along with `pybind11 <https://github.com/pybind/pybind11>`_ for C++ bindings,
+and `gauss2d <https://github.com/lsst-dm/gauss2d/>`_ for evaluating Gaussian mixtures. It can be installed
+using setup.py like so:
 
 python3 setup.py install --user
 

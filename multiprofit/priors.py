@@ -20,8 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABCMeta, abstractmethod
-from multiprofit.ellipse import Ellipse
-import multiprofit.gaussutils as mpfgauss
+from multiprofit.objects import EllipseParameters, ParameterTransformed
 import numpy as np
 import scipy.special as spspec
 import scipy.stats as spstats
@@ -62,7 +61,7 @@ class GaussianLsqPrior(LsqPrior):
     def calc_residual(self, calc_jacobian=False, delta_jacobian=None):
         residual = (self.param.value - self.mean)/self.stddev
         if not np.isfinite(residual):
-            raise RuntimeError(f'Infinite Gaussian prior residual from y={value},'
+            raise RuntimeError(f'Infinite Gaussian prior residual from y={self.param.value},'
                                f' mean={self.mean} stddev={self.stddev}')
         prior = spstats.norm.logpdf(residual)
         jacobians = {}
@@ -100,12 +99,9 @@ class ShapeLsqPrior(LsqPrior):
         residuals = []
         jacobians = {}
         if self.size_mean_std or self.axrat_params:
-            size_x = self.size_x.get_value()
-            size_y = self.size_y.get_value()
-            rho = self.rho.get_value()
-            size_maj, axrat, _ = mpfgauss.covar_to_ellipse(Ellipse(size_x, size_y, rho))
+            size_maj, axrat, _ = self.ellipse.make_major()
             if not axrat >= 0:
-                raise RuntimeError(f'r_eff={size_maj}, axrat={axrat} from x={size_x}, y={size_y}, rho={rho}')
+                raise RuntimeError(f'r_eff={size_maj}, axrat={axrat} from ell={self.ellipse}')
             if self.size_mean_std:
                 if not size_maj > size_maj_min:
                     size_maj = size_maj_min
@@ -130,11 +126,12 @@ class ShapeLsqPrior(LsqPrior):
             prior += spstats.norm.logpdf(residual)
 
         if calc_jacobian:
-            dsize_x = delta_jacobian*np.max((size_x, 1e-3))
-            dsize_y = delta_jacobian*np.max((size_y, 1e-3))
-            drho = -delta_jacobian*(np.sign(rho) + (rho == 0))
-            values = {x: float(x.value) for x in (self.size_x, self.size_y, self.rho)}
-            for param, delta in ((self.size_x, dsize_x), (self.size_y, dsize_y), (self.rho, drho)):
+            ell = self.ellipse
+            for param in (ell.sigma_x, ell.sigma_y, ell.rho):
+                value = float(param.get_value())
+                value_trans = float(param.get_value_transformed())
+                is_rho = param is ell.rho
+                delta = -delta_jacobian*(np.sign(value) + (value == 0)) if is_rho else np.max((value, 1e-3))
                 good = False
                 for sign in (1, -1):
                     try:
@@ -148,27 +145,27 @@ class ShapeLsqPrior(LsqPrior):
                 if not good or not np.abs(eps) > 0:
                     raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
                 _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
-                jacobian = (residuals_new[0] - residuals[0])/eps, (residuals_new[1] - residuals[1])/eps
+                denom_jac = float(eps)
+                if isinstance(param, ParameterTransformed):
+                    denom_jac *= param.transform.derivative(value)
+                jacobian = [(new - old)/denom_jac for new, old in zip(residuals_new, residuals)]
                 if not all(np.isfinite(jacobian)):
                     raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
                 jacobians[param] = jacobian
                 # Reset to original value
-                value_reset = values[param]
-                param.set_value_transformed(value_reset)
-                if param.value != value_reset:
-                    raise RuntimeError(f'Failed to reset param {param} to value={value_reset}; check limits')
+                param.set_value_transformed(value_trans)
+                if param.value != value_trans:
+                    raise RuntimeError(f'Failed to reset param {param} to value={value_trans}; check limits')
 
         return prior, residuals, jacobians
 
     def __len__(self):
         return bool(self.size_mean_std) + bool(self.axrat_params)
 
-    def __init__(self, size_x, size_y, rho, size_mean_std=None, size_log10=True, axrat_params=None):
+    def __init__(self, ellipse: EllipseParameters, size_mean_std=None, size_log10=True, axrat_params=None):
         """Initialize a size/shape prior.
 
-        :param size_x: `multiprofit.objects.Parameter`; x size param to apply the prior to.
-        :param size_y: `multiprofit.objects.Parameter`; y size param to apply the prior to.
-        :param rho:  `multiprofit.objects.Parameter`; correlation param to apply the prior to.
+        :param ellipse: `multiprofit.objects.EllipseParameters`; size/shape parameters.
         :param size_mean_std: `float`, `float`; mean and std.dev. of the size prior. Ignored if None.
         :param size_log10: `bool`; whether the prior is on the logarithm of the size rather than linear size.
         :param axrat_params:
@@ -177,9 +174,7 @@ class ShapeLsqPrior(LsqPrior):
                 axrat_params is not None and (not all(np.isfinite(axrat_params)))):
             raise ValueError(f'Non-finite {self.__class__} init '
                              f'size_mean_std={size_mean_std} and/or axrat_params={axrat_params}')
-        self.size_x = size_x
-        self.size_y = size_y
-        self.rho = rho
+        self.ellipse = ellipse
         self.size_log10 = size_log10
         self.size_mean_std = size_mean_std
         self.axrat_params = axrat_params

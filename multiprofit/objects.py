@@ -23,15 +23,14 @@ from abc import ABCMeta, abstractmethod
 import astropy.visualization as apvis
 import copy
 import galsim as gs
+import gauss2d
+import gauss2d.utils as gaussUtils
 import logging
 from math import sqrt
 import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import multiprofit as mpf
 import multiprofit.asinhstretchsigned as mpfasinh
-from multiprofit.ellipse import Ellipse
-import multiprofit.gaussutils as mpfgauss
 from multiprofit.limits import Limits
 from multiprofit.transforms import Transform
 import multiprofit.utils as mpfutil
@@ -238,6 +237,11 @@ num_params_gauss = len(names_params_gauss)
 order_params_gauss = {name: idx for idx, name in enumerate(names_params_gauss)}
 
 
+def _ellipse_to_list(ell: gauss2d.Ellipse):
+    return [ell.sigma_x, ell.sigma_y, ell.rho]
+
+
+# TODO: Refactor this nightmare (and the above _ellipse_to_list) away
 def gaussian_profiles_to_matrix(profiles):
     es = names_params_ellipse
     ep = names_params_ellipse_psf
@@ -247,12 +251,11 @@ def gaussian_profiles_to_matrix(profiles):
             # Otherwise, look for sigma_x, sigma_y, etc
             # There is a compelling reason for doing it this way... probably.
             np.array(
-                [p['cenx'], p['ceny'], p['flux']] +
-                (
-                    list(p["ellipse_src"]()) if "ellipse_src" in p else
+                [p['cenx'], p['ceny'], p['flux']] + (
+                    _ellipse_to_list(p["ellipse_src"]) if "ellipse_src" in p else
                     [p[es[i]] if es[i] in p else 0 for i in range(3)]
                 ) + (
-                    list(p["ellipse_psf"]()) if "ellipse_psf" in p else
+                    _ellipse_to_list(p["ellipse_psf"]) if "ellipse_psf" in p else
                     [p[ep[i]] if ep[i] in p else 0 for i in range(3)]
                 )
             )
@@ -260,7 +263,7 @@ def gaussian_profiles_to_matrix(profiles):
         ]
     )
     for idx in (3, 4, 6, 7):
-        rv[:, idx] = mpfgauss.reff_to_sigma(rv[:, idx])
+        rv[:, idx] *= gauss2d.M_SIGMA_HWHM
     return rv
 
 
@@ -865,7 +868,7 @@ class Model:
                     sigma_inv = exposure.get_sigma_inverse()
 
                     # The point of this is to fill in the grad array
-                    likelihood_new = mpfgauss.loglike_gaussians_pixel(
+                    likelihood_new = gaussUtils.loglike_gaussians_pixel(
                         data=exposure.image, sigma_inv=sigma_inv, gaussians=gaussians,
                         to_add=False, grad=grad, background=background)
 
@@ -898,7 +901,7 @@ class Model:
                 if (plot and image is None) or missing_likelihood:
                     if has_bg is None:
                         has_bg, background = self._get_background(profiles, band)
-                    likelihood_new = mpfgauss.loglike_gaussians_pixel(
+                    likelihood_new = gaussUtils.loglike_gaussians_pixel(
                         data=exposure.image, sigma_inv=exposure.get_sigma_inverse(),
                         gaussians=gaussians if gaussians is not None else gaussian_profiles_to_matrix(
                             [p[band] for p in profiles]),
@@ -1130,7 +1133,7 @@ class Model:
                 names_params = names_params_ellipse
                 ellipse_srcs = [
                     (
-                        Ellipse(*[profile[band][var] for var in names_params])
+                        gauss2d.Ellipse(*[profile[band][var] for var in names_params])
                         if profile[band].get("nser") == 0.5
                         else None,
                         profile[band]
@@ -1150,7 +1153,9 @@ class Model:
                     ellipses_psf = []
                     for idx_psf, profile_psf in enumerate(profiles_psf):
                         fluxfracs.append(profile_psf[band]["flux"])
-                        ellipses_psf.append(Ellipse(*[profile_psf[band][var] for var in names_params]))
+                        ellipses_psf.append(
+                            gauss2d.Ellipse(*[profile_psf[band][var] for var in names_params])
+                        )
                     for idx_src, (ellipse_src, profile_src) in enumerate(ellipse_srcs):
                         for idx_psf, (fluxfrac, ellipse_psf) in enumerate(zip(fluxfracs, ellipses_psf)):
                             if ellipse_src is not None:
@@ -1162,18 +1167,18 @@ class Model:
                                     profile["ellipse_src"] = ellipse_src
                                     profile["ellipse_psf"] = ellipse_psf
                                 if not is_all_fast_gauss:
-                                    convolved = ellipse_src.convolve(ellipse_psf, new=True)
-                                    reff, axrat, ang = mpfgauss.covar_to_ellipse(convolved)
+                                    convolved = ellipse_src.convolution(ellipse_psf).make_ellipse_major(True)
                                     if is_libprofit:
                                         profile["mag"] = mpfutil.flux_to_mag(fluxfrac*profile["flux"])
-                                        profile["re"] = reff
-                                        profile["axrat"] = axrat
-                                        profile["ang"] = ang
+                                        profile["re"] = convolved.r_major
+                                        profile["axrat"] = convolved.axrat
+                                        profile["ang"] = convolved.ang
                                     else:
                                         profile["profile_gs"] = gs.Gaussian(
                                             flux=profile["flux"]*fluxfrac,
-                                            fwhm=2*reff*sqrt(axrat), gsparams=gsparams)
-                                        profile["shear"] = gs.Shear(q=axrat, beta=ang*gs.degrees)
+                                            fwhm=2*convolved.r_major*sqrt(convolved.axrat), gsparams=gsparams)
+                                        profile["shear"] = gs.Shear(q=convolved.axrat,
+                                                                    beta=convolved.ang*gs.degrees)
                                         profile["offset"] = gs.PositionD(profile["cenx"], profile["ceny"])
                                 profile["pointsource"] = True
                                 profile["resolved"] = True
@@ -1297,7 +1302,7 @@ class Model:
                 profiles_band_bad = 0
                 profiles_band = []
                 profiles_band_idx = []
-                background = mpfgauss.zero_double
+                background = gaussUtils.zero_double
                 for idx_profile, profile in enumerate(profiles_to_draw_now):
                     profile_band = profile[band]
                     if np.isinf(profile_band["flux"]) and not do_grad_any:
@@ -1372,7 +1377,7 @@ class Model:
                                     weight_grad /= derivative
                                 # TODO: Revisit for fitting rscale
                                 if is_sigma:
-                                    weight_grad *= mpfgauss.reff_to_sigma(profile.get("sigma_factor", 1))
+                                    weight_grad *= gauss2d.M_SIGMA_HWHM*profile.get("sigma_factor", 1)
                             else:
                                 weight_grad = 0
                             grad_param_factor[idx_profile, idx_array] = weight_grad
@@ -1388,7 +1393,7 @@ class Model:
                                 # sig = sig_src*sigma_factor
                                 # dsig/dn = dsig/dsigma_factor * dsigma_factor/dn = sig_src*dsigma_factor/dn
                                 # sig_src = sig_profile/sigma_factor
-                                dreff_dn /= mpfgauss.sigma_to_reff(profile["sigma_factor"])
+                                dreff_dn /= gauss2d.M_HWHM_SIGMA*profile["sigma_factor"]
                                 derivative = profile["param_nser"].get_transform_derivative(
                                     verify=True, rtol=1e-3)
                                 if derivative is not None:
@@ -1434,17 +1439,17 @@ class Model:
                         sersic_param_map = sersic_param_map[profiles_band_idx, :]
                         sersic_param_factor = sersic_param_factor[profiles_band_idx, :]
                 else:
-                    grad = mpfgauss.zeros_double
-                    grad_param_map = mpfgauss.zeros_uint64
-                    grad_param_factor = mpfgauss.zeros_double
-                    sersic_param_map = mpfgauss.zeros_uint64
-                    sersic_param_factor = mpfgauss.zeros_double
+                    grad = gaussUtils.zeros_double
+                    grad_param_map = gaussUtils.zeros_uint64
+                    grad_param_factor = gaussUtils.zeros_double
+                    sersic_param_map = gaussUtils.zeros_uint64
+                    sersic_param_factor = gaussUtils.zeros_double
                 # Don't output the image if do_fit_linear_prep is true - the next section will do that
                 residual = exposure.meta['residual_img'] if do_jacobian or do_fit_leastsq_prep else \
-                    mpfgauss.zeros_double
-                output = image if do_draw_image else mpfgauss.zeros_double
+                    gaussUtils.zeros_double
+                output = image if do_draw_image else gaussUtils.zeros_double
 
-                likelihood_free = mpf.loglike_gaussians_pixel(
+                likelihood_free = gauss2d.loglike_gaussians_pixel(
                     data=exposure.image, sigma_inv=sigma_inv, gaussians=profile_matrix,
                     x_min=0, x_max=nx, y_min=0, y_max=ny, to_add=False, output=output, residual=residual,
                     grad=grad, grad_param_map=grad_param_map, grad_param_factor=grad_param_factor,
@@ -1507,7 +1512,7 @@ class Model:
                     likelihood = np.exp(likelihood)
             if (not get_like_only) or do_fit_linear_prep or do_fit_leastsq_prep:
                 if profiles_to_draw:
-                    image = mpf.make_gaussians_pixel(
+                    image = gauss2d.make_gaussians_pixel(
                         gaussians=gaussian_profiles_to_matrix(
                             [profile[band] for profile in profiles_to_draw]),
                         x_min=0, x_max=nx, y_min=0, y_max=ny, dim_x=nx, dim_y=ny)
@@ -1529,7 +1534,7 @@ class Model:
                     # make_gaussian_pixel is faster
                     if len(profiles_flux) > 1:
                         gaussians = gaussian_profiles_to_matrix([profile[band] for profile in profiles_flux])
-                        imgprofiles = mpf.make_gaussians_pixel(gaussians, 0, nx, 0, ny, nx, ny)
+                        imgprofiles = gauss2d.make_gaussians_pixel(gaussians, 0, nx, 0, ny, nx, ny)
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
@@ -1537,13 +1542,13 @@ class Model:
                         if profile.get('background'):
                             # TODO: Use this or an alternative if background models become more complex
                             # than just a flat background
-                            # imgprofiles = mpfgauss.loglike_gaussians_pixel()
+                            # imgprofiles = gaussUtils.loglike_gaussians_pixel()
                             imgprofiles = np.full((ny, nx), params['flux'])
                         else:
-                            imgprofiles = np.array(mpf.make_gaussian_pixel_covar(
+                            imgprofiles = np.array(gauss2d.make_gaussian_pixel_covar(
                                 params['cenx'], params['ceny'], params['flux'],
-                                mpfgauss.reff_to_sigma(params['sigma_x']),
-                                mpfgauss.reff_to_sigma(params['sigma_y']),
+                                gauss2d.M_SIGMA_HWHM*params['sigma_x'],
+                                gauss2d.M_SIGMA_HWHM*params['sigma_y'],
                                 params['rho'], 0, nx, 0, ny, nx, ny))
                     if do_fit_linear_prep:
                         exposure.meta['img_models_params_free'] += [(imgprofiles, param_flux)]
@@ -2621,7 +2626,7 @@ class Component(object, metaclass=ABCMeta):
         self.name = name
 
 
-class EllipseParameters(Ellipse):
+class EllipseParameters:
     def get_parameters(self, free=True, fixed=True):
         return [value for value in [self.sigma_x, self.sigma_y, self.rho] if
                 (value.fixed and fixed) or (not value.fixed and free)]
@@ -2641,9 +2646,6 @@ class EllipseParameters(Ellipse):
     def get(self):
         return self.get_sigma_x(), self.get_sigma_y(), self.get_rho()
 
-    def get_radius(self):
-        return sqrt(self.get_sigma_x()**2 + self.get_sigma_y()**2)
-
     def get_sigma_x(self):
         return self.sigma_x.get_value()
 
@@ -2653,14 +2655,14 @@ class EllipseParameters(Ellipse):
     def get_rho(self):
         return self.rho.get_value()
 
-    def _set_sigma_x(self, x):
-        self.sigma_x.set_value(x)
-
-    def _set_sigma_y(self, x):
-        self.sigma_y.set_value(x)
-
-    def _set_rho(self, x):
-        self.rho.set_value(x)
+    def make_major(self, degrees=True):
+        try:
+            ell_major = gauss2d.Ellipse(
+                sigma_x=self.get_sigma_x(), sigma_y=self.get_sigma_y(), rho=self.get_rho(),
+            ).make_ellipse_major(degrees)
+        except:
+            pass
+        return ell_major.r_major, ell_major.axrat, ell_major.angle
 
     def __init__(self, sigma_x, sigma_y, rho):
         isparams = [isinstance(x, Parameter) for x in [sigma_x, sigma_y, rho]]
@@ -2668,10 +2670,10 @@ class EllipseParameters(Ellipse):
             raise TypeError("Not all {} parameters are {} ({})".format(
                 self.__class__, Parameter.__class__, [x.__class__ for x in [sigma_x, sigma_y, rho]]
             ))
+        gauss2d.Ellipse.check(sigma_x.get_value(), sigma_y.get_value(), rho.get_value())
         self.sigma_x = sigma_x
         self.sigma_y = sigma_y
         self.rho = rho
-        self._check()
 
 
 class EllipticalComponent(Component):
@@ -2700,11 +2702,10 @@ class EllipticalComponent(Component):
     def is_gaussian_mixture(self):
         return False
 
-    def __init__(self, fluxes, params_ellipse, name=""):
+    def __init__(self, fluxes, params_ellipse: EllipseParameters, name=""):
         super().__init__(fluxes, name=name)
         if not isinstance(params_ellipse, EllipseParameters):
-            raise TypeError("params_ellipse type {} must be a {}".format(
-                type(params_ellipse), EllipseParameters))
+            raise TypeError(f"params_ellipse type {type(params_ellipse)} must be a {EllipseParameters}")
         self.params_ellipse = params_ellipse
 
 
@@ -2773,8 +2774,7 @@ class EllipticalParametricComponent(EllipticalComponent):
         profiles = {}
         profile_base = super().get_profiles(flux_by_band, engine, cenx, ceny, params, engineopts)[0]
         skip_covar = engineopts is not None and engineopts.get("get_profile_skip_covar", False)
-        radius, axrat, ang = (np.Inf, None, None) if skip_covar else \
-            mpfgauss.covar_to_ellipse(self.params_ellipse)
+        radius, axrat, ang = (np.Inf, None, None) if skip_covar else self.params_ellipse.make_major()
         for band in flux_by_band.keys():
             flux_param_band = self.fluxes_dict[band]
             profile = profile_base.copy()

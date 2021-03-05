@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import multiprofit as mpf
 from multiprofit.ellipse import Ellipse
 from multiprofit.fitutils import get_model
-import multiprofit.gaussutils as mpfgauss
+import gauss2d.utils as gaussutils
 from multiprofit.objects import get_gsparams, names_params_gauss
 from multiprofit.utils import estimate_ellipse
 import timeit
