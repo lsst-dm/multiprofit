@@ -523,9 +523,10 @@ def fit_psf_model(
                 )
         else:
             params_free = model.get_parameters(fixed=False)
-            fits_model_psf[engine][name_model]['fit'] = {
-                'name_params': [param.name for param in params_free],
-            }
+            if not fit_done:
+                fits_model_psf[engine][name_model]['fit'] = {
+                    'name_params': [param.name for param in params_free],
+                }
             fits_model_psf[engine][name_model]['modeller'] = mpfobj.Modeller(
                 model, modellib, modellibopts=modellibopts)
             if plot:
@@ -533,10 +534,16 @@ def fit_psf_model(
                 is_empty = isinstance(exposure.image, ImageEmpty)
                 if is_empty:
                     set_exposure(model, band, image=imgpsf, error_inverse=error_inverse)
-                values = None if skip_fit else fits_model_psf[engine][name_model]['fit']['params_best']
+                if skip_fit:
+                    values = None
+                else:
+                    fit = fits_model_psf[engine][name_model]['fit']
+                    values = fit.get('params_best')
+                    if values is None:
+                        raise RuntimeError(f'No valid PSF fit found in fit structure: {fit}')
                 evaluate_model(
                     model, param_values=values, plot=plot, title=kwargs.get('plot'),
-                    name_model=kwargs.get('label'), figure=kwargs.get('figaxes'),
+                    name_model=kwargs.get('label'), figaxes=kwargs.get('figaxes'),
                     row_figure=kwargs.get('row_figure')
                 )
                 if is_empty:
