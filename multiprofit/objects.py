@@ -305,7 +305,7 @@ class Model:
             (axes[1].set_title if do_plot_as_column else axes[1].set_ylabel)(name_model)
         if description_model is not None:
             (axes[2].set_title if do_plot_as_column else axes[2].set_ylabel)(description_model)
-        label_chisq = r'$\chi^{2}_{\nu}$' + '={:.3f}'.format(chisqred)
+        label_chisq = r'$\chi^{2}_{\nu}$' + f'={chisqred:.3f}'
         (axes[3].set_title if do_plot_as_column else axes[3].set_ylabel)(label_chisq)
         axes[4].set_xlabel(r'$\chi=$(Data-Model)/$\sigma$')
         if do_plot_as_column:
@@ -327,17 +327,16 @@ class Model:
             for axis, label in enumerate(labels):
                 (axes[axis].set_ylabel if do_plot_as_column or axis == 4 else axes[axis].set_title)(label)
 
-
     @classmethod
     def _plot_chi_hist(cls, chi, axis):
-        good_chi = chi[np.isfinite(chi)]
-        n_bins = 2*np.max([20, np.int(np.round(len(good_chi)/50))])
+        good_chi = chi[np.isfinite(chi)].flat
+        n_bins = np.max((20, int(len(good_chi)/50)))
         sns.histplot(
-            good_chi, bins=n_bins, ax=axis,  element="step", kde_kws={"kernel": "tri", "gridsize": n_bins//2}
+            good_chi, bins=n_bins, ax=axis, element="step", fill=False, stat="density", kde=True,
+            kde_kws={"gridsize": n_bins//2}
         ).set(xlim=(-5, 5), ylim=(1e-4, 1), yscale="log")
         x = np.linspace(-5., 5., int(1e4) + 1, endpoint=True)
         axis.plot(x, spstats.norm.pdf(x))
-
 
     @classmethod
     def _plot_exposures_color(
