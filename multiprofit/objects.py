@@ -1166,7 +1166,8 @@ class Model:
                                     profile["ellipse_src"] = ellipse_src
                                     profile["ellipse_psf"] = ellipse_psf
                                 if not is_all_fast_gauss:
-                                    convolved = ellipse_src.convolution(ellipse_psf).make_ellipse_major(True)
+                                    convolved = gauss2d.EllipseMajor(
+                                        ellipse_src.make_convolution(ellipse_psf), degrees=True)
                                     if is_libprofit:
                                         profile["mag"] = mpfutil.flux_to_mag(fluxfrac*profile["flux"])
                                         profile["re"] = convolved.r_major
@@ -2656,9 +2657,9 @@ class EllipseParameters:
 
     def make_major(self, degrees=True):
         try:
-            ell_major = gauss2d.Ellipse(
+            ell_major = gauss2d.EllipseMajor(gauss2d.Ellipse(
                 sigma_x=self.get_sigma_x(), sigma_y=self.get_sigma_y(), rho=self.get_rho(),
-            ).make_ellipse_major(degrees)
+            ), degrees=degrees)
         except:
             pass
         return ell_major.r_major, ell_major.axrat, ell_major.angle
