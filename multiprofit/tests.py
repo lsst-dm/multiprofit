@@ -338,8 +338,10 @@ def mgsersic_test(reff=3, nser=1, axrat=1, angle=0, dimx=15, dimy=None, plot=Fal
     band = 'i'
     is_gauss = nser == 0.5
     keys = ("gaussian:1" if is_gauss else "sersic:1", f"mgsersic{mgsersic_order}:1")
+    ell = g2.Ellipse(g2.EllipseMajor(r_major=reff, axrat=axrat, angle=angle, degrees=True))
     models = {
-        key[0:3]: get_model({band: flux}, key, (dimx, dimy), sigma_xs=[reff], sigma_ys=[reff], slopes=[nser])
+        key[0:3]: get_model({band: flux}, key, (dimx, dimy),
+                            sigma_xs=[ell.sigma_x], sigma_ys=[ell.sigma_y], slopes=[nser])
         for key in keys
     }
     keys = list(models.keys())

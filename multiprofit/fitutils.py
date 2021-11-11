@@ -21,11 +21,10 @@
 
 import csv
 import galsim as gs
-import gauss2d
+import gauss2d as g2
 import io
 import logging
 import matplotlib.pyplot as plt
-import multiprofit.ellipse as mpfell
 from multiprofit.limits import limits_ref, Limits
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
@@ -604,7 +603,7 @@ def get_init_from_moments(
                         ell = comp.params_ellipse
                         p_x, p_y, p_rho = (param.get_value()
                                            for param in (ell.sigma_x, ell.sigma_y, ell.rho))
-                        p_x, p_y = (p*gauss2d.M_SIGMA_HWHM for p in (p_x, p_y))
+                        p_x, p_y = (p*g2.M_SIGMA_HWHM for p in (p_x, p_y))
                         p_xx += flux_comp * p_x * p_x
                         p_yy += flux_comp * p_y * p_y
                         p_xy += flux_comp * p_rho * p_x * p_y
@@ -634,15 +633,16 @@ def get_init_from_moments(
         moments_by_name = {
             name_param: value for name_param, value in zip(
                 mpfobj.names_params_ellipse,
-                mpfell.covar_terms_as(*list(moments/num_exposures_measured), matrix=False, params=True))
+                g2.Ellipse(g2.Covariance(*(moments/num_exposures_measured))).xyr,
+            )
         }
 
         cens['cenx'] /= num_exposures_measured
         cens['ceny'] /= num_exposures_measured
 
         # moments_by_name is in units of HWHM; convert to sigma TODO: verify this
-        moments_by_name['sigma_x'] = np.max((gauss2d.M_HWHM_SIGMA*moments_by_name['sigma_x'], sigma_min))
-        moments_by_name['sigma_y'] = np.max((gauss2d.M_HWHM_SIGMA*moments_by_name['sigma_y'], sigma_min))
+        moments_by_name['sigma_x'] = np.max((g2.M_HWHM_SIGMA*moments_by_name['sigma_x'], sigma_min))
+        moments_by_name['sigma_y'] = np.max((g2.M_HWHM_SIGMA*moments_by_name['sigma_y'], sigma_min))
     else:
         moments_by_name = {name_param: 0 for name_param in mpfobj.names_params_ellipse}
 
@@ -1383,12 +1383,13 @@ def fit_galaxy_exposures(
 def get_psfmodel(
         engine, engineopts, num_comps, band, model, image, error_inverse=None, ratios_size=None,
         factor_sigma=1, logger=None):
-    sigma_x, sigma_y, rho = mpfell.covar_terms_as(*mpfutil.estimate_ellipse(image, return_as_params=True),
-                                                  matrix=False, params=True)
+    sigma_x, sigma_y, rho = g2.Ellipse(
+        g2.Covariance(*mpfutil.estimate_ellipse(image, return_as_params=True))
+    ).xyr
     if logger:
         logger.debug(f'PSF init. mom. sig_x, sig_y, rho = ({sigma_x}, {sigma_y}, {rho})')
-    sigma_x *= gauss2d.M_SIGMA_HWHM
-    sigma_y *= gauss2d.M_SIGMA_HWHM
+    sigma_x *= g2.M_SIGMA_HWHM
+    sigma_y *= g2.M_SIGMA_HWHM
     sigma_xs = np.repeat(sigma_x, num_comps)
     sigma_ys = np.repeat(sigma_y, num_comps)
     rhos = np.repeat(rho, num_comps)
@@ -1557,7 +1558,7 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
 
 coeffs_init_guess = {
     'gauss2exp': ([-7.6464e+02, 2.5384e+02, -3.2337e+01, 2.8144e+00, -4.0001e-02], (0.005, 0.12)),
-    'gauss2dev': ([-1.0557e+01, 1.6120e+01, -9.8877e+00, 4.0207e+00, -2.1059e-01], (0.05, 0.45)),
+    'g2ev': ([-1.0557e+01, 1.6120e+01, -9.8877e+00, 4.0207e+00, -2.1059e-01], (0.05, 0.45)),
     'exp2dev': ([2.0504e+01, -1.3940e+01, 9.2510e-01, 2.2551e+00, -6.9540e-02], (0.02, 0.38)),
 }
 
@@ -1567,7 +1568,7 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
         time_init = time.time()
         do_sersic = guesstype == 'gauss2ser'
         guesstype_init = guesstype
-        guesstypes = ['gauss2exp', 'gauss2dev'] if guesstype == 'gauss2ser' else [guesstype]
+        guesstypes = ['gauss2exp', 'g2ev'] if guesstype == 'gauss2ser' else [guesstype]
         like_init = None
         values_best = None
         for guesstype in guesstypes:
