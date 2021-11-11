@@ -270,8 +270,8 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     return grads, dlls, diffabs
 
 
-def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss=True, mgsersic_order=8,
-                  do_meas_modelfit=False, flux=1.):
+def mgsersic_test(reff=3, nser=1, axrat=1, angle=0, dimx=15, dimy=None, plot=False, use_fast_gauss=True,
+                  mgsersic_order=8, do_meas_modelfit=False, flux=1.):
     """
     Test multi-Gaussian Sersic approximations compared to the 'true' Sersic profile in 2D.
     :param reff: float; the circular effective radius in pixels.
@@ -290,7 +290,7 @@ def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss
     """
     if dimy is None:
         dimy = dimx
-    engineopts = {"use_fast_gauss": True} if use_fast_gauss else None
+    engineopts = {"use_fast_gauss": True, "drawmethod": "no_pixel"} if use_fast_gauss else None
     band = 'i'
     is_gauss = nser == 0.5
     keys = ("gaussian:1" if is_gauss else "sersic:1", f"mgsersic{mgsersic_order}:1")
