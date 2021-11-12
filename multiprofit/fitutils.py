@@ -1949,7 +1949,7 @@ def get_multigaussians(profiles, params_inherit=None, params_modify=None, num_co
                         # This param will map onto the first component's param
                         param.fixed = True
                         params_inheritees[param.name].inheritors.append(param)
-                    if param.name == 'sigma_x' or param.name == 'sigma_y':
+                    if param.name == 'rho':
                         param.modifiers += params_modify_comp
             component_init += num_comps_to_add
 
