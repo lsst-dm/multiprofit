@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import multiprofit.asinhstretchsigned as mpfasinh
 from multiprofit.limits import Limits
-from multiprofit.transforms import Transform
+from multiprofit.transforms import transforms_ref
 import multiprofit.utils as mpfutil
 import numpy as np
 from numpy.random import default_rng
@@ -250,28 +250,41 @@ num_params_gauss = len(names_params_gauss)
 order_params_gauss = {name: idx for idx, name in enumerate(names_params_gauss)}
 
 
-def _ellipse_to_list(ell: g2.Ellipse):
-    return [ell.sigma_x*g2.M_SIGMA_HWHM, ell.sigma_y*g2.M_SIGMA_HWHM, ell.rho]
+def _get_convolved_gaussian(profile_dict):
+    p = profile_dict
+    ell_src = p['ellipse_src']
+    src = g2.Gaussian(
+        centroid=g2.Centroid(p['cenx'], p['ceny']),
+        ellipse=g2.Ellipse(
+            sigma_x=ell_src.sigma_x*g2.M_SIGMA_HWHM,
+            sigma_y=ell_src.sigma_y*g2.M_SIGMA_HWHM,
+            rho=ell_src.rho,
+        ),
+        integral=g2.GaussianIntegralValue(p['flux']),
+    )
+    ell_psf = p.get('ellipse_psf')
+    if ell_psf is not None:
+        psf = g2.Gaussian(
+            centroid=g2.Centroid(),
+            ellipse=g2.Ellipse(
+                sigma_x=ell_psf.sigma_x*g2.M_SIGMA_HWHM,
+                sigma_y=ell_psf.sigma_y*g2.M_SIGMA_HWHM,
+                rho=ell_psf.rho,
+            ),
+            integral=g2.GaussianIntegralValue(1.0),
+        )
+    else:
+        psf = g2.Gaussian()
+    return g2.ConvolvedGaussian(
+        src,
+        psf,
+    )
 
 
 # TODO: Refactor this nightmare (and the above _ellipse_to_list) away
 def gaussian_profiles_to_matrix(profiles):
     rv = g2.Gaussians([
-        g2.ConvolvedGaussian(
-            # Look through ellipse_src and ellipse_psf first
-            # Otherwise, look for sigma_x, sigma_y, etc
-            # There is a compelling reason for doing it this way... probably.
-            g2.Gaussian(
-                centroid=g2.Centroid(p['cenx'], p['ceny']),
-                ellipse=g2.Ellipse(*_ellipse_to_list(p["ellipse_src"])),
-                integral=g2.GaussianIntegralValue(p['flux']),
-            ) if "ellipse_src" in p else g2.Gaussian(),
-            g2.Gaussian(
-                centroid=g2.Centroid(),
-                ellipse=g2.Ellipse(*_ellipse_to_list(p["ellipse_psf"])),
-                integral=g2.GaussianIntegralValue(1.0),
-            ) if "ellipse_psf" in p else g2.Gaussian(),
-        ) for p in profiles if not p.get("background")
+        _get_convolved_gaussian(p) for p in profiles if not p.get("background")
     ])
     return rv
 
@@ -554,7 +567,7 @@ class Model:
         self.jacobian_prior = None
         self.residuals_prior = None
 
-    def __validate_jacobian_param(
+    def _validate_jacobian_param(
             self, param, idx_param, exposure, image, jacobian, scale, engine, engineopts, meta_model,
             dx_ratio=1e-6, do_raise=True, do_plot_if_failed=False, dx_min=1e-8, dx_max=10, dlldxs=None):
         """
@@ -890,7 +903,7 @@ class Model:
                     for idx_param, param in enumerate(params):
                         passed = False
                         for dx_ratio, do_raise in [(1e-7, False), (1e-5, True)]:
-                            if self.__validate_jacobian_param(
+                            if self._validate_jacobian_param(
                                 param, idx_param, exposure, image, jacobian, scale, engine, engineopts,
                                 meta_model, dx_ratio=dx_ratio, do_raise=False,
                                 do_plot_if_failed=plot and do_raise, dlldxs=(likelihood_new, dlldxs)
@@ -1376,6 +1389,7 @@ class Model:
                         for idx_array, idx_param in enumerate(grad_param_map[idx_profile, :]):
                             param = grad_params_obj[idx_src][idx_array]
                             is_sigma = param.name == "sigma_x" or param.name == "sigma_y"
+                            is_rscale = param.name == 'rscale'
                             if idx_param > 0:
                                 is_flux = isinstance(param, FluxParameter)
                                 weight_grad = weight if is_flux and param_flux_ratio_is_none else 1.
@@ -1390,7 +1404,7 @@ class Model:
                                 if derivative is not None:
                                     weight_grad /= derivative
                                 # TODO: Revisit for fitting rscale
-                                if is_sigma:
+                                if is_sigma or is_rscale:
                                     weight_grad *= g2.M_SIGMA_HWHM*profile.get("sigma_factor", 1)
                             else:
                                 weight_grad = 0
@@ -1418,9 +1432,7 @@ class Model:
                                            dreff_dn*ellipse.sigma_x,
                                            dreff_dn*ellipse.sigma_y]
                                 if not all([np.isfinite(factor) for factor in factors]):
-                                    raise RuntimeError("Sersic param factors: {} not all finite".format(
-                                        factors
-                                    ))
+                                    raise RuntimeError(f"Sersic param factors: {factors} not all finite")
                                 indices = [idx_profile, sersic_param_indices[idx_src]]
                                 if do_fit_leastsq_prep:
                                     sersic_param_map.append(indices)
@@ -1483,7 +1495,7 @@ class Model:
                     ).loglike_pixel()
                 except Exception as err:
                     if debug:
-                        print(err)
+                        gaussian_profiles_to_matrix(profiles_band)
                     else:
                         raise err
                     #print('pm', exposure.meta['like_const'], likelihood_free)#, profile_matrix)
@@ -3079,7 +3091,7 @@ class Parameter:
         A parameter with all the info about itself that you would need when fitting.
     """
     def get_limits(self):
-        return self.limits.lower, self.limits.upper
+        return self.limits.min, self.limits.max
 
     def get_value(self):
         return float(self.value)
@@ -3167,7 +3179,7 @@ class ParameterTransformed(Parameter):
                         raise ValueError('Finite difference derivative for parameter {} must specify one of'
                                          'dx or dx_ratios'.format(self))
                     dx = dx_ratios[0]*value
-                return (self.transform(value + dx) - self.get_value_transformed())/dx
+                return (self.transform.forward(value + dx) - self.get_value_transformed())/dx
         value = self.get_value()
         derivative = self.transform.derivative(value)
         if verify:
@@ -3183,9 +3195,9 @@ class ParameterTransformed(Parameter):
                     dx_ratios = [1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 1e-14]
                 for ratio in dx_ratios:
                     dx = value*ratio
-                    fin_diff = (self.transform(value + dx) - value_transformed)/dx
+                    fin_diff = (self.transform.forward(value + dx) - value_transformed)/dx
                     if not np.isfinite(fin_diff):
-                        fin_diff = -(self.transform(value - dx) - value_transformed)/dx
+                        fin_diff = -(self.transform.forward(value - dx) - value_transformed)/dx
                     is_close = np.isclose(derivative, fin_diff, **kwargs)
                     if is_close:
                         break
@@ -3205,7 +3217,7 @@ class ParameterTransformed(Parameter):
         return float(self.value)
 
     def set_value(self, value):
-        value = self.transform.transform(value)
+        value = self.transform.forward(value)
         self.set_value_transformed(value)
 
     def set_value_transformed(self, value):
@@ -3214,8 +3226,11 @@ class ParameterTransformed(Parameter):
         if self.limits is not None:
             value = self.limits.clip(value)
         try:
-            if np.isnan(value):
-                raise RuntimeError(f"Tried to set ParameterTransformed {self} to nan")
+            if self.fixed and np.isnan(value):
+                raise RuntimeError(f"Tried to set fixed ParameterTransformed {self} to nan")
+            elif not self.fixed and not np.isfinite(value):
+                raise RuntimeError(f"Tried to set free ParameterTransformed {self} to non-finite"
+                                   f" value={value}")
             self.value = value
             # TODO: Error checking, etc. There are probably better ways to do this
             for param in self.inheritors:
@@ -3230,17 +3245,17 @@ class ParameterTransformed(Parameter):
     ):
         self.name = name
         self.unit = unit
-        self.limits = Limits(transformed=True) if limits is None else limits
-        if not self.limits.transformed:
-            raise ValueError("ParameterTransformed limits must also be transformed")
+        self.limits = Limits() if limits is None else limits
         self.fixed = fixed
         # List of parameters that should inherit values from this one
         self.inheritors = [] if inheritors is None else inheritors
         # List of parameters that can modify this parameter's value - user decides what to do with them
         self.modifiers = [] if modifiers is None else modifiers
-        self.transform = Transform() if transform is None else transform
+        self.transform = transforms_ref['none'] if transform is None else transform
         self.value = None
         self.set_value_transformed(value)
+        if not np.isfinite(self.get_value()):
+            raise RuntimeError(f"Initalized {self} to non-finite value")
 
 
 class FluxParameter(ParameterTransformed):
@@ -3258,7 +3273,6 @@ class FluxParameter(ParameterTransformed):
                 is_fluxratio=self.is_fluxratio,
                 modifiers=self.modifiers,
                 transform=self.transform,
-                transformed=self.transformed,
                 value=self.value,
             ).items()
         ])

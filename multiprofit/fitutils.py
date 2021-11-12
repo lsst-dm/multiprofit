@@ -130,7 +130,7 @@ def get_param_default(
         if profile == "moffat":
             name = "con"
             transform = transforms_ref["inverse"]
-            limits = limits_ref["coninverse"]
+            limits = limits_ref["con"]
             if value is None:
                 value = 2.5
         elif profile == "sersic":
@@ -141,16 +141,17 @@ def get_param_default(
                     limits = limits_ref["nsermultigauss"]
                 else:
                     transform = transforms_ref["logitsersic"]
+                    limits = limits_ref["nser"]
             else:
                 transform = transforms_ref["log10"]
-                limits = limits_ref["nserlog10"]
+                limits = limits_ref["nser"]
             if value is None:
                 value = 0.5
     elif param == "sigma_x" or param == "sigma_y":
         transform = transforms_ref["log10"]
     elif param == "rho":
         transform = transforms_ref["logitrho"]
-        limits = limits_ref["logitrho"]
+        limits = limits_ref["rho"]
     elif param == "rscale":
         transform = transforms_ref['log10']
 
@@ -158,7 +159,7 @@ def get_param_default(
         # TODO: Improve this (at least check limits)
         value = 0.
     elif not is_value_transformed:
-        value = transform.transform(value)
+        value = transform.forward(value)
 
     if return_value:
         return value
@@ -213,7 +214,7 @@ def get_components(profile, fluxes, values=None, is_values_transformed=False, is
         is_last = compi == (num_comps - 1)
         param_fluxescomp = [
             mpfobj.FluxParameter(
-                name="flux", value=transform.transform(fluxes[band][compi]), unit=None, band=band,
+                name="flux", value=transform.forward(fluxes[band][compi]), unit=None, band=band,
                 limits=limits_ref["none"], transform=transform, fixed=is_last, is_fluxratio=is_fluxes_fracs,
             )
             for band in bands
@@ -325,8 +326,8 @@ def get_model(
         data = None
 
     params_astrometry = [
-        mpfobj.Parameter(name="cenx", value=cenx, unit="pix", limits=Limits(lower=0., upper=size_image[0])),
-        mpfobj.Parameter(name="ceny", value=ceny, unit="pix", limits=Limits(lower=0., upper=size_image[1])),
+        mpfobj.Parameter(name="cenx", value=cenx, unit="pix", limits=Limits(min=0., max=size_image[0])),
+        mpfobj.Parameter(name="ceny", value=ceny, unit="pix", limits=Limits(min=0., max=size_image[1])),
     ]
     modelastro = mpfobj.AstrometricModel(params_astrometry)
     components = []
@@ -377,8 +378,8 @@ def get_model(
         ]
         background = mpfobj.Background(param_fluxes_bg)
         params_astrometry = [
-            mpfobj.Parameter("cenx", cenx, "pix", Limits(lower=0., upper=size_image[0]), fixed=True),
-            mpfobj.Parameter("ceny", ceny, "pix", Limits(lower=0., upper=size_image[1]), fixed=True),
+            mpfobj.Parameter("cenx", cenx, "pix", Limits(min=0., max=size_image[0]), fixed=True),
+            mpfobj.Parameter("ceny", ceny, "pix", Limits(min=0., max=size_image[1]), fixed=True),
         ]
         modelastro = mpfobj.AstrometricModel(params_astrometry)
         modelphoto = mpfobj.PhotometricModel([background])
@@ -978,10 +979,9 @@ def fit_galaxy_model(
                 value_min = 0 if name_param not in init_moments.values_min else \
                     init_moments.values_min[name_param]
                 value_max = init_moments.values_max[name_param]
-                transform = param.transform.transform
+                transform = param.transform.forward
                 param.limits = mpfobj.Limits(
-                    lower=transform(value_min), upper=transform(value_max),
-                    transformed=True)
+                    min=transform(value_min), max=transform(value_max),)
 
             # Reset non-finite free param values
             # This occurs e.g. at the limits of a logit transformed param
@@ -997,6 +997,8 @@ def fit_galaxy_model(
                     for _ in range(100):
                         value_param = np.nextafter(value_param, direction)
                     param.set_value(value_param)
+            if not np.isfinite(param.get_value()):
+                raise RuntimeError(f"Initialized param={param} to non-finite value")
 
             # This has to come after resetting param fixed status above
             if plot and not param.fixed:
@@ -1747,9 +1749,10 @@ def init_model(
 
     fit_init = fits_engine.get(inittype)
     has_fit_init = fit_init is not None
+
     if logger:
         logger.debug(f'Init model name={model.name} type-{modeltype} using inittype={inittype};'
-                    f' hasinitfit={has_fit_init}')
+                     f' hasinitfit={has_fit_init}')
     if has_fit_init:
         values_param_init = fit_init.fits[-1]["params_bestall"]
         # TODO: Find a more elegant method to do this
@@ -1814,6 +1817,8 @@ def init_model(
                             modeli.sources[idx_src].modelphotometric.components = []
                         values_param_init = [param.get_value()
                                              for param in model.get_parameters(fixed=True)]
+                        if not np.all(np.isfinite(values_param_init)):
+                            raise RuntimeError(f'values_param_init={values_param_init} not all finite')
                         model.sources[idx_src].modelphotometric.components = components_old
                 model = model_new
         if is_mg_to_gauss:
