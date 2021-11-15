@@ -510,6 +510,7 @@ def main():
     rgcfits = ap.io.fits.open(os.path.join(args.catalogpath, args.catalogfile))[1].data
     nfit = 0
     time_mpf_total = 0
+    time_start = time.time()
     for index in args.indices:
         idrange = [np.int(x) for x in index.split(",")]
         for idnum in range(idrange[0], idrange[0 + (len(idrange) > 1)] + 1):
@@ -552,7 +553,7 @@ def main():
                 with open(args.file, 'wb') as f:
                     pickle.dump(data, f)
 
-        print(f"Finished fitting {nfit} galaxies in {time.time() - time_now:.2f} seconds"
+        print(f"Finished fitting {nfit} galaxies in {time.time() - time_start:.2f} seconds"
               f" ({time_mpf_total:.3f} MultiProFit time)")
 
     if args.write and args.file is not None:
