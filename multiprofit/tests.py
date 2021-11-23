@@ -48,7 +48,7 @@ def get_setup(xdim=15, ydim=15, r_major=1, axrat=1, angle=0, nsub=1,
     img = "g2.ImagePyD"
     arr = "g2.ImageArrayPyD"
     cmds.extend([
-            f'data = {img}(data=g2.make_gaussian_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data'
+            f'data = {img}(data=g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data'
             f' + np.random.normal(scale={noise}, size=[{ydim}, {xdim}]))',
             f'sigma_inv = {img}(data=1./np.array([[{noise}]]))',
         ] if (do_like or do_residual or do_grad or do_jac) else ['data, sigma_inv = None, None'])
@@ -116,7 +116,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
     centroid = g2.Centroid(xdim/2, ydim/2)
     kernel = g2.Gaussian(centroid=g2.Centroid(0, 0), ellipse=g2.Ellipse(sigma_x=0., sigma_y=0))
 
-    cmd_func = 'g2.make_gaussian_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim,)'
+    cmd_func = 'g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim,)'
     cmd_obj = 'evaluator.loglike_pixel()'
 
     functions = {
@@ -146,7 +146,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                 source = g2.Gaussian(centroid=centroid, ellipse=ellipse,
                                      integral=g2.GaussianIntegralValue(1/nsub))
                 gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range(nsub)])
-                gaussmpf = g2.make_gaussian_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data
+                gaussmpf = g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data
                 result = 'Ran make'
                 if hasgs:
                     gaussgs = gs.Gaussian(flux=1, half_light_radius=reff*np.sqrt(axrat)).shear(
@@ -214,7 +214,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
 
 def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                   reff_psf=0, axrat_psf=0.95, ang_psf=0, printout=False, plot=False):
-    cenx, ceny = dimx/2., dimy/2.
+    cen_x, cen_y = dimx/2., dimy/2.
     # Keep this in units of sigma, not re==FWHM/2
     source = g2.EllipseMajor(reff*g2.M_SIGMA_HWHM, axrat, ang, degrees=True)
     source_g = g2.Ellipse(source)
@@ -223,14 +223,14 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     psf_g = g2.Ellipse(psf)
     conv = g2.EllipseMajor(source_g.make_convolution(psf_g), degrees=True)
 
-    source = g2.Gaussian(centroid=g2.Centroid(x=cenx, y=ceny), ellipse=source_g, integral=flux)
+    source = g2.Gaussian(centroid=g2.Centroid(x=cen_x, y=cen_y), ellipse=source_g, integral=flux)
     gaussians = g2.Gaussians([
         g2.ConvolvedGaussian(
             source=source,
             kernel=g2.Gaussian(centroid=g2.Centroid(x=0, y=0), ellipse=psf_g),
         )
     ])
-    model = g2.make_gaussian_pixel_py_D(gaussians, n_rows=dimy, n_cols=dimx).data
+    model = g2.make_gaussians_pixel_py_D(gaussians, n_rows=dimy, n_cols=dimx).data
 
     if printout:
         psf_c = g2.Covariance(psf_g)
@@ -238,7 +238,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         deconvs = (False, True) if has_psf else (False,)
         covar_ests = [
             g2.Covariance(
-                *estimate_ellipse(model, cenx=cenx, ceny=ceny, denoise=False, return_as_params=True,
+                *estimate_ellipse(model, cen_x=cen_x, cen_y=cen_y, denoise=False, return_as_params=True,
                                   deconvolution_params=deconv_params if deconv else None)
             ) for deconv in deconvs
         ]
@@ -280,7 +280,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         dx[i] = dxi
         # Note that mpf computes dll/drho where the diagonal term is rho*sigma_x*sigma_y
         params = np.array([[
-            cenx + dx[0], ceny + dx[1], flux + dx[2],
+            cen_x + dx[0], cen_y + dx[1], flux + dx[2],
             source_g.sigma_x + dx[3], source_g.sigma_y + dx[4], source_g.rho + dx[5],
             psf_g.sigma_x, psf_g.sigma_y, psf_g.rho
         ]])
