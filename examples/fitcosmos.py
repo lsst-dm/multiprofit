@@ -34,7 +34,6 @@ import time
 import traceback
 
 import multiprofit.fitutils as mpffit
-import multiprofit.gaussutils as mpfgauss
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 
@@ -385,7 +384,7 @@ def fit_galaxy_cosmos(
             kwargs['results'] = results[src] if src in results else None
             redo = {}
             for suffix in ['', 'psfs']:
-                key = '_'.join(['redo'] + ([suffix] if suffix is not '' else []))
+                key = '_'.join(['redo'] + ([suffix] if suffix != '' else []))
                 if key in kwargs:
                     redo[suffix] = kwargs[key]
                     del kwargs[key]
@@ -510,6 +509,8 @@ def main():
         ccat = None
     rgcfits = ap.io.fits.open(os.path.join(args.catalogpath, args.catalogfile))[1].data
     nfit = 0
+    time_mpf_total = 0
+    time_start = time.time()
     for index in args.indices:
         idrange = [np.int(x) for x in index.split(",")]
         for idnum in range(idrange[0], idrange[0 + (len(idrange) > 1)] + 1):
@@ -539,13 +540,21 @@ def main():
                     except Exception as te:
                         e = RuntimeError(str(type(e)) + str(e) + "; pickling error:" + str(te))
                     data[idnum] = {'error': e, 'trace': trace}
-            print("Finished fitting COSMOS galaxy with ID: {} in total time of {:.2f} seconds".format(
-                idnum, time.time() - time_now
-            ))
+            # bit of a hack: galsim won't evaluate the gradient
+            time_mpf = np.sum([
+                np.sum([y['time'] for y in x.fits if y['n_eval_grad'] > 0])
+                for x in data[idnum]['hst']['fits']['galsim'].values()
+            ])
+            print(f"Finished fitting COSMOS galaxy ID={idnum} in {time.time() - time_now:.2f} seconds"
+                  f" ({time_mpf:.3f} MultiProFit time)")
+            time_mpf_total += time_mpf
             nfit += 1
             if args.write and args.file is not None and (nfit % args.nwrite) == 0:
                 with open(args.file, 'wb') as f:
                     pickle.dump(data, f)
+
+        print(f"Finished fitting {nfit} galaxies in {time.time() - time_start:.2f} seconds"
+              f" ({time_mpf_total:.3f} MultiProFit time)")
 
     if args.write and args.file is not None:
         with open(args.file, 'wb') as f:

@@ -1,4 +1,6 @@
-import multiprofit.tests as mpftest; import numpy as np 
+import multiprofit.tests as mpftest
+import numpy as np
+
 np.random.seed(1)
 for reff, axrat, ang in [(4.457911011776755, 0.6437167462922668, 44.55485360075)]:
     for reff_psf, axrat_psf, ang_psf in [

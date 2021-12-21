@@ -1,5 +1,12 @@
 import multiprofit.tests as mpftest
-test = mpftest.gaussian_test(nbenchmark=200, do_grad=True, do_jac=True, nsub=4) 
-for x in test: 
-    print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
+from timeit import default_timer as timer
 
+start = timer()
+test = mpftest.gaussian_test(
+    nbenchmark=100, do_like=True, do_residual=True, do_grad=True, do_jac=True,
+    do_meas_modelfit=False, nsub=4,
+)
+for x in test: 
+    print(f"re={x['reff']:.3f} q={x['axrat']:.2f}"
+          f" ang={x['ang']:2.1f} { x['string']}")
+print(f'Test complete in {timer() - start:.2f}s')

@@ -23,11 +23,52 @@ from importlib.util import find_spec
 import numpy as np
 import matplotlib.pyplot as plt
 from multiprofit.fitutils import get_model
-import gauss2d
-import gauss2d.utils
+import gauss2d as g2
 from multiprofit.objects import get_gsparams, names_params_gauss
 from multiprofit.utils import estimate_ellipse
 import timeit
+
+
+def get_setup(xdim=15, ydim=15, r_major=1, axrat=1, angle=0, nsub=1,
+              do_output=False, do_like=False, do_residual=False, do_grad=False, do_jac=False, noise=1e-2):
+    cmds = [
+        'import gauss2d as g2',
+        'import numpy as np',
+        f'xdim={xdim}',
+        f'ydim={ydim}',
+        f'centroid = g2.Centroid({xdim}/2, {ydim}/2)',
+        f'kernel = g2.Gaussian(centroid=g2.Centroid(0, 0),'
+        'ellipse=g2.Ellipse(sigma_x=0., sigma_y=0))',
+        'ellipse = g2.Ellipse(g2.EllipseMajor('
+        f'r_major={r_major}*g2.M_SIGMA_HWHM, axrat={axrat}, angle={angle}, degrees=True))',
+        f'source = g2.Gaussian(centroid=centroid, ellipse=ellipse,'
+        f' integral=g2.GaussianIntegralValue(1/{nsub}))',
+        f'gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range({nsub})])',
+    ]
+    img = "g2.ImagePyD"
+    arr = "g2.ImageArrayPyD"
+    cmds.extend([
+            f'data = {img}(data=g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data'
+            f' + np.random.normal(scale={noise}, size=[{ydim}, {xdim}]))',
+            f'sigma_inv = {img}(data=1./np.array([[{noise}]]))',
+        ] if (do_like or do_residual or do_grad or do_jac) else ['data, sigma_inv = None, None'])
+    cmds.append(
+        f'output = {f"{img}(dim_y={ydim}, dim_x={xdim})" if do_output else "None"}'
+    )
+    cmds.append(
+        f'residual = {f"{img}(dim_y={ydim}, dim_x={xdim})" if do_residual else "None"}'
+    )
+    # TODO: Find a better way to set n_params=6
+    args_grad = f"{arr}([{img}(dim_y={ydim}, dim_x={xdim}) for _ in range(6*{nsub})])" if do_jac else (
+        f"{arr}([{img}(dim_y={nsub}, dim_x=6)])" if do_grad else None
+    )
+    cmds.append(f'grads = {args_grad}')
+    if do_output or do_like or do_residual or do_grad or do_jac:
+        args = ", ".join([f"{x}={x}"
+                          for x in ("gaussians", "data", "sigma_inv", "output", "residual", "grads")
+                          ])
+        cmds.append(f'evaluator = g2.GaussianEvaluatorPyD({args})')
+    return '; '.join(cmds)
 
 
 # Example usage:
@@ -35,7 +76,8 @@ import timeit
 # for x in test:
 #   print('re={} q={:.2f} ang={:2.0f} {}'.format(x['reff'], x['axrat'], x['ang'], x['string']))
 def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchmark=0, nsub=1,
-                  do_like=True, do_grad=False, do_jac=False, do_meas_modelfit=False):
+                  do_like=True, do_residual=False, do_grad=False, do_jac=False, do_meas_modelfit=False,
+                  plot=False):
     """
     Test and/or benchmark different gaussian evaluation methods.
 
@@ -53,6 +95,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
     :param nbenchmark: int; number of times to repeat function evaluation for benchmarking
     :param nsub: int; number of (identical) Gaussians to evaluate (as for a GMM)
     :param do_like: bool; whether to evaluate the likelihood
+    :param do_residual: bool; whether to evaluate the residual
     :param do_grad: bool; whether to evaluate the likelihood gradient
     :param do_jac: bool; whether to evaluate the model Jacobian
     :param do_meas_modelfit: bool; whether to test meas_modelfit's code
@@ -63,66 +106,69 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
     if angs is None:
         angs = np.linspace(0, 90, 7)
     if axrats is None:
-        axrats = [0.01, 0.1, 0.2, 0.5, 1]
+        axrats = [1, 0.5, 0.2, 0.1, 0.01]
     results = []
     hasgs = find_spec('galsim') is not None
     num_params = nsub*6
     if hasgs:
         import galsim as gs
+
+    centroid = g2.Centroid(xdim/2, ydim/2)
+    kernel = g2.Gaussian(centroid=g2.Centroid(0, 0), ellipse=g2.Ellipse(sigma_x=0., sigma_y=0))
+
+    cmd_func = 'g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim,)'
+    cmd_obj = 'evaluator.loglike_pixel()'
+
+    functions = {
+        'eval': (cmd_func, {'nsub': nsub}),
+        'output': (cmd_obj, {'nsub': nsub, 'do_output': True}),
+    }
+    if do_like:
+        functions['like'] = (cmd_obj, {'nsub': nsub, 'do_like': True})
+    if do_residual:
+        functions['residual'] = (cmd_obj, {'nsub': nsub, 'do_residual': True})
+    if do_grad:
+        functions['grad'] = (cmd_obj, {'nsub': nsub, 'do_grad': True})
+    if do_jac:
+        functions['jac'] = (cmd_obj, {'nsub': nsub, 'do_jac': True})
+
+    for key, (cmd, kwargs_setup) in functions.items():
+        setup = get_setup(**kwargs_setup)
+        print(f'Evaluating with {key}: "{setup}; {cmd}"')
+        exec('; '.join((setup, cmd)), locals(), locals())
+
     for reff in reffs:
         for ang in angs:
             for axrat in axrats:
-                gaussmpfold = gauss2d.make_gaussian_pixel_sersic(
-                    xdim/2, ydim/2, 1, reff, axrat, ang, 0, xdim, 0, ydim, xdim, ydim)
-                gaussmpf = gauss2d.make_gaussian_pixel(
-                    xdim/2, ydim/2, 1, reff, axrat, ang, 0, xdim, 0, ydim, xdim, ydim)
-                oldtonew = np.sum(np.abs(gaussmpf-gaussmpfold))
-                result = 'Old/new residual=({:.3e})'.format(oldtonew)
+                ellipse = g2.Ellipse(
+                    g2.EllipseMajor(r_major=reff*g2.M_SIGMA_HWHM, axrat=axrat, angle=ang, degrees=True)
+                )
+                source = g2.Gaussian(centroid=centroid, ellipse=ellipse,
+                                     integral=g2.GaussianIntegralValue(1/nsub))
+                gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range(nsub)])
+                gaussmpf = g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data
+                result = 'Ran make'
                 if hasgs:
                     gaussgs = gs.Gaussian(flux=1, half_light_radius=reff*np.sqrt(axrat)).shear(
                         q=axrat, beta=ang*gs.degrees).drawImage(
                         nx=xdim, ny=ydim, scale=1, method='no_pixel').array
+                    if plot:
+                        fig, ax = plt.subplots(ncols=3)
+                        ax[0].imshow(np.log10(gaussmpf))
+                        ax[1].imshow(np.log10(gaussgs))
+                        ax[2].imshow(gaussgs - gaussmpf)
+                        plt.show()
                     gstonew = np.sum(np.abs(gaussmpf-gaussgs))
-                    result += '; GalSim/new residual=({:.3e})'.format(gstonew)
+                    result += f'; GalSim/new residual=({gstonew:.3e})'
                 if nbenchmark > 0:
-                    argsmpf = ('(' + ','.join(np.repeat('{}', 12)) + ')').format(
-                        xdim/2, ydim/2, 1, reff, axrat, ang, 0, xdim, 0, ydim, xdim, ydim)
-                    functions = {
-                        'old': 'gauss2d.make_gaussian_pixel_sersic' + argsmpf,
-                        'new': 'gauss2d.make_gaussian_pixel' + argsmpf,
-                    }
-                    if do_like or do_grad or do_jac:
-                        ell = gauss2d.Ellipse(gauss2d.EllipseMajor(
-                            gauss2d.M_SIGMA_HWHM*reff, axrat, ang, degrees=True,
-                        ))
-                        gaussparams = (f'({xdim/2}, {ydim/2}, {1/nsub}, {ell.sigma_x}, {ell.sigma_y},'
-                                       f' {ell.rho}, 0, 0, 0)')
-                        gaussarrays = f'np.array([{",".join(np.repeat(gaussparams, nsub))}])'
-                    if do_like:
-                        functions['like'] = f'g2dutils.loglike_gaussians_pixel(data, data, {gaussarrays})'
-                    if do_grad:
-                        functions['grad'] = (f'g2dutils.loglike_gaussians_pixel(data, data, {gaussarrays},'
-                                             f' grad=grads)')
-                    if do_jac:
-                        functions['jac'] = (f'g2dutils.loglike_gaussians_pixel(data, data, {gaussarrays},'
-                                            f' grad=grads)')
                     times = {
                         key: np.min(timeit.repeat(
-                            callstr,
-                            setup='import gauss2d; import gauss2d.utils as g2dutils' + (
-                                  f'; import numpy as np; data=np.zeros(({ydim}, {xdim}))'
-                                  f'; zeros = np.zeros(({ydim}, {xdim}))'
-                                  f'; zeros_s = np.zeros(0, dtype=np.uint64)'
-                                if key in ['grad', 'like', 'jac'] else ''
-                            ) + (
-                                f'; grads = np.zeros(({num_params}))' if key == 'grad' else (
-                                    f'; grads = np.zeros(({ydim},{xdim},{num_params}))'
-                                    if key == 'jac' else ''
-                                )
-                            ),
-                            repeat=nbenchmark, number=1
+                            cmd,
+                            setup=get_setup(xdim, ydim, reff, axrat, ang, **kwargs_setup),
+                            repeat=nbenchmark,
+                            number=1,
                         ))
-                        for key, callstr in functions.items()
+                        for key, (cmd, kwargs_setup) in functions.items()
                     }
                     if do_meas_modelfit:
                         ang_rad = np.deg2rad(ang)
@@ -147,46 +193,52 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                             ))
                     if hasgs:
                         times['GalSim'] = np.min(timeit.repeat(
-                            f'x=gs.Gaussian(flux=1, half_light_radius={reff*np.sqrt(axrat)}).shear('
-                            f'q={axrat}, beta={ang}*gs.degrees)'
-                            f'.drawImage(nx={xdim}, ny={ydim}, scale=1, method="no_pixel").array',
-                            setup='import galsim as gs', repeat=nbenchmark, number=1
+                            f'x=profile.drawImage(nx={xdim}, ny={ydim}, scale=1, method="no_pixel").array',
+                            setup=f'import galsim as gs; profile = gs.Gaussian(flux=1,'
+                                  f' half_light_radius={reff*np.sqrt(axrat)}).shear('
+                                  f'q={axrat}, beta={ang}*gs.degrees)',
+                            repeat=nbenchmark, number=1
                         ))
                     result += f";{'/'.join(times.keys())} times=(" \
                         f"{','.join(['{:.3e}'.format(x) for x in times.values()])})"
-                results.append({
-                    'string': result,
-                    'xdim': xdim,
-                    'ydim': ydim,
-                    'reff': reff,
-                    'axrat': axrat,
-                    'ang': ang,
-                })
+                    results.append({
+                        'string': result,
+                        'xdim': xdim,
+                        'ydim': ydim,
+                        'reff': reff,
+                        'axrat': axrat,
+                        'ang': ang,
+                    })
     return results
 
 
 def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                   reff_psf=0, axrat_psf=0.95, ang_psf=0, printout=False, plot=False):
-    cenx, ceny = dimx/2., dimy/2.
+    cen_x, cen_y = dimx/2., dimy/2.
     # Keep this in units of sigma, not re==FWHM/2
-    source = gauss2d.EllipseMajor(reff*gauss2d.M_SIGMA_HWHM, axrat, ang, degrees=True)
-    source_g = gauss2d.Ellipse(source)
+    source = g2.EllipseMajor(reff*g2.M_SIGMA_HWHM, axrat, ang, degrees=True)
+    source_g = g2.Ellipse(source)
     has_psf = reff_psf > 0
-    psf = gauss2d.EllipseMajor(reff_psf*gauss2d.M_SIGMA_HWHM, axrat_psf, ang_psf, degrees=True)
-    psf_g = gauss2d.Ellipse(psf)
-    conv = gauss2d.EllipseMajor(source_g.make_convolution(psf_g), degrees=True)
-    model = gauss2d.make_gaussian_pixel(
-        cenx, ceny, flux, conv.r_major*gauss2d.M_HWHM_SIGMA, conv.axrat, conv.angle,
-        0, dimx, 0, dimy, dimx, dimy
-    )
+    psf = g2.EllipseMajor(reff_psf*g2.M_SIGMA_HWHM, axrat_psf, ang_psf, degrees=True)
+    psf_g = g2.Ellipse(psf)
+    conv = g2.EllipseMajor(source_g.make_convolution(psf_g), degrees=True)
+
+    source = g2.Gaussian(centroid=g2.Centroid(x=cen_x, y=cen_y), ellipse=source_g, integral=flux)
+    gaussians = g2.Gaussians([
+        g2.ConvolvedGaussian(
+            source=source,
+            kernel=g2.Gaussian(centroid=g2.Centroid(x=0, y=0), ellipse=psf_g),
+        )
+    ])
+    model = g2.make_gaussians_pixel_py_D(gaussians, n_rows=dimy, n_cols=dimx).data
 
     if printout:
-        psf_c = gauss2d.Covariance(psf_g)
+        psf_c = g2.Covariance(psf_g)
         deconv_params = [psf_c.sigma_x_sq, psf_c.sigma_y_sq, psf_c.cov_xy]
         deconvs = (False, True) if has_psf else (False,)
         covar_ests = [
-            gauss2d.Covariance(
-                *estimate_ellipse(model, cenx=cenx, ceny=ceny, denoise=False, return_as_params=True,
+            g2.Covariance(
+                *estimate_ellipse(model, cen_x=cen_x, cen_y=cen_y, denoise=False, return_as_params=True,
                                   deconvolution_params=deconv_params if deconv else None)
             ) for deconv in deconvs
         ]
@@ -197,52 +249,44 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         print(f"Convolved: {conv}")
         print("reff, axrat, ang:", (conv.r_major, conv.axrat, conv.angle))
         print("Estimated ellipse (covar):", covar_ests[0])
-        print("Estimated ellipse (ellipse):", gauss2d.EllipseMajor(covar_ests[0]))
+        print("Estimated ellipse (ellipse):", g2.EllipseMajor(covar_ests[0]))
         if has_psf:
             print("Estimated deconvolved ellipse (covar):", covar_ests[1])
-            print("Estimated deconvolved ellipse (ellipse):", gauss2d.EllipseMajor(covar_ests[1]))
+            print("Estimated deconvolved ellipse (ellipse):", g2.EllipseMajor(covar_ests[1]))
 
-    data = np.random.poisson(model + bg) - bg
-    sigma_inv = np.array([[1/bg]])
-    output = np.zeros_like(data)
-    num_params = 6
-    grads = np.zeros(num_params)
-    params_init = np.array([[
-        cenx, ceny, flux,
-        source_g.sigma_x, source_g.sigma_y, source_g.rho,
-        psf_g.sigma_x, psf_g.sigma_y, psf_g.rho
-    ]])
-    print(conv, source_g.make_convolution(gauss2d.Ellipse(psf)))
+    data = g2.ImagePyD(np.random.poisson(model + bg) - bg)
+    sigma_inv = g2.ImagePyD(np.array([[1/bg]]))
+    output = g2.ImagePyD(np.zeros_like(data.data))
+    n_params = 6
+    grads = g2.ImageArrayPyD([g2.ImagePyD(np.zeros((1, n_params)))])
+    print(conv, source_g.make_convolution(g2.Ellipse(psf)))
     # Compute the log likelihood and gradients
-    gauss2d.utils.loglike_gaussians_pixel(data, sigma_inv, params_init, output=output)
-    if plot:
-        fig, axes = plt.subplots(ncols=2)
-        fig.suptitle(f'gauss2d evaluation comparison')
-        axes[0].imshow(model)
-        axes[0].set_title("Model (make_gaussian_pixel)")
-        axes[1].imshow(output)
-        axes[1].set_title("Model (loglike_gaussians_pixel)")
-        plt.show()
-    ll = gauss2d.utils.loglike_gaussians_pixel(data, sigma_inv, params_init, grad=grads)
-    jacobian = np.zeros([dimy, dimx, num_params])
-    gauss2d.utils.loglike_gaussians_pixel(data, sigma_inv, params_init, grad=jacobian)
+    evaluator_i = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, output=output)
+    ll = evaluator_i.loglike_pixel()
+
+    evaluator_g = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, grads=grads)
+    ll_g = evaluator_g.loglike_pixel()
+    jacobian = np.zeros([dimy, dimx, n_params])
+    jacobian_arr = g2.ImageArrayPyD([g2.ImagePyD(jacobian[:, :, idx].view()) for idx in range(n_params)])
+    evaluator_j = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, grads=jacobian_arr)
+    evaluator_j.loglike_pixel()
     dxs = [1e-6, 1e-6, flux*1e-6, 1e-8, 1e-8, 1e-8]
-    dlls = np.zeros(6)
-    diffabs = np.zeros(6)
+    dlls = np.zeros(n_params)
+    diffabs = np.zeros(n_params)
     format_param_name = f'<{max(len(param_name) for param_name in names_params_gauss)}'
 
     for i, dxi in enumerate(dxs):
-        dx = np.zeros(6)
+        dx = np.zeros(n_params)
         dx[i] = dxi
         # Note that mpf computes dll/drho where the diagonal term is rho*sigma_x*sigma_y
         params = np.array([[
-            cenx + dx[0], ceny + dx[1], flux + dx[2],
+            cen_x + dx[0], cen_y + dx[1], flux + dx[2],
             source_g.sigma_x + dx[3], source_g.sigma_y + dx[4], source_g.rho + dx[5],
             psf_g.sigma_x, psf_g.sigma_y, psf_g.rho
         ]])
         # Note that there's no option to return the log likelihood and the Jacobian - the latter skips
         # computing the former for efficiency, assuming that you won't need it
-        llnew = gauss2d.utils.loglike_gaussians_pixel(data, sigma_inv, params, output=output)
+        llnew = evaluator_i.loglike_pixel()
         # It's actually the jacobian of the residual
         findiff = -(output-model)/dxi*sigma_inv
         jacparam = jacobian[:, :, i]
@@ -270,8 +314,8 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     return grads, dlls, diffabs
 
 
-def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss=True, mgsersic_order=8,
-                  do_meas_modelfit=False, flux=1.):
+def mgsersic_test(reff=3, nser=1, axrat=1, angle=0, dimx=15, dimy=None, plot=False, use_fast_gauss=True,
+                  mgsersic_order=8, do_meas_modelfit=False, flux=1.):
     """
     Test multi-Gaussian Sersic approximations compared to the 'true' Sersic profile in 2D.
     :param reff: float; the circular effective radius in pixels.
@@ -290,12 +334,14 @@ def mgsersic_test(reff=3, nser=1, dimx=15, dimy=None, plot=False, use_fast_gauss
     """
     if dimy is None:
         dimy = dimx
-    engineopts = {"use_fast_gauss": True} if use_fast_gauss else None
+    engineopts = {"use_fast_gauss": True, "drawmethod": "no_pixel"} if use_fast_gauss else None
     band = 'i'
     is_gauss = nser == 0.5
     keys = ("gaussian:1" if is_gauss else "sersic:1", f"mgsersic{mgsersic_order}:1")
+    ell = g2.Ellipse(g2.EllipseMajor(r_major=reff, axrat=axrat, angle=angle, degrees=True))
     models = {
-        key[0:3]: get_model({band: flux}, key, (dimx, dimy), sigma_xs=[reff], sigma_ys=[reff], slopes=[nser])
+        key[0:3]: get_model({band: flux}, key, (dimx, dimy),
+                            sigma_xs=[ell.sigma_x], sigma_ys=[ell.sigma_y], slopes=[nser])
         for key in keys
     }
     keys = list(models.keys())

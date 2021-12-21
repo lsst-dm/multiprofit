@@ -1,4 +1,6 @@
-.idea/
+.idea*
+.ipynb*
+.vscode*
 __pycache__/
 build/
 cmake_install.cmake

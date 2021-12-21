@@ -20,7 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABCMeta, abstractmethod
-from multiprofit.objects import EllipseParameters, ParameterTransformed
+from multiprofit.objects import EllipseParameters
 import numpy as np
 import scipy.special as spspec
 import scipy.stats as spstats
@@ -129,7 +129,7 @@ class ShapeLsqPrior(LsqPrior):
             ell = self.ellipse
             for param in (ell.sigma_x, ell.sigma_y, ell.rho):
                 value = float(param.get_value())
-                value_trans = float(param.get_value_transformed())
+                value_trans = float(param.value_transformed)
                 is_rho = param is ell.rho
                 delta = -delta_jacobian*(np.sign(value) + (value == 0)) if is_rho else np.max((value, 1e-3))
                 good = False
@@ -145,9 +145,7 @@ class ShapeLsqPrior(LsqPrior):
                 if not good or not np.abs(eps) > 0:
                     raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
                 _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
-                denom_jac = float(eps)
-                if isinstance(param, ParameterTransformed):
-                    denom_jac *= param.transform.derivative(value)
+                denom_jac = float(eps)*param.transform_derivative(value)
                 jacobian = [(new - old)/denom_jac for new, old in zip(residuals_new, residuals)]
                 if not all(np.isfinite(jacobian)):
                     raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
