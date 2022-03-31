@@ -90,28 +90,29 @@ def truncnorm_logpdf_mean(x, mean=0., scale=1., a=-np.inf, b=np.inf):
     return stats.truncnorm.logpdf(x - mean, scale=scale, a=a, b=b)
 
 
+def is_ratioparam(param):
+    return isinstance(param, g2f.ProperFractionParameterD)
+
+
 def is_fluxparam(param):
-    return isinstance(param, g2f.IntegralParameterD)
+    return isinstance(param, g2f.IntegralParameterD) or is_ratioparam(param)
 
 
 def make_FluxParameter(is_fluxes_fracs=False, *args, **kwargs):
-    param = g2f.IntegralParameterD(*args, **kwargs)
     if is_fluxes_fracs:
-        param.is_ratio = True
+        param = g2f.ProperFractionParameterD(*args, **kwargs)
         limits = kwargs.get('limits')
         if limits is None or not ((limits.min >= 0) and (limits.max <= 1)):
             param.limits = limits_ref['fraction']
+    else:
+        param = g2f.IntegralParameterD(*args, **kwargs)
     return param
 
 
 # Return both is_flux and is_ratio
 def is_fluxparam_ratio(param):
-    is_flux = is_fluxparam(param)
-    return is_flux, is_flux and param.is_ratio
-
-
-def is_ratio(param):
-    return is_fluxparam_ratio(param)[1]
+    is_ratio_param = is_ratioparam(param)
+    return (is_ratio_param or is_fluxparam(param)), is_ratio_param
 
 
 def get_param_default(
@@ -591,7 +592,7 @@ def get_init_from_moments(
                     # First key is engine, next is model
                     psf = next(iter(next(iter(psf.values())).values()))['object']
                     fluxfracs = [p for p in psf.model.get_parameters(fixed=True, free=True)
-                                 if isinstance(p, g2f.IntegralParameterD) and p.is_ratio]
+                                 if is_ratioparam(p)]
                     comps = psf.model.modelphotometric.components
                     if len(fluxfracs) != len(comps):
                         raise RuntimeError(f'PSF model len(fluxes)={len(fluxes)} != len(comps)={len(comps)}')
@@ -664,7 +665,7 @@ def get_init_from_moments(
 def _get_param_name(param):
     is_flux, is_fluxrat = is_fluxparam_ratio(param)
     return (
-        param.name if not is_flux else f'flux{("ratio" if is_fluxrat else "")}_{param.band}',
+        param.name if not is_flux else f'flux{("ratio" if is_fluxrat else "")}_{param.label}',
         is_flux, is_fluxrat
     )
 
@@ -955,7 +956,7 @@ def fit_galaxy_model(
 
         for param in model.get_parameters(fixed=True):
             name_param, is_flux, is_fluxrat, param.fixed = _get_param_info(param, params_fixed)
-            is_fluxrat = is_ratio(param)
+            is_fluxrat = is_ratioparam(param)
             is_bg = param.name == 'background'
 
             # Passing complete init values will override individual params
@@ -1401,7 +1402,8 @@ def get_psfmodel(
         fluxfracs=mpfutil.normalize(2.**(-np.arange(num_comps))), engine=engine, engineopts=engineopts,
         logger=logger)
     for param in model.get_parameters(fixed=False):
-        param.fixed = isinstance(param, g2f.IntegralParameterD) and not param.is_ratio
+        is_flux, is_ratio = is_fluxparam_ratio(param)
+        param.fixed = is_flux and not is_ratio
     set_exposure(model, band, image=image, error_inverse=error_inverse, factor_sigma=factor_sigma)
     return model
 
@@ -1478,8 +1480,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
         if (len(sourcefluxes) > 0) != has_fluxfracs:
             raise RuntimeError('Can\'t init model with has_fluxfracs={} and opposite for model fit')
         for iflux, flux in enumerate(sourcefluxes):
-            is_flux = isinstance(flux, g2f.IntegralParameterD)
-            if is_flux and not flux.is_ratio:
+            is_flux, is_ratio = is_fluxparam_ratio(flux)
+            if is_flux and not is_ratio:
                 fluxes_init.append(flux)
             else:
                 raise RuntimeError(
@@ -1496,7 +1498,7 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
     comps = [comp for comp in flux_comps[1:-1]]
     # Check if fluxcens all length three with a total flux parameter and two centers named cen_x and cen_y
     # TODO: More informative errors; check fluxes_init
-    bands = {flux.band: True for flux in fluxes_init}
+    bands = {flux.label: True for flux in fluxes_init}
     num_bands = len(bands)
     for name, fluxcen in {"init": fluxcens_init, "new": fluxcens}.items():
         num_fluxcens_expect = 2 + num_bands
@@ -1510,8 +1512,8 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
         if error_msg is not None:
             raise RuntimeError(error_msg)
         for idx_band in range(num_bands):
-            is_flux = isinstance(fluxcen[0], g2f.IntegralParameterD)
-            if not is_flux or fluxcen[0].is_ratio:
+            is_flux, is_ratio = is_fluxparam_ratio(fluxcen[0])
+            if not is_flux or is_ratio:
                 raise RuntimeError(f"{name} fluxcen[0] (type={type(fluxcen[0])}) isFluxParameter={is_flux} "
                                    f"or is_ratio")
         if not (fluxcen[num_bands].name == "cen_x" and fluxcen[num_bands+1].name == "cen_y"):
@@ -1530,13 +1532,14 @@ def init_model_from_model_fits(model, modelfits, fluxfracs=None):
                 f'[len(compset)={len(comp_set)}, len(comp_init)={len(comp_init)}, '
                 f'len(fluxfracs)={len(fluxfracs)}] not identical')
         for param_to_set, (param_init, value) in zip(comp_set, comp_init):
-            if isinstance(param_to_set, g2f.IntegralParameterD):
+            is_flux, is_ratio = is_fluxparam_ratio(param_to_set)
+            if is_flux:
                 if has_fluxfracs:
-                    if not param_to_set.is_ratio:
+                    if not is_ratioparam(param_to_set):
                         raise RuntimeError('Component flux parameter is not ratio but should be')
                     param_to_set.value = fluxfracs[idx_comp]
                 else:
-                    if param_to_set.is_ratio:
+                    if is_ratioparam(param_to_set):
                         raise RuntimeError('Component flux parameter is ratio but shouldn\'t be')
                     # Note this means that the new total flux will be some weighted sum of the best fits
                     # for each model that went into this, which may not be ideal. Oh well!
@@ -1577,8 +1580,8 @@ def init_model_by_guessing(model, guesstype, bands, nguesses=5):
                 for param in params:
                     init = None
                     is_sersic = do_sersic and param.name == 'n_ser'
-                    if isinstance(param, g2f.IntegralParameterD) and not (param.name == 'background'):
-                        init = params_init['flux_' + param.band]
+                    if is_fluxparam(param) and not (param.name == 'background'):
+                        init = params_init['flux_' + param.label]
                     elif is_sersic or param.name in names:
                         init = params_init[param.name]
                     if init is not None:

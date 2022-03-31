@@ -425,8 +425,7 @@ class Model:
         description_models = {}
         description_params = {'n_ser': 'n', 'reff': 'r'}
         for formatstring, param in modelparamsformat:
-            is_flux = isinstance(param, g2f.IntegralParameterD)
-            is_ratio = is_flux and param.is_ratio
+            is_ratio = isinstance(param, g2f.ProperFractionParameterD)
             if '=' not in formatstring:
                 name_param = 'f' if is_ratio else (
                     description_params[param.name] if param.name in description_params else param.name)
@@ -435,7 +434,7 @@ class Model:
                 name_param, value = formatstring.split('=')
             if name_param not in description_models:
                 description_models[name_param] = []
-            if not is_ratio or not param.fixed and param.band in bands:
+            if not is_ratio or not param.fixed and param.label in bands:
                 description_models[name_param].append(value.format(param.value))
         # Show the flux ratio if there is only one (otherwise it's painful to work out)
         # Show other parameters if there <= 3 of them otherwise the string is too long
@@ -1397,7 +1396,8 @@ class Model:
                             is_sigma = param.name == "sigma_x" or param.name == "sigma_y"
                             is_r_scale = param.name == 'r_scale'
                             if idx_param > 0:
-                                is_flux = isinstance(param, g2f.IntegralParameterD)
+                                is_flux = isinstance(param, g2f.IntegralParameterD) or isinstance(
+                                    param, g2f.ProperFractionParameterD)
                                 weight_grad = weight if is_flux and param_flux_ratio_is_none else 1.
                                 # The function returns df/dg, where g is the Gaussian parameter
                                 # We want df/dp, where p(g) is the fit parameter
@@ -2094,7 +2094,10 @@ class Modeller:
             params_init = np.array([param.value_transformed for param in params_free])
 
         name_params = [param.name for param in params_free]
-        is_flux_params_free = [isinstance(param, g2f.IntegralParameterD) for param in params_free]
+        is_flux_params_free = [
+            isinstance(param, g2f.IntegralParameterD) or isinstance(param, g2f.ProperFractionParameterD)
+            for param in params_free
+        ]
         is_any_flux_free = any(is_flux_params_free)
         # Is this a linear problem? True iff all free params are fluxes
         is_linear = all(is_flux_params_free)
@@ -2515,21 +2518,21 @@ class PhotometricModel:
         for profiles_comp, comp in zip(profiles, self.components):
             if not isinstance(comp, Background):
                 for i, flux in enumerate(comp.fluxes):
-                    profile_band = profiles_comp[flux.band]
-                    if flux.is_ratio is use_fluxfracs:
+                    profile_band = profiles_comp[flux.label]
+                    if isinstance(flux, g2f.ProperFractionParameterD) is use_fluxfracs:
                         raise RuntimeError(
-                            f'Tried to convert component with is_ratio={flux.is_ratio}'
+                            f'Tried to convert component with is_ratio=True'
                             f' already == use_fluxfracs={use_fluxfracs}')
                     if use_fluxfracs:
-                        if flux.band in self.fluxes:
-                            self.fluxes[flux.band].append(flux)
+                        if flux.label in self.fluxes:
+                            self.fluxes[flux.label].append(flux)
                         else:
-                            self.fluxes[flux.band] = np.array([flux])
+                            self.fluxes[flux.label] = np.array([flux])
                     else:
-                        flux = g2f.IntegralParameterD(label=flux.band, value=0, **kwargs)
+                        flux = g2f.IntegralParameterD(label=flux.label, value=0, **kwargs)
                         flux.value = profile_band['flux']
                         comp.fluxes[i] = flux
-                comp.fluxes_dict = {flux.band: flux for flux in comp.fluxes}
+                comp.fluxes_dict = {flux.label: flux for flux in comp.fluxes}
         if use_fluxfracs:
             # Convert fluxes to fractions
             for band, fluxes in self.fluxes.items():
@@ -2551,8 +2554,8 @@ class PhotometricModel:
                 for idx, flux in enumerate(fluxes):
                     is_last = idx == idx_last
                     value = 1 if is_last else values[i]/total
-                    fluxfrac = g2f.IntegralParameterD(
-                        label=flux.band, value=value, is_ratio=True,
+                    fluxfrac = g2f.ProperFractionParameterD(
+                        label=flux.label, value=value, is_ratio=True,
                         fixed=True if is_last else fixed, **kwargs)
                     fluxes[idx] = fluxfrac
                     total -= values[idx]
@@ -2613,7 +2616,7 @@ class PhotometricModel:
                 profile_band["param_flux_ratios"] = params_fluxratio
                 profile_band["param_flux_idx"] = idx
         for flux in comp.fluxes:
-            if flux.is_ratio and flux.value != 1.:
+            if isinstance(flux, g2f.ProperFractionParameterD) and flux.value != 1.:
                 raise RuntimeError('Non-unity flux ratio for final component')
         return profiles
 
@@ -2629,18 +2632,18 @@ class PhotometricModel:
             if not isinstance(flux, g2f.IntegralParameterD):
                 raise TypeError("PhotometricModel flux[{:d}](type={:s}) is not an instance of {:s}".format(
                     i, type(flux), type(g2f.IntegralParameterD)))
-        bands_comps = [[flux.band for flux in comp.fluxes] for comp in components]
+        bands_comps = [[flux.label for flux in comp.fluxes] for comp in components]
         # TODO: Check if component has a redundant mag or no specified flux ratio
         if not mpfutil.allequal(bands_comps):
             raise ValueError(
                 "Bands of component fluxes in PhotometricModel components not all equal: {}".format(
                     bands_comps))
-        bands_fluxes = [flux.band for flux in fluxes]
+        bands_fluxes = [flux.label for flux in fluxes]
         if any([band not in bands_comps[0] for band in bands_fluxes]):
             raise ValueError("Bands of fluxes in PhotometricModel fluxes not all in fluxes of the "
                              "components: {} not all in {}".format(bands_fluxes, bands_comps[0]))
         self.components = components
-        self.fluxes = {flux.band: flux for flux in fluxes}
+        self.fluxes = {flux.label: flux for flux in fluxes}
         self.modifiers = [] if modifiers is None else modifiers
 
 
@@ -2701,13 +2704,14 @@ class Component(object, metaclass=ABCMeta):
 
     def __init__(self, fluxes, name=""):
         for i, param in enumerate(fluxes):
-            if not isinstance(param, g2f.IntegralParameterD):
+            if not (isinstance(param, g2f.IntegralParameterD)
+                    or isinstance(param, g2f.ProperFractionParameterD)):
                 raise TypeError(
                     "Component flux[{:d}] (type={:s}) is not an instance of {:s}".format(
                         i, str(type(param)), str(type(g2f.IntegralParameterD)))
                 )
         self.fluxes = fluxes
-        self.fluxes_dict = {flux.band: flux for flux in self.fluxes}
+        self.fluxes_dict = {flux.label: flux for flux in self.fluxes}
         self.name = name
 
 
@@ -2874,7 +2878,7 @@ class EllipticalParametricComponent(EllipticalComponent):
             flux_param_band = self.fluxes_dict[band]
             profile = profile_base.copy()
             flux = flux_param_band.value
-            if flux_param_band.is_ratio:
+            if isinstance(flux_param_band, g2f.ProperFractionParameterD):
                 if not 0 <= flux <= 1:
                     raise ValueError(f"flux ratio not 0 <= {flux} <= 1")
                 flux_value = flux*flux_by_band[band]
