@@ -940,7 +940,7 @@ class Model:
                     if not np.isclose(likelihood_new, likelihood_exposure):
                         raise RuntimeError(
                             f'get_exposure_likelihood={likelihood_exposure:.6e} !close to '
-                            f'loglike_gaussians_pixel={likelihood_new:.6e} (diff='
+                            f'loglike_pixel={likelihood_new:.6e} (diff='
                             f'{likelihood_exposure - likelihood_new:.6e})'
                         )
                     if missing_likelihood:
@@ -964,11 +964,11 @@ class Model:
 
                 if do_compare_likelihoods:
                     if likelihood_exposure is None:
-                        print('what')
+                        raise RuntimeError('likelihood_exposure should not be None')
                     if not np.isclose(likelihood_validate, likelihood_exposure):
                         raise RuntimeError(
                             f'get_exposure_likelihood={likelihood_exposure:.6e} !close to '
-                            f'loglike_gaussians_pixel={likelihood_validate:.6e} (diff='
+                            f'loglike_pixel={likelihood_validate:.6e} (diff='
                             f'{likelihood_exposure - likelihood_validate:.6e})'
                         )
 
@@ -1272,7 +1272,7 @@ class Model:
             gsparams = get_gsparams(engineopts)
 
         if do_draw_image:
-            image = np.zeros_like(exposure.image)
+            image = np.zeros_like(exposure.image, dtype=float)
 
         model = {}
 
