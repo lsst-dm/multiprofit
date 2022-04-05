@@ -223,7 +223,26 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     psf_g = g2.Ellipse(psf)
     conv = g2.EllipseMajor(source_g.make_convolution(psf_g), degrees=True)
 
-    source = g2.Gaussian(centroid=g2.Centroid(x=cen_x, y=cen_y), ellipse=source_g, integral=flux)
+    source = g2.Gaussian(centroid=g2.Centroid(x=cen_x, y=cen_y), ellipse=source_g,
+                         integral=g2.GaussianIntegralValue(flux))
+    values = (source.centroid.x, source.centroid.y, source.integral,
+              source.ellipse.sigma_x, source.ellipse.sigma_y, source.ellipse.rho,)
+
+    def set_param(gauss, idx, value):
+        if idx == 0:
+            gauss.centroid.x = value
+        elif idx == 1:
+            gauss.centroid.y = value
+        elif idx == 2:
+            gauss.integral = value
+        elif idx == 3:
+            gauss.ellipse.sigma_x = value
+        elif idx == 4:
+            gauss.ellipse.sigma_y = value
+        else:
+            gauss.ellipse.rho = value
+
+
     gaussians = g2.Gaussians([
         g2.ConvolvedGaussian(
             source=source,
@@ -259,17 +278,20 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     output = g2.ImagePyD(np.zeros_like(data.data))
     n_params = 6
     grads = g2.ImageArrayPyD([g2.ImagePyD(np.zeros((1, n_params)))])
-    print(conv, source_g.make_convolution(g2.Ellipse(psf)))
+
     # Compute the log likelihood and gradients
     evaluator_i = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, output=output)
     ll = evaluator_i.loglike_pixel()
 
-    evaluator_g = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, grads=grads)
+    evaluator_g = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, output=output,
+                                          grads=grads)
     ll_g = evaluator_g.loglike_pixel()
+
     jacobian = np.zeros([dimy, dimx, n_params])
     jacobian_arr = g2.ImageArrayPyD([g2.ImagePyD(jacobian[:, :, idx].view()) for idx in range(n_params)])
     evaluator_j = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, grads=jacobian_arr)
     evaluator_j.loglike_pixel()
+
     dxs = [1e-6, 1e-6, flux*1e-6, 1e-8, 1e-8, 1e-8]
     dlls = np.zeros(n_params)
     diffabs = np.zeros(n_params)
@@ -278,17 +300,14 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
     for i, dxi in enumerate(dxs):
         dx = np.zeros(n_params)
         dx[i] = dxi
-        # Note that mpf computes dll/drho where the diagonal term is rho*sigma_x*sigma_y
-        params = np.array([[
-            cen_x + dx[0], cen_y + dx[1], flux + dx[2],
-            source_g.sigma_x + dx[3], source_g.sigma_y + dx[4], source_g.rho + dx[5],
-            psf_g.sigma_x, psf_g.sigma_y, psf_g.rho
-        ]])
+        value = values[i]
+        set_param(source, i, value + dxi)
         # Note that there's no option to return the log likelihood and the Jacobian - the latter skips
         # computing the former for efficiency, assuming that you won't need it
-        llnew = evaluator_i.loglike_pixel()
+        llnew = evaluator_g.loglike_pixel()
+
         # It's actually the jacobian of the residual
-        findiff = -(output-model)/dxi*sigma_inv
+        findiff = -(output.data - model)/dxi*sigma_inv.data
         jacparam = jacobian[:, :, i]
         diffabs[i] = np.sum(np.abs(findiff - jacparam))
         if plot:
@@ -296,7 +315,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
             fig.suptitle(f'{names_params_gauss[i]} gradients')
             axes[0][0].imshow(model)
             axes[0][0].set_title("Model")
-            axes[0][1].imshow(output)
+            axes[0][1].imshow(output.data)
             axes[0][1].set_title("Model (modified)")
             axes[1][0].imshow(findiff)
             axes[1][0].set_title(f"Finite difference (dx={dxi:.2e})")
@@ -310,8 +329,9 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         if printout:
             print((f'{names_params_gauss[i]:{format_param_name}} LLnew={llnew:.3f} '
                    f'LLdiff={llnew-ll:.3e} with dx={dxi:.2e}'))
-        dlls[i] = (llnew - ll)/dxi
-    return grads, dlls, diffabs
+        dlls[i] = (llnew - ll_g)/dxi
+        set_param(source, i, value)
+    return grads.at(0).data, dlls, diffabs
 
 
 def mgsersic_test(reff=3, nser=1, axrat=1, angle=0, dimx=15, dimy=None, plot=False, use_fast_gauss=True,

@@ -108,6 +108,8 @@ def estimate_ellipse(
     :return: inertia: ndarray; the moment of inertia/covariance matrix or parameters.
         cen_x, cen_y: The centroids, if return_cens is True.
     """
+    if img is None:
+        raise ValueError('img cannot be None')
     if not (sigma_sq_min >= 0):
         raise ValueError(f'sigma_sq_min={sigma_sq_min} !>= 0')
     if validate or denoise:
