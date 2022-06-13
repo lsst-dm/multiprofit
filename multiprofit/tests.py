@@ -43,7 +43,7 @@ def get_setup(xdim=15, ydim=15, r_major=1, axrat=1, angle=0, nsub=1,
         f'r_major={r_major}*g2.M_SIGMA_HWHM, axrat={axrat}, angle={angle}, degrees=True))',
         f'source = g2.Gaussian(centroid=centroid, ellipse=ellipse,'
         f' integral=g2.GaussianIntegralValue(1/{nsub}))',
-        f'gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range({nsub})])',
+        f'gaussians = g2.ConvolvedGaussians([g2.ConvolvedGaussian(source, kernel) for _ in range({nsub})])',
     ]
     img = "g2.ImagePyD"
     arr = "g2.ImageArrayPyD"
@@ -145,7 +145,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                 )
                 source = g2.Gaussian(centroid=centroid, ellipse=ellipse,
                                      integral=g2.GaussianIntegralValue(1/nsub))
-                gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range(nsub)])
+                gaussians = g2.ConvolvedGaussians([g2.ConvolvedGaussian(source, kernel) for _ in range(nsub)])
                 gaussmpf = g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data
                 result = 'Ran make'
                 if hasgs:
@@ -243,7 +243,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
             gauss.ellipse.rho = value
 
 
-    gaussians = g2.Gaussians([
+    gaussians = g2.ConvolvedGaussians([
         g2.ConvolvedGaussian(
             source=source,
             kernel=g2.Gaussian(centroid=g2.Centroid(x=0, y=0), ellipse=psf_g),

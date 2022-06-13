@@ -283,7 +283,7 @@ def _get_convolved_gaussian(profile_dict):
 
 # TODO: Refactor this nightmare (and the above _ellipse_to_list) away
 def gaussian_profiles_to_matrix(profiles):
-    rv = g2.Gaussians([
+    rv = g2.ConvolvedGaussians([
         _get_convolved_gaussian(p) for p in profiles if not p.get("background")
     ])
     return rv
