@@ -225,7 +225,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
 
     source = g2.Gaussian(centroid=g2.Centroid(x=cen_x, y=cen_y), ellipse=source_g,
                          integral=g2.GaussianIntegralValue(flux))
-    values = (source.centroid.x, source.centroid.y, source.integral,
+    values = (source.centroid.x, source.centroid.y, source.integral.value,
               source.ellipse.sigma_x, source.ellipse.sigma_y, source.ellipse.rho,)
 
     def set_param(gauss, idx, value):
@@ -234,7 +234,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         elif idx == 1:
             gauss.centroid.y = value
         elif idx == 2:
-            gauss.integral = value
+            gauss.integral.value = value
         elif idx == 3:
             gauss.ellipse.sigma_x = value
         elif idx == 4:
