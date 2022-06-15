@@ -67,15 +67,18 @@ draw_method_pixel = {
 
 
 def _g2idx(array):
-    return g2.ImagePyS(array) if array is not None else None
+    if isinstance(array, g2.ImageS): return array
+    return g2.ImageS(array) if array is not None else None
 
 
 def _g2img(array):
-    return g2.ImagePyD(array) if array is not None else None
+    if isinstance(array, g2.ImageD): return array
+    return g2.ImageD(array) if array is not None else None
 
 
 def _g2imgarr(array):
-    return g2.ImageArrayPyD(
+    if isinstance(array, g2.ImageArrayD): return array
+    return g2.ImageArrayD(
         [_g2img(array[:, :, i]) for i in range(array.shape[2])]
     ) if array is not None else None
 
@@ -894,7 +897,7 @@ class Model:
                     sigma_inv = exposure.get_sigma_inverse()
 
                     # The point of this is to fill in the grad array
-                    likelihood_new = g2.GaussianEvaluatorPyD(
+                    likelihood_new = g2.GaussianEvaluatorD(
                         gaussians=gaussians, data=_g2img(exposure.image), sigma_inv=_g2img(sigma_inv),
                         grads=_g2imgarr(grad), background=_g2img(background)).loglike_pixel()
 
@@ -927,7 +930,7 @@ class Model:
                 if meta_model['is_all_gaussian'] and ((plot and image is None) or missing_likelihood):
                     if has_bg is None:
                         has_bg, background = self._get_background(profiles, band)
-                    likelihood_new = g2.GaussianEvaluatorPyD(
+                    likelihood_new = g2.GaussianEvaluatorD(
                         gaussians=gaussians if gaussians is not None else (
                             gaussian_profiles_to_matrix([p[band] for p in profiles])),
                         data=_g2img(exposure.image),
@@ -958,7 +961,7 @@ class Model:
                                 img_plot_maxs is not None and band in img_plot_maxs) else None
                         )
                 elif do_draw_image and exposure.error_inverse is not None:
-                    chi = (image - exposure.image)*exposure.get_sigma_inverse()
+                    chi = (image - exposure.image.data)*exposure.get_sigma_inverse().data
                 else:
                     chi = None
 
@@ -1126,6 +1129,7 @@ class Model:
             all([comp.is_gaussian_mixture() for comp in exposure.psf.model.modelphotometric.components]))
         is_any_gaussian = is_all_gaussian and any(is_profiles_gaussian)
         is_all_gaussian = is_all_gaussian and all(is_profiles_gaussian)
+
         # Use fast, efficient Gaussian evaluators only if everything's a Gaussian mixture model
         use_fast_gauss = (engineopts is None or (engineopts.get("use_fast_gauss") is not False)) and (
             is_all_gaussian and (
@@ -1140,6 +1144,7 @@ class Model:
                 )
             )
         )
+
         is_all_fast_gauss = False
         if use_fast_gauss:
             if engine != 'libprofit':
@@ -1204,13 +1209,13 @@ class Model:
                                         profile["mag"] = mpfutil.flux_to_mag(fluxfrac*profile["flux"])
                                         profile["re"] = convolved.r_major
                                         profile["axrat"] = convolved.axrat
-                                        profile["ang"] = convolved.ang
+                                        profile["ang"] = convolved.angle
                                     else:
                                         profile["profile_gs"] = gs.Gaussian(
                                             flux=profile["flux"]*fluxfrac,
                                             fwhm=2*convolved.r_major*sqrt(convolved.axrat), gsparams=gsparams)
                                         profile["shear"] = gs.Shear(q=convolved.axrat,
-                                                                    beta=convolved.ang*gs.degrees)
+                                                                    beta=convolved.angle*gs.degrees)
                                         profile["offset"] = gs.PositionD(profile["cen_x"], profile["cen_y"])
                                 profile["pointsource"] = True
                                 profile["resolved"] = True
@@ -1272,7 +1277,7 @@ class Model:
             gsparams = get_gsparams(engineopts)
 
         if do_draw_image:
-            image = np.zeros_like(exposure.image, dtype=float)
+            image = np.zeros_like(exposure.image.data, dtype=float)
 
         model = {}
 
@@ -1322,9 +1327,9 @@ class Model:
                 and not profiles_left and (not profiles_to_fit_linear or do_fit_leastsq_prep)
             if get_like_only:
                 # TODO: Do this in a prettier way while avoiding recalculating loglike_gaussian_pixel
-                sigma_inv = exposure.get_sigma_inverse()
+                sigma_inv = exposure.get_sigma_inverse().data
                 if 'like_const' not in exposure.meta:
-                    mask = exposure.mask_inverse if exposure.mask_inverse is not None else (sigma_inv > 0)
+                    mask = exposure.mask_inverse.data if exposure.mask_inverse is not None else (sigma_inv > 0)
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv[mask]/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
@@ -1497,7 +1502,7 @@ class Model:
                 output = image if do_draw_image else None
 
                 try:
-                    likelihood_free = g2.GaussianEvaluatorPyD(
+                    likelihood_free = g2.GaussianEvaluatorD(
                         gaussians=profile_matrix,
                         data=_g2img(exposure.image),
                         sigma_inv=_g2img(sigma_inv),
@@ -1583,7 +1588,7 @@ class Model:
                     likelihood = np.exp(likelihood)
             if (not get_like_only) or do_fit_linear_prep or do_fit_leastsq_prep:
                 if profiles_to_draw:
-                    image = g2.make_gaussians_pixel_py_D(
+                    image = g2.make_gaussians_pixel_D(
                         gaussians=gaussian_profiles_to_matrix(
                             [profile[band] for profile in profiles_to_draw]),
                         n_rows=ny,
@@ -1607,7 +1612,7 @@ class Model:
                     # make_gaussian_pixel is faster
                     if len(profiles_flux) > 1:
                         gaussians = gaussian_profiles_to_matrix([profile[band] for profile in profiles_flux])
-                        imgprofiles = g2.make_gaussians_pixel_py_D(gaussians, n_rows=ny, n_cols=nx).data
+                        imgprofiles = g2.make_gaussians_pixel_D(gaussians, n_rows=ny, n_cols=nx).data
                     else:
                         profile = profiles_flux[0]
                         params = profile[band]
@@ -1656,7 +1661,7 @@ class Model:
                     del profile["resolved"]
                     # TODO: Find a better way to do this
                     for coord in ["x", "y"]:
-                        name_old = "cen" + coord
+                        name_old = "cen_" + coord
                         profile[coord + "cen"] = profile[name_old]
                         del profile[name_old]
                     # libprofit uses the irritating GALFIT convention of up = 0 degrees
@@ -1847,7 +1852,7 @@ class Model:
         if get_likelihood and (likelihood is None):
             if image is None:
                 raise RuntimeError("Can't get likelihood without computing image")
-            sigma_inv = exposure.get_sigma_inverse()
+            sigma_inv = exposure.get_sigma_inverse().data
             is_sigma_img = sigma_inv.size > 1
             mask_inv = exposure.mask_inverse if exposure.mask_inverse is not None else (
                 sigma_inv > 0 if is_sigma_img else np.isfinite(exposure.image))
@@ -2180,7 +2185,7 @@ class Modeller:
                 for exposure in exposures:
                     idx_end = idx_begin + datasizes[idx_exposure]
                     maskinv = exposure.mask_inverse
-                    sigma_inv = exposure.get_sigma_inverse()
+                    sigma_inv = exposure.get_sigma_inverse().data
                     if maskinv is not None:
                         sigma_inv = sigma_inv[maskinv]
                     imgs_free = exposure.meta['img_models_params_free']
@@ -2791,9 +2796,10 @@ class EllipticalComponent(Component):
         return [profile]
 
     def get_parameters(self, free=True, fixed=True):
-        return [value for value in self.fluxes if
-                (value.fixed and fixed) or (not value.fixed and free)] + \
-               self.params_ellipse.get_parameters(free=free, fixed=fixed)
+        return self.params_ellipse.get_parameters(free=free, fixed=fixed) + [
+            value for value in self.fluxes
+            if (value.fixed and fixed) or (not value.fixed and free)
+        ]
 
     def is_gaussian(self):
         return False

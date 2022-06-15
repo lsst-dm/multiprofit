@@ -101,9 +101,6 @@ def is_fluxparam(param):
 def make_FluxParameter(is_fluxes_fracs=False, *args, **kwargs):
     if is_fluxes_fracs:
         param = g2f.ProperFractionParameterD(*args, **kwargs)
-        limits = kwargs.get('limits')
-        if limits is None or not ((limits.min >= 0) and (limits.max <= 1)):
-            param.limits = limits_ref['fraction']
     else:
         param = g2f.IntegralParameterD(*args, **kwargs)
     return param
