@@ -43,12 +43,12 @@ def get_setup(xdim=15, ydim=15, r_major=1, axrat=1, angle=0, nsub=1,
         f'r_major={r_major}*g2.M_SIGMA_HWHM, axrat={axrat}, angle={angle}, degrees=True))',
         f'source = g2.Gaussian(centroid=centroid, ellipse=ellipse,'
         f' integral=g2.GaussianIntegralValue(1/{nsub}))',
-        f'gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range({nsub})])',
+        f'gaussians = g2.ConvolvedGaussians([g2.ConvolvedGaussian(source, kernel) for _ in range({nsub})])',
     ]
-    img = "g2.ImagePyD"
-    arr = "g2.ImageArrayPyD"
+    img = "g2.ImageD"
+    arr = "g2.ImageArrayD"
     cmds.extend([
-            f'data = {img}(data=g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data'
+            f'data = {img}(data=g2.make_gaussians_pixel_D(gaussians, n_rows=ydim, n_cols=xdim).data'
             f' + np.random.normal(scale={noise}, size=[{ydim}, {xdim}]))',
             f'sigma_inv = {img}(data=1./np.array([[{noise}]]))',
         ] if (do_like or do_residual or do_grad or do_jac) else ['data, sigma_inv = None, None'])
@@ -67,7 +67,7 @@ def get_setup(xdim=15, ydim=15, r_major=1, axrat=1, angle=0, nsub=1,
         args = ", ".join([f"{x}={x}"
                           for x in ("gaussians", "data", "sigma_inv", "output", "residual", "grads")
                           ])
-        cmds.append(f'evaluator = g2.GaussianEvaluatorPyD({args})')
+        cmds.append(f'evaluator = g2.GaussianEvaluatorD({args})')
     return '; '.join(cmds)
 
 
@@ -116,7 +116,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
     centroid = g2.Centroid(xdim/2, ydim/2)
     kernel = g2.Gaussian(centroid=g2.Centroid(0, 0), ellipse=g2.Ellipse(sigma_x=0., sigma_y=0))
 
-    cmd_func = 'g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim,)'
+    cmd_func = 'g2.make_gaussians_pixel_D(gaussians, n_rows=ydim, n_cols=xdim,)'
     cmd_obj = 'evaluator.loglike_pixel()'
 
     functions = {
@@ -145,8 +145,8 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                 )
                 source = g2.Gaussian(centroid=centroid, ellipse=ellipse,
                                      integral=g2.GaussianIntegralValue(1/nsub))
-                gaussians = g2.Gaussians([g2.ConvolvedGaussian(source, kernel) for _ in range(nsub)])
-                gaussmpf = g2.make_gaussians_pixel_py_D(gaussians, n_rows=ydim, n_cols=xdim).data
+                gaussians = g2.ConvolvedGaussians([g2.ConvolvedGaussian(source, kernel) for _ in range(nsub)])
+                gaussmpf = g2.make_gaussians_pixel_D(gaussians, n_rows=ydim, n_cols=xdim).data
                 result = 'Ran make'
                 if hasgs:
                     gaussgs = gs.Gaussian(flux=1, half_light_radius=reff*np.sqrt(axrat)).shear(
@@ -213,7 +213,11 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
 
 
 def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
-                  reff_psf=0, axrat_psf=0.95, ang_psf=0, printout=False, plot=False):
+                  reff_psf=0, axrat_psf=0.95, ang_psf=0, n_psfs=1, printout=False, plot=False):
+
+    if n_psfs > 1:
+        raise ValueError(f"n_psfs>1 not yet supported")
+
     cen_x, cen_y = dimx/2., dimy/2.
     # Keep this in units of sigma, not re==FWHM/2
     source = g2.EllipseMajor(reff*g2.M_SIGMA_HWHM, axrat, ang, degrees=True)
@@ -225,7 +229,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
 
     source = g2.Gaussian(centroid=g2.Centroid(x=cen_x, y=cen_y), ellipse=source_g,
                          integral=g2.GaussianIntegralValue(flux))
-    values = (source.centroid.x, source.centroid.y, source.integral,
+    values = (source.centroid.x, source.centroid.y, source.integral.value,
               source.ellipse.sigma_x, source.ellipse.sigma_y, source.ellipse.rho,)
 
     def set_param(gauss, idx, value):
@@ -234,7 +238,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         elif idx == 1:
             gauss.centroid.y = value
         elif idx == 2:
-            gauss.integral = value
+            gauss.integral.value = value
         elif idx == 3:
             gauss.ellipse.sigma_x = value
         elif idx == 4:
@@ -242,14 +246,15 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         else:
             gauss.ellipse.rho = value
 
-
-    gaussians = g2.Gaussians([
+    gaussians = g2.ConvolvedGaussians([
         g2.ConvolvedGaussian(
             source=source,
-            kernel=g2.Gaussian(centroid=g2.Centroid(x=0, y=0), ellipse=psf_g),
+            kernel=g2.Gaussian(centroid=g2.Centroid(x=dimx/2, y=dimy/2), ellipse=psf_g,
+                               integral=g2.GaussianIntegralValue(1./n_psfs)),
         )
+        for _ in range(n_psfs)
     ])
-    model = g2.make_gaussians_pixel_py_D(gaussians, n_rows=dimy, n_cols=dimx).data
+    model = g2.make_gaussians_pixel_D(gaussians, n_rows=dimy, n_cols=dimx).data
 
     if printout:
         psf_c = g2.Covariance(psf_g)
@@ -273,23 +278,23 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
             print("Estimated deconvolved ellipse (covar):", covar_ests[1])
             print("Estimated deconvolved ellipse (ellipse):", g2.EllipseMajor(covar_ests[1]))
 
-    data = g2.ImagePyD(np.random.poisson(model + bg) - bg)
-    sigma_inv = g2.ImagePyD(np.array([[1/bg]]))
-    output = g2.ImagePyD(np.zeros_like(data.data))
+    data = g2.ImageD(np.random.poisson(model + bg) - bg)
+    sigma_inv = g2.ImageD(np.array([[1/bg]]))
+    output = g2.ImageD(np.zeros_like(data.data))
     n_params = 6
-    grads = g2.ImageArrayPyD([g2.ImagePyD(np.zeros((1, n_params)))])
+    grads = g2.ImageArrayD([g2.ImageD(np.zeros((n_psfs, n_params)))])
 
     # Compute the log likelihood and gradients
-    evaluator_i = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, output=output)
-    ll = evaluator_i.loglike_pixel()
+    evaluator_i = g2.GaussianEvaluatorD(gaussians, data=data, sigma_inv=sigma_inv, output=output)
+    ll_i = evaluator_i.loglike_pixel()
 
-    evaluator_g = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, output=output,
-                                          grads=grads)
+    evaluator_g = g2.GaussianEvaluatorD(gaussians, data=data, sigma_inv=sigma_inv, grads=grads)
     ll_g = evaluator_g.loglike_pixel()
 
-    jacobian = np.zeros([dimy, dimx, n_params])
-    jacobian_arr = g2.ImageArrayPyD([g2.ImagePyD(jacobian[:, :, idx].view()) for idx in range(n_params)])
-    evaluator_j = g2.GaussianEvaluatorPyD(gaussians, data=data, sigma_inv=sigma_inv, grads=jacobian_arr)
+    jacobian = np.zeros([dimy, dimx, n_params*n_psfs])
+    jacobian_arr = g2.ImageArrayD([g2.ImageD(jacobian[:, :, idx].view())
+                                   for idx in range(n_params*n_psfs)])
+    evaluator_j = g2.GaussianEvaluatorD(gaussians, data=data, sigma_inv=sigma_inv, grads=jacobian_arr)
     evaluator_j.loglike_pixel()
 
     dxs = [1e-6, 1e-6, flux*1e-6, 1e-8, 1e-8, 1e-8]
@@ -304,7 +309,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
         set_param(source, i, value + dxi)
         # Note that there's no option to return the log likelihood and the Jacobian - the latter skips
         # computing the former for efficiency, assuming that you won't need it
-        llnew = evaluator_g.loglike_pixel()
+        llnewg, llnewi = (evaltor.loglike_pixel() for evaltor in (evaluator_g, evaluator_i))
 
         # It's actually the jacobian of the residual
         findiff = -(output.data - model)/dxi*sigma_inv.data
@@ -327,9 +332,11 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
             axes[1][2].set_title("Percent difference")
             plt.show()
         if printout:
-            print((f'{names_params_gauss[i]:{format_param_name}} LLnew={llnew:.3f} '
-                   f'LLdiff={llnew-ll:.3e} with dx={dxi:.2e}'))
-        dlls[i] = (llnew - ll_g)/dxi
+            print(
+                f'{names_params_gauss[i]:{format_param_name}} LL, LLnew1, llnew12 = {ll_g:.4e}, {llnewg:.4e}'
+                f', {llnewi:.4e}; LLdiff={llnewg-ll_g:.4e} with dx={dxi:.3e}'
+            )
+        dlls[i] = (llnewi - ll_i)/dxi
         set_param(source, i, value)
     return grads.at(0).data, dlls, diffabs
 

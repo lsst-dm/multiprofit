@@ -32,7 +32,6 @@ def Limits(*args, **kwargs):
 # TODO: Replace with a parameter factory and/or profile factory
 limits_ref = {
     "none": Limits(),
-    "fraction": Limits(min=0., max=1.,),
     "axrat": Limits(min=1e-2, max=1),
     "con": Limits(min=1, max=10),
     "n_ser": Limits(min=0.3, max=6.0),
