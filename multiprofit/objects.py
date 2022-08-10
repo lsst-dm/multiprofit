@@ -259,8 +259,8 @@ def _get_convolved_gaussian(profile_dict):
     src = g2.Gaussian(
         centroid=g2.Centroid(p['cen_x'], p['cen_y']),
         ellipse=g2.Ellipse(
-            sigma_x=ell_src.sigma_x*g2.M_SIGMA_HWHM,
-            sigma_y=ell_src.sigma_y*g2.M_SIGMA_HWHM,
+            sigma_x=ell_src.sigma_x,
+            sigma_y=ell_src.sigma_y,
             rho=ell_src.rho,
         ),
         integral=g2.GaussianIntegralValue(p['flux']),
@@ -270,8 +270,8 @@ def _get_convolved_gaussian(profile_dict):
         psf = g2.Gaussian(
             centroid=g2.Centroid(),
             ellipse=g2.Ellipse(
-                sigma_x=ell_psf.sigma_x*g2.M_SIGMA_HWHM,
-                sigma_y=ell_psf.sigma_y*g2.M_SIGMA_HWHM,
+                sigma_x=ell_psf.sigma_x,
+                sigma_y=ell_psf.sigma_y,
                 rho=ell_psf.rho,
             ),
             integral=g2.GaussianIntegralValue(1.0),

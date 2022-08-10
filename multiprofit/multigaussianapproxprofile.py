@@ -22,6 +22,7 @@
 
 import copy
 import galsim as gs
+import gauss2d
 import gauss2d.fit as g2f
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
@@ -1699,7 +1700,8 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             if is_sersic:
                 profile["param_n_ser"] = param_n_ser
 
-            for subcomp, (weight, size) in enumerate(zip(weights, reffs)):
+            for subcomp, (weight, size_reff) in enumerate(zip(weights, reffs)):
+                size = size_reff*gauss2d.M_HWHM_SIGMA
                 profile_sub = copy.copy(profile)
                 # Not needed right now. Maybe later?
                 #profile_sub["fluxfrac_sub"] = weight
