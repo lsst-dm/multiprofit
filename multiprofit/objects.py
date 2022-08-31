@@ -1330,6 +1330,8 @@ class Model:
                 sigma_inv = exposure.get_sigma_inverse().data
                 if 'like_const' not in exposure.meta:
                     mask = exposure.mask_inverse.data if exposure.mask_inverse is not None else (sigma_inv > 0)
+                    if not hasattr(exposure, "meta"):
+                        exposure.meta = {}
                     exposure.meta['like_const'] = np.sum(np.log(sigma_inv[mask]/sqrt(2.*np.pi)))
                     if exposure.error_inverse.size == 1:
                         exposure.meta['like_const'] *= nx*ny
@@ -1420,7 +1422,7 @@ class Model:
                                         )
                                 # TODO: Revisit for fitting r_scale
                                 if is_sigma or is_r_scale:
-                                    weight_grad *= g2.M_SIGMA_HWHM*profile.get("sigma_factor", 1)
+                                    weight_grad *= profile.get("sigma_factor", 1)
                             else:
                                 weight_grad = 0
                             grad_param_factor[idx_profile, idx_array] = weight_grad
@@ -2185,7 +2187,7 @@ class Modeller:
                 for exposure in exposures:
                     idx_end = idx_begin + datasizes[idx_exposure]
                     maskinv = exposure.mask_inverse
-                    sigma_inv = exposure.get_sigma_inverse().data
+                    sigma_inv = exposure.get_sigma_inverse()
                     if maskinv is not None:
                         sigma_inv = sigma_inv[maskinv]
                     imgs_free = exposure.meta['img_models_params_free']
@@ -2292,7 +2294,7 @@ class Modeller:
                     self.logger.debug(f"Final loglike, logprior: {likelihood}")
                     self.logger.debug(f"New initial parameters from method {method_best}: {params_init}")
                     self.logger.debug(f"New initial parameter values from method {method_best}: "
-                                     f"{params_init_true}")
+                                      f"{params_init_true}")
                     self.logger.debug(f"Linear flux ratios: {fluxratios_to_print}")
             if not is_linear:
                 for param in params_free:

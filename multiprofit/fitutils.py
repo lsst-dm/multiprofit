@@ -1429,7 +1429,7 @@ def get_modelspecs(filename) -> List[ModelSpec]:
         raise RuntimeError(f"Modelspecs from filename={filename} header={header}"
                            f" not subset of {ModelSpec._fields}")
     modelspecs = []
-    fieldtypes = list(ModelSpec._field_types[x] for x in header)
+    fieldtypes = list(ModelSpec.__annotations__[x] for x in header)
     for row in rows[1:]:
         kwargs = {}
         for idx, name in enumerate(header):
