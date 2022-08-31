@@ -374,6 +374,13 @@ def test_model_evaluation(channels, model, model_jac, model_old, images):
             for param in params:
                 param.fixed = True
 
+    # Freeze the PSF params - they can't be fit anyway
+    for m in (model, model_jac):
+        for psfmodel in m.psfmodels:
+            params = psfmodel.parameters()
+            for param in params:
+                param.fixed = True
+
     model.setup_evaluators(print=printout)
     models = {
         'new': (model, ''),
