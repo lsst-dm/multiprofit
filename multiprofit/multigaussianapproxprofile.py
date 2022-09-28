@@ -29,8 +29,22 @@ import multiprofit.utils as mpfutil
 import numpy as np
 import scipy.interpolate as spinterp
 import scipy.optimize as spopt
+from typing import Dict
 
 ln10 = np.log(10)
+
+def _print_weights_c(weights: Dict):
+    nl = '\n'
+    for key, value in weights.items():
+        norm_strs = [f"{x:.15e}" for x in value[0]]
+        value[0][-1] = 1.0 - sum(float(x) for x in norm_strs[:-1])
+        norm_strs[-1] = f"{value[0][-1]:.15e}"
+        value_sum = sum(float(x) for x in norm_strs)
+        if value_sum != 1:
+            raise ValueError(f'key={key} value_sum-1={value_sum-1} != 0')
+        string = f'''{{{key}, {{{nl}{f",{nl}".join(f"    {{{x}, {y*gauss2d.M_HWHM_SIGMA}}}"
+           for x, y in zip(norm_strs, value[1]))}{nl}}}}},'''
+        print(string)
 
 
 # Compute the fraction of the integrated flux within x for a sum of Gaussians
