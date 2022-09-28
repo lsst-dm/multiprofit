@@ -3,6 +3,7 @@ import gauss2d as g2
 import gauss2d.fit as g2f
 from itertools import chain
 import multiprofit.fitutils as mpffit
+from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
 import numpy as np
 import pytest
@@ -14,17 +15,17 @@ class ComponentConfig:
     n_comp: int = 2
     rho_base: float = -0.2
     rho_increment: float = 0.4
-    sigma_base: float = 1.5
-    sigma_increment: float = 1.
+    size_base: float = 1.5
+    size_increment: float = 1.
 
 
 @dataclass
 class Config:
     comps_psf: ComponentConfig
     comps_src: ComponentConfig
-    n_x: int = 37
+    n_x: int = 35
     n_y: int = 33
-    src_n: int = 4
+    src_n: int = 1
     src_flux_base: float = 1.0
     src_flux_increment: float = 1.0
 
@@ -39,8 +40,8 @@ class Limits:
 @pytest.fixture(scope='module')
 def config():
     return Config(
-        comps_psf=ComponentConfig(sigma_base=2.5),
-        comps_src=ComponentConfig(sigma_base=2.0),
+        comps_psf=ComponentConfig(size_base=2.5),
+        comps_src=ComponentConfig(size_base=2.0),
     )
 
 
@@ -55,7 +56,7 @@ def limits(config):
 
 @pytest.fixture(scope='module')
 def bands():
-    return ('i', 'r', 'g')
+    return tuple(('i', 'r', 'g'))
 
 
 @pytest.fixture(scope='module')
@@ -107,7 +108,6 @@ def data_old(bands, images, psfmodels_old):
 
 @pytest.fixture(scope='module')
 def psfmodels(channels, config, data, limits):
-    models = []
     compconf = config.comps_psf
     n_comps = compconf.n_comp
     n_last = n_comps - 1
@@ -126,12 +126,12 @@ def psfmodels(channels, config, data, limits):
                 }) if (c == 0) else last,
             )
             components[c] = g2f.GaussianComponent(
-                centroid,
-                g2f.EllipseParameters(
-                    g2f.SigmaXParameterD(compconf.sigma_base + c*compconf.sigma_increment),
-                    g2f.SigmaYParameterD(compconf.sigma_base + c*compconf.sigma_increment),
+                g2f.GaussianParametricEllipse(
+                    g2f.SigmaXParameterD(compconf.size_base + c*compconf.size_increment),
+                    g2f.SigmaYParameterD(compconf.size_base + c*compconf.size_increment),
                     g2f.RhoParameterD(compconf.rho_base + c*compconf.rho_increment, limits=limits.rho),
                 ),
+                centroid,
                 last,
             )
         psfmodels[i] = g2f.PsfModel(components)
@@ -141,7 +141,7 @@ def psfmodels(channels, config, data, limits):
 @pytest.fixture(scope='module')
 def psfmodels_old(bands, config):
     compconf = config.comps_psf
-    sigmas = compconf.sigma_base + compconf.sigma_increment*np.arange(compconf.n_comp)
+    sigmas = compconf.size_base + compconf.size_increment*np.arange(compconf.n_comp)
     sources = {
         band: mpffit.get_model(
             {band: 1},
@@ -158,54 +158,65 @@ def psfmodels_old(bands, config):
     return sources
 
 
-@pytest.fixture(scope='module')
-def sources(channels, config, limits):
+def get_sources(channels, config, limits, old: bool = False):
     compconf = config.comps_src
     n_components = compconf.n_comp
-
     sources = [None]*config.src_n
+
     for i in range(len(sources)):
         flux = (config.src_flux_base + i*config.src_flux_increment)/n_components
         components = [None]*n_components
-        centroid = g2f.CentroidParameters(
+        centroid = (mpfobj.AstrometricModel if old else g2f.CentroidParameters)(
             g2f.CentroidXParameterD(config.n_y/2., limits=limits.x),
             g2f.CentroidYParameterD(config.n_x/2., limits=limits.y),
         )
         for c in range(n_components):
-            sigma = compconf.sigma_base + c*compconf.sigma_increment
-            components[c] = g2f.GaussianComponent(
-                centroid,
-                g2f.EllipseParameters(
-                    g2f.SigmaXParameterD(sigma),
-                    g2f.SigmaYParameterD(sigma),
-                    g2f.RhoParameterD(compconf.rho_base + c*compconf.rho_increment, limits=limits.rho),
-                ),
-                g2f.LinearIntegralModel({
-                    channel: g2f.IntegralParameterD(flux)
-                    for channel in channels.values()
-                }),
+            fluxes = {
+                channel.name if old else channel: g2f.IntegralParameterD(flux, label=channel.name)
+                for channel in channels.values()
+            }
+            size = compconf.size_base + c*compconf.size_increment
+            sersicindex = g2f.SersicMixComponentIndexParameterD(1.0 + 3*c)
+            ellipse = (mpfobj.EllipseParameters if old else g2f.SersicParametricEllipse)(
+                (g2f.SigmaXParameterD if old else g2f.ReffXParameterD)(size),
+                (g2f.SigmaYParameterD if old else g2f.ReffYParameterD)(size),
+                g2f.RhoParameterD(compconf.rho_base + c*compconf.rho_increment, limits=limits.rho)
             )
-        sources[i] = g2f.Source(components)
+            if old:
+                component = MultiGaussianApproximationComponent(
+                    fluxes=list(fluxes.values()),
+                    params_ellipse=ellipse,
+                    parameters=[sersicindex],
+                    order=4,
+                )
+            else:
+                component = g2f.SersicMixComponent(
+                    ellipse,
+                    centroid,
+                    g2f.LinearIntegralModel(fluxes),
+                    sersicindex,
+                )
+            components[c] = component
+        if old:
+            sources[i] = mpfobj.Source(
+                centroid,
+                mpfobj.PhotometricModel(components),
+            )
+        else:
+            sources[i] = g2f.Source(components)
+            gaussians = sources[i].gaussians(list(channels.values())[0])
+            assert len(gaussians) == 4*n_components
     return sources
 
 
 @pytest.fixture(scope='module')
-def sources_old(bands, config):
-    compconf = config.comps_src
-    n_components = compconf.n_comp
-    sigmas = compconf.sigma_base + compconf.sigma_increment*np.arange(compconf.n_comp)
-    return [
-        mpffit.get_model(
-            {band: (config.src_flux_base + i*config.src_flux_increment) for band in bands},
-            f"gaussian:{n_components}",
-            (config.n_y, config.n_x),
-            sigma_xs=compconf.sigma_base + compconf.sigma_increment*np.arange(compconf.n_comp),
-            sigma_ys=compconf.sigma_base + compconf.sigma_increment*np.arange(compconf.n_comp),
-            rhos=compconf.rho_base + compconf.rho_increment*np.arange(compconf.n_comp),
-            convertfluxfracs=True,
-        ).sources[0]
-        for i in range(config.src_n)
-    ]
+def sources(channels, config, limits):
+    return get_sources(channels, config, limits, old=False)
+
+
+@pytest.fixture(scope='module')
+def sources_old(channels, config, limits):
+    return get_sources(channels, config, limits, old=True)
 
 
 @pytest.fixture(scope='module')
@@ -243,15 +254,16 @@ def test_model_evaluation(channels, model, model_old):
         model.evaluate()
 
     printout = False
-    plot = False
+    plot = True
 
     params_new_all = model.parameters()
-    params_new = []
     # Cheat a little and remove duplicate CentroidParameters without explicitly converting to a set
     param_cenx_found = None
     param_ceny_found = None
     param_frac_found = None
     param_integral_found = None
+
+    params_new_str = []
     for param in params_new_all:
         str_param = str(param)
         if str_param.startswith("gauss2d::fit::Centroid"):
@@ -290,7 +302,9 @@ def test_model_evaluation(channels, model, model_old):
                     continue
                 else:
                     param_frac_found = param
-        params_new.append(param)
+        elif str_param.startswith("gauss2d::fit::Reff"):
+            str_param = str_param.replace("Reff", "Sigma")
+        params_new_str.append(str_param)
 
     params_old = list(chain(
         model_old.get_parameters(),
@@ -298,15 +312,10 @@ def test_model_evaluation(channels, model, model_old):
                             for exp in model_old.data.exposures.values()),
     ))
 
-    params_new_str = '\n'.join(f'{x}' for x in params_new)
+    params_new_str = '\n'.join(params_new_str)
     params_old_str = '\n'.join(f'{x}' for x in params_old)
 
     assert params_new_str == params_old_str
-
-    # old MultiProFit does a sigma/HWHM conversion because that's how the Sersic profile works.
-    for param in params_old:
-        if str(param).startswith("gauss2d::fit::Sigma"):
-            param.value *= g2.M_HWHM_SIGMA
 
     model.setup_evaluators(print=printout)
     models = {'new': model, 'old': model_old}
@@ -314,14 +323,15 @@ def test_model_evaluation(channels, model, model_old):
     model_old.evaluate(do_draw_image=True, keep_images=True)
     outputs = [model.outputs[0].data, list(model_old.data.exposures.values())[0][0].meta["img_model"]]
 
-    assert np.allclose(outputs[0], outputs[1], rtol=1e-3, atol=1e-5)
-
     if plot:
         import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(ncols=2)
+        fig, ax = plt.subplots(ncols=3)
         ax[0].imshow(np.log10(outputs[0]))
         ax[1].imshow(np.log10(outputs[1]))
+        ax[2].imshow(outputs[0] - outputs[1])
         plt.show()
+
+    assert np.allclose(outputs[0], outputs[1], rtol=1e-3, atol=1e-5)
 
     for name, object in models.items():
         result = timeit.repeat('model.evaluate()', repeat=20, number=5, globals={'model': object})

@@ -22,14 +22,29 @@
 
 import copy
 import galsim as gs
+import gauss2d
 import gauss2d.fit as g2f
 import multiprofit.objects as mpfobj
 import multiprofit.utils as mpfutil
 import numpy as np
 import scipy.interpolate as spinterp
 import scipy.optimize as spopt
+from typing import Dict
 
 ln10 = np.log(10)
+
+def _print_weights_c(weights: Dict):
+    nl = '\n'
+    for key, value in weights.items():
+        norm_strs = [f"{x:.15e}" for x in value[0]]
+        value[0][-1] = 1.0 - sum(float(x) for x in norm_strs[:-1])
+        norm_strs[-1] = f"{value[0][-1]:.15e}"
+        value_sum = sum(float(x) for x in norm_strs)
+        if value_sum != 1:
+            raise ValueError(f'key={key} value_sum-1={value_sum-1} != 0')
+        string = f'''{{{key}, {{{nl}{f",{nl}".join(f"    {{{x}, {y*gauss2d.M_HWHM_SIGMA}}}"
+           for x, y in zip(norm_strs, value[1]))}{nl}}}}},'''
+        print(string)
 
 
 # Compute the fraction of the integrated flux within x for a sum of Gaussians
@@ -1699,7 +1714,8 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             if is_sersic:
                 profile["param_n_ser"] = param_n_ser
 
-            for subcomp, (weight, size) in enumerate(zip(weights, reffs)):
+            for subcomp, (weight, size_reff) in enumerate(zip(weights, reffs)):
+                size = size_reff*gauss2d.M_HWHM_SIGMA
                 profile_sub = copy.copy(profile)
                 # Not needed right now. Maybe later?
                 #profile_sub["fluxfrac_sub"] = weight
