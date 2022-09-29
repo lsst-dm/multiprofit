@@ -3,6 +3,7 @@ import gauss2d as g2
 import gauss2d.fit as g2f
 from itertools import chain
 import multiprofit.fitutils as mpffit
+from multiprofit.modeller import Modeller
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref
@@ -461,11 +462,12 @@ def test_model_evaluation(channels, model, model_jac, model_old, images):
 
     assert likelihood == likelihood_jac
 
+    print(f'starting with loglike={sum(likelihood)} from loglikes={likelihood}')
     result, time = fit_model(model_jac, jacobian[:, 1:], residual)
     for param, value in zip(params_free, result.x):
         param.value_transformed = value
     likelihood = model.evaluate()
-    print(f'got like={likelihood} in t={time:.3e}, result: \n{result}')
+    print(f'got loglike={sum(likelihood)} from loglikes={likelihood} in t={time:.3e}, result: \n{result}')
 
     model_old.evaluate(do_fit_leastsq_prep=True, do_fit_nonlinear_prep=True, do_jacobian=True)
 
@@ -482,3 +484,29 @@ def test_model_evaluation(channels, model, model_jac, model_old, images):
         print(f'{format_name.format(name)}: min={np.min(result, axis=0):.4e}'
               f', med={np.median(result, axis=0):.4e}')
 
+
+def test_modeller(model):
+    model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
+    likelihood = model.evaluate()
+
+    for idx_obs, observation in enumerate(model.data):
+        output = model.outputs[idx_obs]
+        print(observation.sigma_inv)
+        observation.image.data.flat = output.data.flat + np.random.normal(
+            loc=0, scale=(1 / observation.sigma_inv.data).flat)
+
+    # Freeze the PSF params - they can't be fit anyway
+    for psfmodel in model.psfmodels:
+        for param in psfmodel.parameters():
+            param.fixed = True
+
+    for param in model.parameters(paramfilter=g2f.ParamFilter(fixed=False)):
+        param.value_transformed += 0.02
+
+    modeller = Modeller()
+    result, time, *_ = modeller.fit_model(model, ftol=2e-4, xtol=2e-4)
+    model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+    likelihood_fit = model.evaluate()
+
+    print(f'got loglike={sum(likelihood_fit)} (init={sum(likelihood)})'
+          f' from modeller.fit_model in t={time:.3e}, result: \n{result}')
