@@ -3,5 +3,6 @@ galsim
 gauss2d
 matplotlib
 numpy
+pytest
 scipy
 seaborn
