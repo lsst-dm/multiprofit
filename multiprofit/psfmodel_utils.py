@@ -19,12 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 import gauss2d.fit as g2f
-
-
-def make_psfmodel_null() -> g2f.PsfModel:
-    return g2f.PsfModel(g2f.GaussianComponent.make_uniq_default_gaussians([0], True))
 
 
 def make_psf_source(
@@ -74,34 +69,3 @@ def make_psf_source(
             last,
         )
     return g2f.Source(components)
-
-
-def make_psf_source_linear(source: g2f.Source) -> g2f.Source:
-    raise RuntimeError("")
-    components = source.components
-    if not len(components) > 0:
-        raise ValueError(f"Can't get linear Source from {source=} with no components")
-    components_new = [None] * len(components)
-    for idx, component in enumerate(components):
-        gaussians = component.gaussians(g2f.Channel.NONE)
-        # TODO: Support multi-Gaussian components if sensible
-        # The challenge would be in mapping linear param values back onto
-        # non-linear IntegralModels
-        n_g = len(gaussians)
-        if not n_g == 1:
-            raise ValueError(f"{component=} has {gaussians=} of len {n_g=}!=1")
-        gaussian = gaussians.at(0)
-        component_new = g2f.GaussianComponent(
-            g2f.GaussianParametricEllipse(
-                g2f.SigmaXParameterD(gaussian.ellipse.sigma_x, fixed=True),
-                g2f.SigmaYParameterD(gaussian.ellipse.sigma_y, fixed=True),
-                g2f.RhoParameterD(gaussian.ellipse.rho, fixed=True),
-            ),
-            g2f.CentroidParameters(
-                g2f.CentroidXParameterD(gaussian.centroid.x, fixed=True),
-                g2f.CentroidYParameterD(gaussian.centroid.y, fixed=True),
-            ),
-            g2f.LinearIntegralModel({g2f.Channel.NONE: g2f.IntegralParameterD(gaussian.integral.value)}),
-        )
-        components_new[idx] = component_new
-    return g2f.Source(components_new)

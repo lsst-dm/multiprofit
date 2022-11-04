@@ -3,7 +3,7 @@ import gauss2d as g2
 import gauss2d.fit as g2f
 from itertools import chain
 import multiprofit.fitutils as mpffit
-from multiprofit.modeller import Modeller
+from multiprofit.modeller import fitmethods_linear, make_image_gaussians, make_psf_linear_gaussians, Modeller
 from multiprofit.multigaussianapproxprofile import MultiGaussianApproximationComponent
 import multiprofit.objects as mpfobj
 from multiprofit.transforms import transforms_ref
@@ -12,6 +12,7 @@ import pytest
 import scipy.optimize as spopt
 import time
 import timeit
+from typing import Tuple
 
 
 @dataclass
@@ -27,8 +28,11 @@ class ComponentConfig:
 class Config:
     comps_psf: ComponentConfig
     comps_src: ComponentConfig
-    n_x: int = 41
-    n_y: int = 27
+    n_rows: int = 27
+    n_cols: int = 41
+    noise_psf: float = 1e-4
+    seed: int = 1
+    sigma_img: float = 1e-3
     src_n: int = 1
     src_flux_base: float = 1.0
     src_flux_increment: float = 1.0
@@ -52,8 +56,8 @@ def config():
 @pytest.fixture(scope='module')
 def limits(config):
     return Limits(
-        x=g2f.LimitsD(min=0, max=config.n_y),
-        y=g2f.LimitsD(min=0, max=config.n_x),
+        x=g2f.LimitsD(min=0, max=config.n_cols),
+        y=g2f.LimitsD(min=0, max=config.n_rows),
         rho=g2f.LimitsD(min=-0.99, max=0.99),
     )
 
@@ -72,16 +76,16 @@ def channels(bands):
 def images(bands, config):
     images = {}
     for band in bands:
-        image = g2.ImageD(config.n_y, config.n_x)
-        sigma_inv = g2.ImageD(config.n_y, config.n_x)
-        sigma_inv.data.flat = 1/1e-3
-        mask_inv = g2.ImageB(np.ones((config.n_y, config.n_x), dtype=bool))
+        image = g2.ImageD(n_rows=config.n_rows, n_cols=config.n_cols)
+        sigma_inv = g2.ImageD(n_rows=config.n_rows, n_cols=config.n_cols)
+        sigma_inv.data.flat = 1/config.sigma_img
+        mask_inv = g2.ImageB(np.ones((config.n_rows, config.n_cols), dtype=bool))
         images[band] = (image, sigma_inv, mask_inv)
     return images
 
 
 @pytest.fixture(scope='module')
-def data(channels, images):
+def data(channels, images) -> g2f.Data:
     return g2f.Data([
         g2f.Observation(
             channel=channels[band],
@@ -120,8 +124,8 @@ def psfmodels(channels, config, data, limits):
     for i in range(len(psfmodels)):
         components = [None]*n_comps
         centroid = g2f.CentroidParameters(
-            g2f.CentroidXParameterD(config.n_y/2., limits=limits.x),
-            g2f.CentroidYParameterD(config.n_x/2., limits=limits.y),
+            g2f.CentroidXParameterD(config.n_cols/2., limits=limits.x),
+            g2f.CentroidYParameterD(config.n_rows/2., limits=limits.y),
         )
         for c in range(n_comps):
             is_last = c == n_last
@@ -152,6 +156,36 @@ def psfmodels(channels, config, data, limits):
 
 
 @pytest.fixture(scope='module')
+def psfmodels_linear_gaussians(channels, psfmodels):
+    gaussians = [None]*len(psfmodels)
+    for idx, psfmodel in enumerate(psfmodels):
+        params = psfmodel.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE))
+        params[0].fixed = False
+        gaussians[idx] = make_psf_linear_gaussians(psfmodel)
+    return gaussians
+
+
+@pytest.fixture(scope='module')
+def psf_observations(config, psfmodels) -> Tuple[g2f.Observation]:
+    observations = [None]*len(psfmodels)
+    gaussians_kernel = g2.Gaussians([g2.Gaussian()])
+    rng = np.random.default_rng(config.seed)
+    for idx, psfmodel in enumerate(psfmodels):
+        image = make_image_gaussians(
+            gaussians_source=psfmodel.gaussians(g2f.Channel.NONE),
+            gaussians_kernel=gaussians_kernel,
+            n_rows=config.n_rows,
+            n_cols=config.n_cols,
+        )
+        data = image.data
+        data += config.noise_psf*rng.standard_normal(image.data.shape)
+        sigma_inv = g2.ImageD(np.full_like(image.data, config.noise_psf))
+        mask = g2.ImageB(np.ones_like(image.data))
+        observations[idx] = g2f.Observation(image=image, sigma_inv=sigma_inv, mask_inv=mask, channel=g2f.Channel.NONE)
+    return tuple(observations)
+
+
+@pytest.fixture(scope='module')
 def psfmodels_old(bands, config):
     compconf = config.comps_psf
     sigmas = compconf.size_base + compconf.size_increment*np.arange(compconf.n_comp)
@@ -159,7 +193,7 @@ def psfmodels_old(bands, config):
         band: mpffit.get_model(
             {band: 1},
             "gaussian:2",
-            (config.n_y, config.n_x),
+            (config.n_rows, config.n_cols),
             sigma_xs=sigmas,
             sigma_ys=sigmas,
             rhos=compconf.rho_base + compconf.rho_increment*np.arange(compconf.n_comp),
@@ -180,8 +214,8 @@ def get_sources(channels, config, limits, old: bool = False):
         flux = (config.src_flux_base + i*config.src_flux_increment)/n_components
         components = [None]*n_components
         centroid = (mpfobj.AstrometricModel if old else g2f.CentroidParameters)(
-            g2f.CentroidXParameterD(config.n_y/2., limits=limits.x),
-            g2f.CentroidYParameterD(config.n_x/2., limits=limits.y),
+            g2f.CentroidXParameterD(config.n_cols/2., limits=limits.x),
+            g2f.CentroidYParameterD(config.n_rows/2., limits=limits.y),
         )
         for c in range(n_components):
             fluxes = {
@@ -303,7 +337,7 @@ def test_model_evaluation(channels, model, model_jac, model_old, images):
         model.evaluate()
 
     printout = False
-    plot = True
+    plot = False
 
     params_new_all = model.parameters()
     # Cheat a little and remove duplicate CentroidParameters without explicitly converting to a set
@@ -492,6 +526,12 @@ def test_model_evaluation(channels, model, model_jac, model_old, images):
               f', med={np.median(result, axis=0):.4e}')
 
 
+def test_make_psf_source_linear(psfmodels, psfmodels_linear_gaussians):
+    for psfmodel, linear_gaussians in zip(psfmodels, psfmodels_linear_gaussians):
+        gaussians = psfmodel.gaussians(g2f.Channel.NONE)
+        assert len(gaussians) == (len(linear_gaussians.gaussians_free) + len(linear_gaussians.gaussians_fixed))
+
+
 def test_modeller(model):
     model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
     likelihood = model.evaluate()
@@ -508,7 +548,10 @@ def test_modeller(model):
             param.fixed = True
 
     for param in model.parameters(paramfilter=g2f.ParamFilter(fixed=False)):
-        param.value_transformed += 0.02
+        try:
+            param.value_transformed += 0.02
+        except RuntimeError:
+            param.value_transformed -= 0.02
 
     modeller = Modeller()
     result, time, *_ = modeller.fit_model(model, ftol=2e-4, xtol=2e-4)
@@ -517,3 +560,15 @@ def test_modeller(model):
 
     print(f'got loglike={sum(likelihood_fit)} (init={sum(likelihood)})'
           f' from modeller.fit_model in t={time:.3e}, result: \n{result}')
+
+
+def test_psfmodels_linear_gaussians(data, psfmodels_linear_gaussians, psf_observations):
+    results = [None]*len(psf_observations)
+    for idx, (gaussians_linear, observation_psf) in enumerate(zip(psfmodels_linear_gaussians, psf_observations)):
+        results[idx] = Modeller.fit_gaussians_linear(
+            gaussians_linear=gaussians_linear,
+            observation=observation_psf,
+            fitmethods=fitmethods_linear,
+            plot=False,
+        )
+    print(results)

@@ -1687,7 +1687,7 @@ class Model:
                 if has_psf:
                     shape = exposure.psf.get_image_shape()
                     if shape is None:
-                        shape = [1 + np.int(x/2) for x in np.floor([nx, ny])]
+                        shape = [1 + int(x/2) for x in np.floor([nx, ny])]
                     profit_model["psf"] = exposure.psf.get_image(engine, size=shape, engineopts=engineopts)
 
                 if exposure.use_mask_inverse is not None:

@@ -205,7 +205,7 @@ def get_components(profile, fluxes, values=None, is_fluxes_fracs=True):
     is_gaussian = profile == "gaussian"
     is_multi_gaussian_sersic = profile.startswith('mgsersic')
     if is_multi_gaussian_sersic:
-        order = np.int(profile.split('mgsersic')[1])
+        order = int(profile.split('mgsersic')[1])
         profile = "sersic"
         if 'n_ser' in values:
             values['n_ser'] = np.zeros_like(values['n_ser'])
@@ -294,7 +294,7 @@ def get_model(
         # TODO: What should be done about modifiers?
         profile_modifiers = description_model.split("+")
         profile, num_comps_prof = profile_modifiers[0].split(":")
-        num_comps_prof = np.int(num_comps_prof)
+        num_comps_prof = int(num_comps_prof)
         profiles[profile] = num_comps_prof
         num_comps += num_comps_prof
     try:
@@ -310,7 +310,7 @@ def get_model(
         raise error
 
     # TODO: Figure out how this should work in multiband
-    cen_x, cen_y = [x / 2.0 for x in size_image]
+    cen_x, cen_y = [x / 2.0 for x in size_image[::-1]]
     if offset_xy is not None:
         cen_x += offset_xy[0]
         cen_y += offset_xy[1]
@@ -326,8 +326,8 @@ def get_model(
         data = None
 
     modelastro = mpfobj.AstrometricModel(
-        cen_x=g2f.CentroidXParameterD(value=cen_x, limits=Limits(min=0., max=size_image[0])),
-        cen_y=g2f.CentroidYParameterD(value=cen_y, limits=Limits(min=0., max=size_image[1])),
+        cen_x=g2f.CentroidXParameterD(value=cen_x, limits=Limits(min=0., max=size_image[1])),
+        cen_y=g2f.CentroidYParameterD(value=cen_y, limits=Limits(min=0., max=size_image[0])),
     )
     components = []
 
@@ -498,7 +498,7 @@ def fit_psf_model(
     if name_model is None:
         name_model = modeltype
     # Fit the PSF
-    num_comps = np.int(modeltype.split(":")[1])
+    num_comps = int(modeltype.split(":")[1])
     for engine, engineopts in engines.items():
         if engine not in fits_model_psf:
             fits_model_psf[engine] = {}
@@ -911,7 +911,7 @@ def fit_galaxy_model(
                         if value[1] in flag_param_keys:
                             flag_params[value[1]].append(value[0])
                         else:
-                            value_split = [np.float(x) for x in value[1].split(',')]
+                            value_split = [np.float64(x) for x in value[1].split(',')]
                             flag_params[flag][value[0]] = value_split
 
         # Initialize model from estimate of moments (size/ellipticity) or from another fit
@@ -1749,7 +1749,7 @@ def init_model(
         inittype_mod = fit_init.modeltype.split('+')
         inittype_split = inittype_mod[0].split(':')
         inittype_order = None if not inittype_split[0].startswith('mgsersic') else \
-            np.int(inittype_split[0].split('mgsersic')[1])
+            int(inittype_split[0].split('mgsersic')[1])
         if inittype_order is not None:
             if inittype_order not in MultiGaussianApproximationComponent.weights['sersic']:
                 raise RuntimeError('Inittype {} has unimplemented order {} not in {}'.format(
@@ -1758,7 +1758,7 @@ def init_model(
         is_mg_to_gauss = (
                 inittype_order is not None and inittype_split[1].isdecimal() and
                 modeltype_base[0] == 'gaussian' and len(modeltype_base) > 1 and modeltype_base[1].isdecimal()
-                and np.int(modeltype_base[1]) == inittype_order*np.int(inittype_split[1])
+                and int(modeltype_base[1]) == inittype_order*int(inittype_split[1])
         )
         if is_mg_to_gauss:
             num_components = np.repeat(inittype_order, inittype_split[1])
