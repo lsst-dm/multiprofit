@@ -210,7 +210,7 @@ class Modeller:
         n_cols = np.zeros(n_obs, dtype=int)
         datasizes = np.zeros(n_obs, dtype=int)
         ranges_params = [None] * n_obs
-        params_free = list({x: None for x in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))})
+        params_free = tuple({x: None for x in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))})
 
         # There's one extra validation array
         n_params_jac = len(params_free) + 1
@@ -222,9 +222,10 @@ class Modeller:
             n_rows[idx_obs] = observation.image.n_rows
             n_cols[idx_obs] = observation.image.n_cols
             datasizes[idx_obs] = n_rows[idx_obs] * n_cols[idx_obs]
-            params = list({
-                x: None
-                for x in model.parameters(paramfilter=g2f.ParamFilter(fixed=False, channel=observation.channel))
+            params = tuple({
+                x: None for x in model.parameters(
+                    paramfilter=g2f.ParamFilter(fixed=False, channel=observation.channel)
+                )
             })
             n_params_obs = len(params)
             ranges_params_obs = [0] * (n_params_obs + 1)
@@ -240,8 +241,8 @@ class Modeller:
         has_jacobian = jacobian is not None
         shape_jacobian = (datasize, n_params_jac)
         if has_jacobian:
-            if jacobian.shape != datasize:
-                raise ValueError(f"jacobian.shape={jacobian.shape} != shape_jacobian={shape_jacobian}")
+            if jacobian.shape != shape_jacobian:
+                raise ValueError(f"{jacobian.shape=} != {shape_jacobian=}")
         else:
             jacobian = np.zeros(shape_jacobian)
         jacobians = [None] * n_obs
@@ -249,7 +250,7 @@ class Modeller:
         has_residual = residual is not None
         if has_residual:
             if residual.size != datasize:
-                raise ValueError(f"residual.size={residual.shape} != datasize={datasize}")
+                raise ValueError(f"{residual.size=} != {datasize=}")
         else:
             residual = np.zeros(datasize)
         residuals = [None] * n_obs
@@ -281,12 +282,11 @@ class Modeller:
         params_init = [None] * n_params
 
         for idx, param in enumerate(params):
-            limits = param.limits
-            bounds[0][idx] = limits.min
-            bounds[1][idx] = limits.max
-            if not (limits.min <= param.value_transformed <= limits.max):
-                raise RuntimeError(f'param={param}.value_transformed={param.value_transformed}'
-                                   f' not within limits={limits}')
+            limits = param.transform.limits if hasattr(param.transform, 'limits') else param.limits
+            bounds[0][idx] = param.transform.forward(limits.min)
+            bounds[1][idx] = param.transform.forward(limits.max)
+            if not (limits.min <= param.value <= limits.max):
+                raise RuntimeError(f'{param=}.value={param.value_transforme} not within {limits=}')
             params_init[idx] = param.value_transformed
 
         jacobian_full = jacobian
