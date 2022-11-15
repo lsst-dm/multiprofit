@@ -19,15 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import gauss2d.fit as g2f
-import numpy as np
-
-
-def Limits(*args, **kwargs):
-    if kwargs.get('max', np.inf) - kwargs.get('min', -np.inf) <= 0:
-        print('oops 2')
-    return g2f.LimitsD(*args, **kwargs)
-
+from gauss2d.fit import LimitsD as Limits
 
 # TODO: Replace with a parameter factory and/or profile factory
 limits_ref = {

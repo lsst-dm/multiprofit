@@ -83,13 +83,12 @@ def verify_transform_derivative(
 
 
 transforms_ref = {
-    "none": g2f.UnitTransformD(),  # Transform(name="ref_None"),
+    "none": g2f.UnitTransformD(),
     "log": g2f.LogTransformD(),
     "log10": g2f.Log10TransformD(),
     "inverse": g2f.InverseTransformD(),
     "logit": g2f.LogitTransformD(),
     "logit_rho": get_logit_limited(-0.99, 0.99, name="ref_logit_rho[-0.99, 0.99]"),
     "logit_axrat": get_logit_limited(1e-4, 1, name="ref_logit_axrat[1e-4, 1]"),
-    "logit_sersic": get_logit_limited(0.3, 6.0, name="ref_logit_sersic[0.3, 6]"),
-    "logit_multigauss": get_logit_limited(0.49, 6.01, name="ref_logit_multigausssersic[0.5, 6]"),
+    "logit_sersic": get_logit_limited(0.5, 6.0, name="ref_logit_sersic[0.5, 6.0]"),
 }

@@ -3,6 +3,7 @@ galsim
 gauss2d
 matplotlib
 numpy
+pydantic
 pytest
 scipy
 seaborn
