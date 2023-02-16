@@ -1,15 +1,17 @@
-.idea*
-.ipynb*
-.vscode*
-__pycache__/
+# Build
 build/
-cmake_install.cmake
-cmake-build-debug/
-CMakeCache.txt
-CMakeFiles/
 dist/
-Makefile
-multiprofit.cbp
 multiprofit.egg-info/
-multiprofit/__pycache__/
-venv/
+*/__pycache__/
+
+# IDE folders and files
+.cache/
+.idea/
+.theia/
+.vscode/
+compile_commands.json
+
+# pytest plugins
+.hypothesis/
+prof/
+

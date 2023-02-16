@@ -19,14 +19,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from gauss2d.fit import LimitsD as Limits
+import gauss2d.fit as g2f
+from multiprofit.psfmodel_utils import make_psf_source
 
-# TODO: Replace with a parameter factory and/or profile factory
-limits_ref = {
-    "none": Limits(),
-    "axrat": Limits(min=1e-2, max=1),
-    "con": Limits(min=1, max=10),
-    "n_ser": Limits(min=0.3, max=6.0),
-    "n_ser_multigauss": Limits(min=0.5, max=6.0),
-    "rho": Limits(min=-0.99, max=0.99),
-}
+
+def test_make_psf_source():
+    source = make_psf_source([2, 3, 4])
+    assert source.gaussians(g2f.Channel.NONE).size == 3

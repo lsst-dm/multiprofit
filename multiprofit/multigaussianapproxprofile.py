@@ -1680,7 +1680,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
             flux = self.fluxes_dict[band].value
             profile = profile_base.copy()
             if isinstance(self.fluxes_dict[band], g2f.ProperFractionParameterD):
-                fluxratio = np.float(flux)
+                fluxratio = np.float64(flux)
                 if not 0 <= fluxratio <= 1:
                     raise ValueError("flux ratio not 0 <= {} <= 1".format(fluxratio))
                 flux *= flux_by_band[band]
@@ -1699,7 +1699,7 @@ class MultiGaussianApproximationComponent(mpfobj.EllipticalComponent):
                 if key in profile:
                     profile[key] += value
                 else:
-                    profile[key] = np.float(value)
+                    profile[key] = np.float64(value)
             if engine == "galsim":
                 axrat = profile["axrat"]
                 axrat_sqrt = np.sqrt(axrat)
