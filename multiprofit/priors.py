@@ -19,7 +19,36 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import gauss2d.fit as g2f
 import numpy as np
+import lsst.pex.config as pexConfig
+
+
+class ShapePriorConfig(pexConfig.Config):
+    prior_axrat_stddev = pexConfig.Field[float](
+        default=0,
+        doc="Prior std. dev. on axis ratio (ignored if not >0)",
+    )
+    prior_size_stddev = pexConfig.Field[float](
+        default=0,
+        doc="Prior std. dev. on size_major (ignored if not >0)",
+    )
+
+    def get_shape_prior(self, ellipse: g2f.ParametricEllipse) -> g2f.ShapePrior | None:
+        use_prior_axrat = self.prior_axrat_stddev > 0 and np.isfinite(self.prior_axrat_stddev)
+        use_prior_size = self.prior_size_stddev > 0 and np.isfinite(self.prior_size_stddev)
+
+        if use_prior_axrat or use_prior_size:
+            return g2f.ShapePrior(
+                ellipse,
+                (g2f.ParametricGaussian1D(None, g2f.StdDevParameterD(self.prior_axrat_stddev))
+                 if use_prior_size
+                 else None),
+                (g2f.ParametricGaussian1D(None, g2f.StdDevParameterD(self.use_prior_axrat))
+                 if use_prior_axrat
+                 else None),
+            )
+        return None
 
 
 def get_hst_size_prior(mag_psf_i):
