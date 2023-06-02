@@ -1927,16 +1927,16 @@ class Model:
             prior_log = 0
             idx_prior = 0
             for prior in self.priors:
-                prior_value, residuals, jacobians = prior.calc_residual(calc_jacobian=True)
-                prior_log += prior_value
-                n_res = len(residuals)
+                prior_value = prior.compute(calc_jacobian=True)
+                prior_log += prior_value.loglike
+                n_res = len(prior_value.residuals)
                 sli = slice(idx_prior, idx_prior + n_res)
                 try:
-                    self.residuals_prior[sli] = residuals
+                    self.residuals_prior[sli] = prior_value.residuals
                 except Exception:
                     print(f"Failed to set prior residual for prior {prior}")
                     raise
-                for param, jac_param in jacobians.items():
+                for param, jac_param in prior_value.jacobians.items():
                     idx_param = idx_params.get(param)
                     if idx_param is not None:
                         self.jacobian_prior[sli, idx_param] += jac_param

@@ -22,7 +22,7 @@
 from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
-
+import math
 from multiprofit.modeller import (
     fitmethods_linear, LinearGaussians, make_image_gaussians, make_psfmodel_null, Modeller,
 )
@@ -323,7 +323,7 @@ def fit_model(model: g2f.Model, jacobian, residuals):
     return result, time_run
 
 
-def test_model_evaluation(channels, model, model_jac, images):
+def test_model_evaluation(channels, config, model, model_jac, images):
     with pytest.raises(RuntimeError):
         model.evaluate()
 
@@ -348,17 +348,19 @@ def test_model_evaluation(channels, model, model_jac, images):
     n_cols = np.zeros(n_obs, dtype=int)
     datasizes = np.zeros(n_obs, dtype=int)
     ranges_params = [None]*n_obs
-    params_free = list({x: None for x in model_jac.parameters(paramfilter=g2f.ParamFilter(fixed=False))})
+    params_free = Modeller.get_params_free(model_jac)
 
     # There's one extra validation array
     n_params_jac = len(params_free) + 1
     assert n_params_jac > 1
 
+    rng = np.random.default_rng(config.seed + 1)
+
     for idx_obs in range(n_obs):
         observation = model.data[idx_obs]
         output = model.outputs[idx_obs]
-        observation.image.data.flat = output.data.flat + np.random.normal(
-            loc=0, scale=(1/observation.sigma_inv.data).flat)
+        observation.image.data.flat = output.data.flat + rng.standard_normal(
+            output.data.size)/observation.sigma_inv.data.flat
         n_rows[idx_obs] = observation.image.n_rows
         n_cols[idx_obs] = observation.image.n_cols
         datasizes[idx_obs] = n_rows[idx_obs]*n_cols[idx_obs]
@@ -388,10 +390,9 @@ def test_model_evaluation(channels, model, model_jac, images):
         size_obs = datasizes[idx_obs]
         end = offset + size_obs
         shape = (n_rows[idx_obs], n_cols[idx_obs])
-        ranges_params_obs = ranges_params[idx_obs]
-        jacobians_obs = [None]*(len(ranges_params_obs))
-        for idx_param, idx_jac in enumerate(ranges_params_obs):
-            jacobians_obs[idx_param] = g2.ImageD(jacobian[offset:end, idx_jac].view().reshape(shape))
+        jacobians_obs = [None]*n_params_jac
+        for idx_jac in range(n_params_jac):
+            jacobians_obs[idx_jac] = g2.ImageD(jacobian[offset:end, idx_jac].view().reshape(shape))
         jacobians[idx_obs] = jacobians_obs
         residuals[idx_obs] = g2.ImageD(residual[offset:end].view().reshape(shape))
         offset = end
@@ -441,36 +442,79 @@ def test_make_psf_source_linear(psfmodels, psfmodels_linear_gaussians):
                                   + len(linear_gaussians.gaussians_fixed))
 
 
-def test_modeller(model):
+def test_modeller(config, model):
     model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
-    likelihood = model.evaluate()
-
+    loglike = model.evaluate()
+    # For debugging purposes
     printout = False
+
+    rng = np.random.default_rng(config.seed)
 
     for idx_obs, observation in enumerate(model.data):
         output = model.outputs[idx_obs]
-        observation.image.data.flat = output.data.flat + np.random.normal(
-            loc=0, scale=(1 / observation.sigma_inv.data).flat)
+        observation.image.data.flat = output.data.flat + rng.standard_normal(
+            output.data.size)/observation.sigma_inv.data.flat
 
     # Freeze the PSF params - they can't be fit anyway
     for psfmodel in model.psfmodels:
         for param in psfmodel.parameters():
             param.fixed = True
 
-    for param in model.parameters(paramfilter=g2f.ParamFilter(fixed=False)):
+    params_free = tuple({p: None for p in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))}.keys())
+    delta_param = 0.02
+    for param in params_free:
         try:
-            param.value_transformed += 0.02
+            param.value_transformed += delta_param
         except RuntimeError:
-            param.value_transformed -= 0.02
+            param.value_transformed -= delta_param
 
     modeller = Modeller()
-    results = modeller.fit_model(model, ftol=2e-4, xtol=2e-4)
-    model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
-    likelihood_fit = model.evaluate()
+    time_init = time.process_time()
+    kwargs_fit = dict(ftol=1e-6, xtol=1e-6)
+
+    results = modeller.fit_model(model, **kwargs_fit)
+    params_best = results.result.x
+    loglike_noprior = -results.result.cost
 
     if printout:
-        print(f'got loglike={sum(likelihood_fit)} (init={sum(likelihood)})'
-              f' from modeller.fit_model in t={time:.3e}, results: \n{results}')
+        print(f'got loglike={loglike_noprior} (init={sum(loglike)})'
+              f' from modeller.fit_model in t={time.process_time() - time_init:.3e}, x={params_best},'
+              f' results: \n{results}')
+
+    for offset in (0, delta_param):
+        for param, value in zip(params_free, params_best):
+            param.value_transformed = value
+        priors = tuple(g2f.GaussianPrior(param, param.value_transformed + offset, 1.0, transformed=True)
+                       for param in params_free)
+        if offset == 0:
+            for p in priors:
+                assert p.evaluate().loglike == 0
+                assert p.loglike_const_terms[0] == -math.log(math.sqrt(2*math.pi))
+        model = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model.sources, priors=priors)
+        model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+        loglike_init = sum(loglike_eval for loglike_eval in model.evaluate())
+        if offset == 0:
+            assert np.isclose(loglike_init, loglike_noprior, rtol=1e-10, atol=1e-10)
+        else:
+            assert loglike_init < loglike_noprior
+
+        time_init = time.process_time()
+        results = modeller.fit_model(model, **kwargs_fit)
+        time_init = time.process_time() - time_init
+        loglike_new = -results.result.cost
+        for param, value in zip(params_free, results.result.x):
+            param.value_transformed = value
+        model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+        loglike_model = sum(loglike_eval for loglike_eval in model.evaluate())
+        assert np.isclose(loglike_new, loglike_model, rtol=1e-10, atol=1e-10)
+        assert loglike_new > loglike_init
+
+        if printout:
+            print(f'got loglike={loglike_new} (first={loglike_noprior})'
+                  f' from modeller.fit_model in t={time_init:.3e}, x={results.result.x}, results: \n{results}')
+        # Adding a suitably-scaled prior far from the truth should always worsen the log likelihood, but doesn't...
+        # noise bias? bad convergence? unclear
+        # assert (loglike_new >= loglike_noprior) == (offset == 0)
 
 
 def test_psf_model_fit(psf_fit_models):
