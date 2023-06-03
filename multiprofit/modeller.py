@@ -19,6 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from abc import ABC, abstractmethod
 import gauss2d as g2
 import gauss2d.fit as g2f
 import logging
@@ -164,8 +165,19 @@ def make_psfmodel_null() -> g2f.PsfModel:
     return g2f.PsfModel(g2f.GaussianComponent.make_uniq_default_gaussians([0], True))
 
 
+class FitInputsBase(ABC):
+    @abstractmethod
+    def validate_for_model(self, model: g2f.Model) -> list[str]:
+        """Validate that existing FitInputs are valid for a Model"""
+
+
+class FitInputsDummy(FitInputsBase):
+    def validate_for_model(self, model: g2f.Model) -> list[str]:
+        return ["This is a dummy FitInputs and will never validate",]
+
+
 @dataclass(kw_only=True, config=ArbitraryAllowedConfig)
-class FitInputs:
+class FitInputs(FitInputsBase):
     jacobian: np.ndarray = pydantic.Field(None, title="The full Jacobian array")
     jacobians: list[list[g2.ImageD]] = pydantic.Field(
         title="Jacobian arrays (views) for each observation",

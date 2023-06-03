@@ -23,11 +23,9 @@ import astropy
 from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
+from multiprofit.componentconfig import GaussianConfig, SersicConfig, SersicIndexConfig
 from multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
-from multiprofit.fit_source import (
-    CatalogExposureSourcesABC, CatalogSourceFitter, CatalogSourceFitterConfig, SersicConfig,
-    SersicIndexConfig
-)
+from multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitter, CatalogSourceFitterConfig
 import numpy as np
 import pytest
 
@@ -106,8 +104,10 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
         return obs
 
     def __post_init__(self):
-        object.__setattr__(self, 'config_fit_psf',
-                           CatalogPsfFitterConfig(**self.table_psf_fits.meta['config']))
+        config_dict = self.table_psf_fits.meta['config']
+        # TODO: Figure out if this can be done automatically somehow
+        config_dict['gaussians'] = {k: GaussianConfig(**v) for k, v in config_dict['gaussians'].items()}
+        object.__setattr__(self, 'config_fit_psf', CatalogPsfFitterConfig(**config_dict))
 
 
 class CatalogSourceFitterTest(CatalogSourceFitter):
@@ -125,7 +125,7 @@ class CatalogSourceFitterTest(CatalogSourceFitter):
 
 @pytest.fixture(scope='module')
 def config_psf():
-    return CatalogPsfFitterConfig(sigmas=[3.0])
+    return CatalogPsfFitterConfig(gaussians={'comp1': GaussianConfig(sigma_initial=1.5)})
 
 
 @pytest.fixture(scope='module')
@@ -147,11 +147,11 @@ def test_fit_psf(config_psf, table_psf_fits):
     assert len(table_psf_fits) == 1
     assert all(np.isfinite(list(table_psf_fits[0].values())))
     psfmodel = config_psf.rebuild_psfmodel(table_psf_fits[0])
-    assert len(psfmodel.components) == len(config_psf.sigmas)
+    assert len(psfmodel.components) == len(config_psf.gaussians)
 
 
 def test_fit_source(config_source, table_psf_fits):
-    model_source = config_source.make_source(
+    model_source, priors = config_source.make_source(
         centroid=g2f.CentroidParameters(x=g2f.CentroidXParameterD(shape_img[1]/2),
                                         y=g2f.CentroidYParameterD(shape_img[0]/2),),
         channels=[channel],

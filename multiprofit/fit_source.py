@@ -32,9 +32,10 @@ from typing import Any, Mapping, Sequence, Type
 
 import lsst.pex.config as pexConfig
 
-from multiprofit.fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
-from multiprofit.modeller import LinearGaussians, Modeller
-from multiprofit.transforms import transforms_ref
+from .componentconfig import SersicConfig
+from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
+from .modeller import FitInputsDummy, LinearGaussians, Modeller
+from .transforms import transforms_ref
 
 
 class CatalogExposureSourcesABC(CatalogExposureABC):
@@ -83,86 +84,16 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         """
 
 
-class ParameterConfig(pexConfig.Config):
-    """Basic configuration for all parameters."""
-    fixed = pexConfig.Field[bool](default=True, doc="Whether parameter is fixed or not (free)")
-    value_initial = pexConfig.Field[float](doc="Initial value")
-
-
-class SersicIndexConfig(ParameterConfig):
-    """Specific configuration for a Sersic index parameter."""
-    def setDefaults(self):
-        self.value_initial = 0.5
-
-
-class SersicConfig(pexConfig.Config):
-    """Configuration for a gauss2d.fit Sersic component."""
-    sersicindex = pexConfig.ConfigField[SersicIndexConfig](doc="Sersic index")
-
-    def make_component(
-        self,
-        centroid: g2f.CentroidParameters,
-        channels: list[g2f.Channel],
-    ) -> g2f.Component:
-        """Make a Component reflecting the current configuration.
-
-        Parameters
-        ----------
-        centroid : `gauss2d.fit.CentroidParameters`
-            Centroid parameters for the component.
-        channels : list[`gauss2d.fit.Channel`]
-            A list of gauss2d.fit.Channel to populate a
-            `gauss2d.fit.LinearIntegralModel` with.
-
-        Returns
-        -------
-        component: `gauss2d.fit.Component`
-            A suitable `gauss2d.fit.GaussianComponent` if the Sersic index is
-            fixed at 0.5, or a `gauss2d.fit.SersicMixComponent` otherwise.
-
-        Notes
-        -----
-        The `gauss2d.fit.LinearIntegralModel` will be populated with normalized
-        `gauss2d.fit.IntegralParameterD` instances, in preparation for linear
-        least squares fitting.
-        """
-        transform_flux = transforms_ref['log10']
-        transform_size = transforms_ref['log10']
-        transform_rho = transforms_ref['logit_rho']
-        integral = g2f.LinearIntegralModel(
-            {channel: g2f.IntegralParameterD(1.0, transform=transform_flux) for channel in channels}
-        )
-        if self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed:
-            return g2f.GaussianComponent(
-                centroid=centroid,
-                ellipse=g2f.GaussianParametricEllipse(
-                    sigma_x=g2f.SigmaXParameterD(0, transform=transform_size),
-                    sigma_y=g2f.SigmaYParameterD(0, transform=transform_size),
-                    rho=g2f.RhoParameterD(0, transform=transform_rho),
-                ),
-                integral=integral,
-            )
-        return g2f.SersicMixComponent(
-            centroid=centroid,
-            ellipse=g2f.SersicParametricEllipse(
-                size_x=g2f.ReffXParameterD(0, transform=transform_size),
-                size_y=g2f.ReffYParameterD(0, transform=transform_size),
-                rho=g2f.RhoParameterD(0, transform=transform_rho),
-            ),
-            integral=integral,
-            sersicindex=g2f.SersicMixComponentIndexParameterD(
-                value=self.sersicindex.value_initial,
-                fixed=self.sersicindex.fixed,
-                transform=transforms_ref['logit_sersic'] if not self.sersicindex.fixed else None,
-            ),
-        )
-
-
 class CatalogSourceFitterConfig(CatalogFitterConfig):
     """Configuration for the MultiProFit profile fitter."""
     fit_cenx = pexConfig.Field[bool](default=True, doc="Fit x centroid parameter")
     fit_ceny = pexConfig.Field[bool](default=True, doc="Fit y centroid parameter")
     n_pointsources = pexConfig.Field[int](default=0, doc="Number of central point source components")
+    prior_cenx_stddev = pexConfig.Field[float](default=0,
+                                               doc="Prior std. dev. on x centroid (ignored if not >0)")
+    prior_ceny_stddev = pexConfig.Field[float](default=0,
+                                               doc="Prior std. dev. on y centroid (ignored if not >0)")
+
     # TODO: Verify that component names don't clash
     sersics = pexConfig.ConfigDictField(
         default={},
@@ -173,7 +104,12 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
     )
     unit_flux = pexConfig.Field[str](default="", doc="Flux unit")
 
-    def make_source(self, centroid: g2f.CentroidParameters, channels: list[g2f.Channel]):
+    def make_source(
+        self,
+        centroid: g2f.CentroidParameters,
+        channels: list[g2f.Channel]
+    ) -> tuple[g2f.Source, list[g2f.Prior]]:
+        priors = []
         n_sersics = len(self.sersics)
         components = [None]*(self.n_pointsources + n_sersics)
         for idx in range(self.n_pointsources):
@@ -191,9 +127,18 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
             )
         idx = self.n_pointsources
         for sersic in self.sersics.values():
-            components[idx] = sersic.make_component(centroid=centroid, channels=channels)
+            component = sersic.make_component(centroid=centroid, channels=channels)
+            components[idx] = component
             idx += 1
-        return g2f.Source(components)
+        if self.prior_cenx_stddev > 0 and np.isfinite(self.prior_cenx_stddev):
+            priors.append(
+                g2f.GaussianPrior(centroid.x_param_ptr, 0, self.prior_cenx_stddev)
+            )
+        if self.prior_ceny_stddev > 0 and np.isfinite(self.prior_ceny_stddev):
+            priors.append(
+                g2f.GaussianPrior(centroid.y_param_ptr, 0, self.prior_ceny_stddev)
+            )
+        return g2f.Source(components), priors
 
     def schema(self) -> list[ColumnInfo]:
         columns = super().schema()
@@ -344,7 +289,7 @@ class CatalogSourceFitter:
         cenx = g2f.CentroidXParameterD(value=0, limits=limits_x, fixed=not config.fit_cenx)
         ceny = g2f.CentroidYParameterD(value=0, limits=limits_y, fixed=not config.fit_ceny)
         centroid = g2f.CentroidParameters(cenx, ceny)
-        model_source = config.make_source(centroid=centroid, channels=list(channels.values()))
+        model_source, priors = config.make_source(centroid=centroid, channels=list(channels.values()))
         params = tuple({x: None for x in model_source.parameters([], g2f.ParamFilter(fixed=False))})
 
         n_rows = len(catalog_multi)
@@ -375,6 +320,7 @@ class CatalogSourceFitter:
 
         # dummy size for first iteration
         size = 0
+        fitInputs = FitInputsDummy()
 
         observations = [None]*n_catexps
         psfmodels = [None]*n_catexps
@@ -400,7 +346,7 @@ class CatalogSourceFitter:
                     psfmodels[idx_catexp] = psfmodel
 
                 data = g2f.Data(observations)
-                model = g2f.Model(data=data, psfmodels=psfmodels, sources=[model_source])
+                model = g2f.Model(data=data, psfmodels=psfmodels, sources=[model_source], priors=priors)
                 self.initialize_model(model, source_multi, limits_x, limits_y)
 
                 # Caches the jacobian residual if the data size is unchanged
@@ -424,14 +370,13 @@ class CatalogSourceFitter:
                                 parameter.limits = limits_flux
                             parameter.value = value
 
-                result_full = self.modeller.fit_model(
-                    model, jacobian=jacobian, residual=residual, **kwargs
-                )
-                residual, jacobian = result_full.residual, result_full.jacobian
+                fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
+                result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
+                fitInputs = result_full.inputs
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
-                results[f"{prefix}chisq_red"][idx] = np.sum(result_full.residual**2)/size
+                results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
 
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value

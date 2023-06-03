@@ -90,5 +90,6 @@ transforms_ref = {
     "logit": g2f.LogitTransformD(),
     "logit_rho": get_logit_limited(-0.99, 0.99, name="ref_logit_rho[-0.99, 0.99]"),
     "logit_axrat": get_logit_limited(1e-4, 1, name="ref_logit_axrat[1e-4, 1]"),
+    "logit_axrat_prior": get_logit_limited(-0.001, 1.001, name="ref_logit_axrat_prior[-0.001, 1.001]"),
     "logit_sersic": get_logit_limited(0.5, 6.0, name="ref_logit_sersic[0.5, 6.0]"),
 }
