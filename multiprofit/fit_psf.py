@@ -32,7 +32,7 @@ from typing import Any, Mapping, Type
 
 import lsst.pex.config as pexConfig
 
-from .componentconfig import GaussianConfig
+from .componentconfig import GaussianConfig, ParameterConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, LinearGaussians, make_psfmodel_null, Modeller
 from .psfmodel_utils import make_psf_source
@@ -47,7 +47,10 @@ class CatalogExposurePsfABC(CatalogExposureABC):
 class CatalogPsfFitterConfig(CatalogFitterConfig):
     """Configuration for MultiProFit PSF image fitter."""
     gaussians = pexConfig.ConfigDictField(
-        default={'comp1': GaussianConfig(sigma_initial=1.5), 'comp2': GaussianConfig(sigma_initial=3.0)},
+        default={
+            'comp1': GaussianConfig(size=ParameterConfig(value_initial=1.5)),
+            'comp2': GaussianConfig(size=ParameterConfig(value_initial=3.0)),
+        },
         doc="Gaussian components",
         itemtype=GaussianConfig,
         keytype=str,
@@ -89,14 +92,22 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
             make_psf_source(sigma_xs=sigma_xs, sigma_ys=sigma_ys, rhos=rhos, fracs=fracs).components
         )
 
-    def schema(self) -> list[ColumnInfo]:
+    def schema(
+        self,
+        bands: list[str] = None,
+    ) -> list[ColumnInfo]:
         """Return the schema as an ordered list of columns."""
-        schema = super().schema()
+        prefix_band = ""
+        if bands is not None:
+            if len(bands) != 1:
+                raise ValueError("CatalogPsfFitter doesn't support multiple bands")
+            prefix_band = f'{bands[0]}_'
+        schema = super().schema(bands)
         n_gaussians = len(self.gaussians)
         idx_gauss_max = n_gaussians - 1
 
         for idx_gauss, name in enumerate(self.gaussians.keys()):
-            prefix_comp = f"{name}_"
+            prefix_comp = f"{name}_{prefix_band}"
             columns_comp = [
                 ColumnInfo(key=f'{prefix_comp}sigma_x', dtype='f8', unit=u.pix),
                 ColumnInfo(key=f'{prefix_comp}sigma_y', dtype='f8', unit=u.pix),
@@ -227,7 +238,7 @@ class CatalogPsfFitter:
 
         n_gaussians = len(config.gaussians)
         priors = []
-        sigmas = [comp.sigma_initial for comp in config.gaussians.values()]
+        sigmas = [comp.size.value_initial for comp in config.gaussians.values()]
 
         model_source = make_psf_source(sigma_xs=sigmas)
         for idx, (comp, config_comp) in enumerate(zip(model_source.components, config.gaussians.values())):
@@ -268,13 +279,13 @@ class CatalogPsfFitter:
         idx_flag_first = keys.index("unknown_flag")
         idx_var_first = keys.index("cen_x")
         columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:]]
-        dtypes = [(f'{prefix if col.key != "id" else ""}{col.key}', col.dtype) for col in columns]
+        dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {'config': config.toDict()}
         results = Table(data=np.full(n_rows, np.nan, dtype=dtypes), units=[x.unit for x in columns],
                         meta=meta)
         # Set nan-default flags to False instead
         for flag in columns[idx_flag_first:idx_var_first]:
-            results[flag.key] = False
+            results[f"{prefix}{flag.key}"] = False
 
         # dummy size for first iteration
         size = 0

@@ -23,6 +23,8 @@ import gauss2d.fit as g2f
 import numpy as np
 import lsst.pex.config as pexConfig
 
+from .transforms import transforms_ref
+
 
 class ShapePriorConfig(pexConfig.Config):
     prior_axrat_stddev = pexConfig.Field[float](
@@ -39,15 +41,15 @@ class ShapePriorConfig(pexConfig.Config):
         use_prior_size = self.prior_size_stddev > 0 and np.isfinite(self.prior_size_stddev)
 
         if use_prior_axrat or use_prior_size:
-            return g2f.ShapePrior(
-                ellipse,
-                (g2f.ParametricGaussian1D(None, g2f.StdDevParameterD(self.prior_axrat_stddev))
-                 if use_prior_size
-                 else None),
-                (g2f.ParametricGaussian1D(None, g2f.StdDevParameterD(self.use_prior_axrat))
-                 if use_prior_axrat
-                 else None),
-            )
+            prior_size = g2f.ParametricGaussian1D(
+                g2f.MeanParameterD(1, transform=transforms_ref["log10"]),
+                g2f.StdDevParameterD(self.prior_size_stddev)
+            ) if use_prior_size else None
+            prior_axrat = g2f.ParametricGaussian1D(
+                g2f.MeanParameterD(0, transform=transforms_ref["logit_axrat_prior"]),
+                g2f.StdDevParameterD(self.prior_axrat_stddev)
+            ) if use_prior_axrat else None
+            return g2f.ShapePrior(ellipse, prior_size, prior_axrat)
         return None
 
 

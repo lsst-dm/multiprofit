@@ -520,6 +520,8 @@ class Modeller:
             try:
                 for param, value in zip(params, params_new):
                     param.value_transformed = value
+                    if not np.isfinite(param.value):
+                        raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
                 raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
             time_init = time.process_time()

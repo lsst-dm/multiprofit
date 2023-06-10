@@ -23,34 +23,19 @@ import astropy
 from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
-from multiprofit.componentconfig import GaussianConfig, SersicConfig, SersicIndexConfig
+from multiprofit.config import set_config_from_dict
+from multiprofit.componentconfig import GaussianConfig, init_component, ParameterConfig, SersicConfig, SersicIndexConfig
 from multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
-from multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitter, CatalogSourceFitterConfig
+from multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
 import numpy as np
 import pytest
+from typing import Any, Mapping
 
 rng = np.random.default_rng(1)
 
 channel = g2f.Channel.get("r")
 shape_img = (23, 27)
 sigma_x_init, sigma_y_init, rho_init = 2.5, 3.6, -0.25
-
-
-def init_component(
-    component: g2f.Component, sigma_x: float = None, sigma_y: float = None, rho: float = None,
-    cenx: float = None, ceny: float = None,
-):
-    for parameter in component.parameters():
-        if sigma_x is not None and isinstance(parameter, g2f.SigmaXParameterD):
-            parameter.value = sigma_x
-        elif sigma_y is not None and isinstance(parameter, g2f.SigmaYParameterD):
-            parameter.value = sigma_y
-        elif rho is not None and isinstance(parameter, g2f.RhoParameterD):
-            parameter.value = rho
-        elif cenx is not None and isinstance(parameter, g2f.CentroidXParameterD):
-            parameter.value = cenx
-        elif ceny is not None and isinstance(parameter, g2f.CentroidYParameterD):
-            parameter.value = ceny
 
 
 class CatalogExposurePsfTest(CatalogExposurePsfABC):
@@ -81,10 +66,10 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
     def get_catalog(self) -> astropy.table.Table:
         return astropy.table.Table({'id': [0]})
 
-    def get_psfmodel(self, source):
+    def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
         return self.config_fit_psf.rebuild_psfmodel(self.table_psf_fits[0])
 
-    def get_source_observation(self, source) -> g2f.Observation:
+    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
         image = g2.ImageD(n_rows=shape_img[0], n_cols=shape_img[1])
         mask_inv = g2.ImageB(np.ones_like(image.data))
         obs = g2f.Observation(image=image, sigma_inv=image, mask_inv=mask_inv, channel=channel)
@@ -105,27 +90,29 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
 
     def __post_init__(self):
         config_dict = self.table_psf_fits.meta['config']
-        # TODO: Figure out if this can be done automatically somehow
-        config_dict['gaussians'] = {k: GaussianConfig(**v) for k, v in config_dict['gaussians'].items()}
-        object.__setattr__(self, 'config_fit_psf', CatalogPsfFitterConfig(**config_dict))
+        config = CatalogPsfFitterConfig()
+        set_config_from_dict(config, config_dict)
+        object.__setattr__(self, 'config_fit_psf', config)
 
 
-class CatalogSourceFitterTest(CatalogSourceFitter):
+class CatalogSourceFitterTest(CatalogSourceFitterABC):
     def initialize_model(self, model: g2f.Model, source: g2f.Source,
-                         limits_x: g2f.LimitsD, limits_y: g2f.LimitsD):
+                         limits_x: g2f.LimitsD=None, limits_y: g2f.LimitsD=None):
         comp1, comp2 = model.sources[0].components
         observation = model.data[0]
         cenx = observation.image.n_cols/2.
         ceny = observation.image.n_rows/2.
-        limits_x.max = float(observation.image.n_cols)
-        limits_y.max = float(observation.image.n_rows)
+        if limits_x is not None:
+            limits_x.max = float(observation.image.n_cols)
+        if limits_y is not None:
+            limits_y.max = float(observation.image.n_rows)
         init_component(comp1, cenx=cenx, ceny=ceny)
         init_component(comp2, cenx=cenx, ceny=ceny, sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
 
 
 @pytest.fixture(scope='module')
 def config_psf():
-    return CatalogPsfFitterConfig(gaussians={'comp1': GaussianConfig(sigma_initial=1.5)})
+    return CatalogPsfFitterConfig(gaussians={'comp1': GaussianConfig(size=ParameterConfig(value_initial=1.5))})
 
 
 @pytest.fixture(scope='module')
@@ -145,17 +132,14 @@ def table_psf_fits(config_psf):
 
 def test_fit_psf(config_psf, table_psf_fits):
     assert len(table_psf_fits) == 1
+    assert np.sum(table_psf_fits['mpf_psf_unknown_flag']) == 0
     assert all(np.isfinite(list(table_psf_fits[0].values())))
     psfmodel = config_psf.rebuild_psfmodel(table_psf_fits[0])
     assert len(psfmodel.components) == len(config_psf.gaussians)
 
 
 def test_fit_source(config_source, table_psf_fits):
-    model_source, priors = config_source.make_source(
-        centroid=g2f.CentroidParameters(x=g2f.CentroidXParameterD(shape_img[1]/2),
-                                        y=g2f.CentroidYParameterD(shape_img[0]/2),),
-        channels=[channel],
-    )
+    model_source, *_ = config_source.make_source(channels=[channel])
     # Have to do this here so that the model initializes its observation with
     # the extended component having the right size
     init_component(model_source.components[1], sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
@@ -165,4 +149,5 @@ def test_fit_source(config_source, table_psf_fits):
     fitter = CatalogSourceFitterTest()
     results = fitter.fit(catalog_multi=catexp.get_catalog(), catexps=[catexp], config=config_source)
     assert len(results) == 1
+    assert np.sum(results['mpf_unknown_flag']) == 0
     assert all(np.isfinite(list(results[0].values())))
