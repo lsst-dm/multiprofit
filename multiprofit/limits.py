@@ -28,5 +28,5 @@ limits_ref = {
     "con": Limits(min=1, max=10),
     "n_ser": Limits(min=0.3, max=6.0),
     "n_ser_multigauss": Limits(min=0.5, max=6.0),
-    "rho": Limits(min=-0.99, max=0.99),
+    "rho": Limits(min=-0.999, max=0.999),
 }
