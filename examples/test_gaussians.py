@@ -1,8 +1,8 @@
-import multiprofit.tests as mpftest
+from test_utils import gaussian_test
 from timeit import default_timer as timer
 
 start = timer()
-test = mpftest.gaussian_test(
+test = gaussian_test(
     nbenchmark=100, do_like=True, do_residual=True, do_grad=True, do_jac=True,
     do_meas_modelfit=False, nsub=4,
 )
