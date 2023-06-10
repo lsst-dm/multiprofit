@@ -15,3 +15,5 @@ compile_commands.json
 .hypothesis/
 prof/
 
+# in-source notebooks
+examples/.ipynb_checkpoints
