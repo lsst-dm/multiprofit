@@ -27,6 +27,7 @@ from multiprofit.modeller import (
     fitmethods_linear, LinearGaussians, make_image_gaussians, make_psfmodel_null, Modeller,
 )
 from multiprofit.transforms import transforms_ref
+from multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
 import scipy.optimize as spopt
@@ -348,7 +349,7 @@ def test_model_evaluation(channels, config, model, model_jac, images):
     n_cols = np.zeros(n_obs, dtype=int)
     datasizes = np.zeros(n_obs, dtype=int)
     ranges_params = [None]*n_obs
-    params_free = Modeller.get_params_free(model_jac)
+    params_free = tuple(get_params_uniq(model_jac, fixed=False))
 
     # There's one extra validation array
     n_params_jac = len(params_free) + 1

@@ -19,7 +19,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import gauss2d.fit as g2f
 import numpy as np
+
+
+def get_params_uniq(parametric: g2f.Parametric, **kwargs):
+    """Get a sorted set of parameters matching a filter"""
+    return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()
 
 
 def normalize(ndarray, return_sum=False):

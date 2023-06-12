@@ -36,6 +36,7 @@ from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, LinearGaussians, Modeller
 from .transforms import transforms_ref
+from .utils import get_params_uniq
 
 
 class CatalogExposureSourcesABC(CatalogExposureABC):
@@ -281,8 +282,6 @@ class CatalogSourceFitterABC(ABC):
         if errors_bad:
             raise ValueError(f"{self.errors_expected=} keys contain duplicates from {config.flag_errors=}")
 
-        n_catexps = len(catexps)
-
         channels = {}
         for catexp in catexps:
             try:
@@ -296,7 +295,7 @@ class CatalogSourceFitterABC(ABC):
                 channels[channel.name] = channel
 
         model_source, priors, limits_x, limits_y = config.make_source(channels=list(channels.values()))
-        params = tuple({x: None for x in model_source.parameters([], g2f.ParamFilter(fixed=False))})
+        params = get_params_uniq(model_source, fixed=False)
 
         n_rows = len(catalog_multi)
         range_idx = range(n_rows)

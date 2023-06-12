@@ -30,6 +30,8 @@ import scipy.optimize as spopt
 import time
 from typing import Any
 
+from .utils import get_params_uniq
+
 try:
     import fastnnls
     has_fastnnls = True
@@ -208,7 +210,7 @@ class FitInputs(FitInputsBase):
         """
         priors = model.priors
         n_prior_residuals = sum(len(p) for p in priors)
-        params_free = Modeller.get_params_free(model)
+        params_free = tuple(get_params_uniq(model, fixed=False))
         n_params_free = len(params_free)
         # There's one extra validation array
         n_params_jac = n_params_free + 1
@@ -542,7 +544,7 @@ class Modeller:
             force=True,
         )
 
-        params_free = self.get_params_free(model=model)
+        params_free = tuple(get_params_uniq(model, fixed=False))
         n_params_free = len(params_free)
         bounds = ([None]*n_params_free, [None]*n_params_free)
         params_init = [None]*n_params_free
@@ -568,22 +570,6 @@ class Modeller:
         results.n_eval_func = result_opt.nfev
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
         return results
-
-    @staticmethod
-    def get_params_free(model: g2f.Model) -> tuple[g2f.Parameter]:
-        """Get the list of free parameters for a model.
-
-        Parameters
-        ----------
-        model : `gauss2d.fit.Model`
-            The model to retrieve parameters for.
-
-        Returns
-        -------
-        parameters : `tuple[gauss2d.fit.Parameter]`
-            The list of free parameters.
-        """
-        return tuple({x: None for x in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))})
 
     @staticmethod
     def make_components_linear(

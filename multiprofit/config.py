@@ -20,12 +20,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import lsst.pex.config as pexConfig
-from lsst.pex.config.configDictField import ConfigDict
 from typing import Any
 
 
-def set_config_from_dict(config: pexConfig.Config | ConfigDict, overrides: dict[str, Any]):
-    is_config_dict = isinstance(config, ConfigDict)
+def set_config_from_dict(
+    config: pexConfig.Config | pexConfig.dictField.Dict | pexConfig.configDictField.ConfigDict | dict,
+    overrides: dict[str, Any],
+):
+    is_config_dict = hasattr(config, "__getitem__")
     if is_config_dict:
         keys = tuple(config.keys())
         for key in keys:
@@ -36,7 +38,10 @@ def set_config_from_dict(config: pexConfig.Config | ConfigDict, overrides: dict[
             attr = config[key] if is_config_dict else getattr(config, key)
             set_config_from_dict(attr, value)
         else:
-            if is_config_dict:
-                config[key] = value
-            else:
-                setattr(config, key, value)
+            try:
+                if is_config_dict:
+                    config[key] = value
+                else:
+                    setattr(config, key, value)
+            except Exception as e:
+                print(e)
