@@ -307,26 +307,28 @@ class FitInputs(FitInputsBase):
             for idx_obs in range(n_obs):
                 shape_obs = shapes[idx_obs, :]
                 jacobian_obs = self.jacobians[idx_obs]
-                if len(jacobian_obs) != n_params_jac:
-                    errors.append(f"len(self.jacobians[{idx_obs}])={len(jacobian_obs)} != {n_params_jac=}")
+                n_jacobian_obs = len(jacobian_obs)
+                if n_jacobian_obs != n_params_jac:
+                    errors.append(f"len(self.jacobians[{idx_obs}])={n_jacobian_obs} != {n_params_jac=}")
                 else:
-                    for idx_jac in range(jacobian_obs):
-                        if jacobian_obs[idx_jac].shape != shape_obs:
-                            errors.append(f"{self.jacobians[idx_jac].shape=} != {shape_obs=}")
-                if self.residuals[idx_obs].shape != shape_obs:
+                    for idx_jac in range(n_jacobian_obs):
+                        if not all(jacobian_obs[idx_jac].shape == shape_obs):
+                            errors.append(f"{jacobian_obs[idx_jac].shape=} != {shape_obs=}")
+                if not all(self.residuals[idx_obs].shape == shape_obs):
                     errors.append(f"{self.residuals[idx_obs].shape=} != {shape_obs=}")
 
         shape_residual_prior = (n_prior_residuals, n_params_jac)
         if len(self.outputs_prior) != n_params_jac:
             errors.append(f"{len(self.outputs_prior)=} != {n_params_jac=}")
-        else:
+        elif n_prior_residuals > 0:
             for idx in range(n_params_jac):
                 if self.outputs_prior[idx].shape != shape_residual_prior:
                     errors.append(f"{self.outputs_prior[idx].shape=} != {shape_residual_prior=}")
 
-        shape_residual_prior = (1, n_prior_residuals)
-        if self.residuals_prior.shape != shape_residual_prior:
-            errors.append(f"{self.residuals_prior.shape=} != {shape_residual_prior=}")
+        if n_prior_residuals > 0:
+            shape_residual_prior = (1, n_prior_residuals)
+            if self.residuals_prior.shape != shape_residual_prior:
+                errors.append(f"{self.residuals_prior.shape=} != {shape_residual_prior=}")
 
         return errors
 
