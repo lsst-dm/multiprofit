@@ -62,7 +62,7 @@ class LinearGaussians:
     """Helper for linear least-squares fitting of Gaussian mixtures.
     """
     gaussians_fixed: g2.Gaussians = pydantic.Field(title="Fixed Gaussian components")
-    gaussians_free: tuple[tuple[g2.Gaussians, g2f.Parameter], ...] = pydantic.Field(
+    gaussians_free: tuple[tuple[g2.Gaussians, g2f.ParameterD], ...] = pydantic.Field(
         title="Free Gaussian components")
 
     @staticmethod
@@ -111,7 +111,7 @@ class LinearGaussians:
             )
             if len(param_flux) != 1:
                 raise ValueError(f"Can't make linear source from {component=} with {len(param_flux)=}")
-            param_flux: g2f.Parameter = param_flux[0]
+            param_flux: g2f.ParameterD = param_flux[0]
             if param_flux.fixed:
                 gaussians_fixed.append(gaussians.at(0))
             else:
