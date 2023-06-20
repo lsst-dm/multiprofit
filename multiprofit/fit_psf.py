@@ -307,6 +307,7 @@ class CatalogPsfFitter:
                 data = CatalogPsfFitter._get_data(img_psf)
                 size = img_psf.size
                 model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
+                self.initialize_model(model=model, config=config, source=source)
 
                 if config.fit_linear:
                     flux_total.fixed = False
@@ -345,3 +346,48 @@ class CatalogPsfFitter:
                     logger.info(f"{id_source=} PSF fit failed with unexpected exception={e}")
 
         return results
+
+    def initialize_model(
+        self,
+        model: g2f.Model,
+        config: CatalogPsfFitterConfig,
+        source: Mapping[str, Any],
+        limits_x: g2f.LimitsD = None,
+        limits_y: g2f.LimitsD = None,
+    ) -> None:
+        """Initialize a Model for a single source row.
+
+        Parameters
+        ----------
+        model : `gauss2d.fit.Model`
+            The model object to initialize.
+        source : typing.Mapping[str, typing.Any]
+            A mapping with fields expected to be populated in the
+            corresponding source catalog for initialization.
+        limits_x : `gauss2d.fit.LimitsD`
+            Hard limits for the source's x centroid.
+        limits_y : `gauss2d.fit.LimitsD`
+            Hard limits for the source's y centroid.
+        """
+        n_rows, n_cols = model.data[0].image.data.shape
+        cen_x, cen_y = n_cols/2.0, n_rows/2.0
+        centroids = set()
+        if limits_x is None:
+            limits_x = g2f.LimitsD(0, n_cols)
+        if limits_y is None:
+            limits_y = g2f.LimitsD(0, n_rows)
+
+        for component, config_gauss in zip(model.sources[0].components, config.gaussians.values()):
+            size_init = config_gauss.size.value_initial
+            centroid = component.centroid
+            if centroid not in centroids:
+                centroid.x_param.value = cen_x
+                centroid.x_param.limits = limits_x
+                centroid.y_param.value = cen_y
+                centroid.y_param.limits = limits_y
+            ellipse = component.ellipse
+            ellipse.sigma_x_param.limits = limits_x
+            ellipse.sigma_x_param.value = size_init
+            ellipse.sigma_y_param.limits = limits_y
+            ellipse.sigma_y_param.value = size_init
+            ellipse.rho_param.value = 0
