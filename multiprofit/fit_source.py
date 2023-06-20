@@ -324,7 +324,7 @@ class CatalogSourceFitterABC(ABC):
                 assert dtype == float
 
         # dummy size for first iteration
-        size = 0
+        size, size_new = 0, 0
         fitInputs = FitInputsDummy()
 
         limits_flux = g2f.LimitsD(1e-6, 1e6, 'unreliable flux limits')
@@ -379,6 +379,7 @@ class CatalogSourceFitterABC(ABC):
 
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init
             except Exception as e:
+                size = 0 if fitInputs is None else size_new
                 column = self.errors_expected.get(e.__class__, "")
                 if column:
                     row[f"{prefix}{column}"] = True

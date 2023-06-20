@@ -288,7 +288,7 @@ class CatalogPsfFitter:
             results[f"{prefix}{flag.key}"] = False
 
         # dummy size for first iteration
-        size = 0
+        size, size_new = 0, 0
         fitInputs = FitInputsDummy()
 
         for idx in range_idx:
@@ -300,12 +300,14 @@ class CatalogPsfFitter:
 
             try:
                 img_psf = catexp.get_psf_image(source)
-                cenx.value, ceny.value = (x/2. for x in img_psf.shape[::-1])
-                # Caches the jacobian residual if the kernel size is unchanged
-                if img_psf.size != size:
-                    jacobian, residual = None, None
                 data = CatalogPsfFitter._get_data(img_psf)
-                size = img_psf.size
+                size_new = img_psf.size
+                if size_new != size:
+                    fitInputs = None
+                    size = size_new
+                else:
+                    fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
+
                 model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
                 self.initialize_model(model=model, config=config, source=source)
 
@@ -316,14 +318,13 @@ class CatalogPsfFitter:
                     result = self.modeller.fit_gaussians_linear(gaussians_linear, data[0])
                     result = list(result.values())[0]
                     # Re-normalize fluxes (hopefully close already)
-                    result = result*np.array([
+                    result = np.clip(result*np.array([
                         x[0].at(0).integral.value for x in gaussians_linear.gaussians_free
-                    ])
+                    ]), 1e-2, 0.99)
                     result /= np.sum(result)
                     for idx_param, param in enumerate(fluxfracs):
                         param.value = result[idx_param]
                         result /= np.sum(result[idx_param + 1:])
-                fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
                 result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
                 fitInputs = result_full.inputs
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
@@ -337,13 +338,15 @@ class CatalogPsfFitter:
 
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init
             except Exception as e:
+                size = 0 if fitInputs is None else size_new
                 column = self.errors_expected.get(e.__class__, "")
                 if column:
                     row[f"{prefix}{column}"] = True
-                    logger.info(f"{id_source=} PSF fit failed with not unexpected exception={e}")
+                    logger.info(f"{id_source=} ({idx}/{n_rows}) PSF fit failed with not unexpected"
+                                f" exception={e}")
                 else:
                     row[f"{prefix}unknown_flag"] = True
-                    logger.info(f"{id_source=} PSF fit failed with unexpected exception={e}")
+                    logger.info(f"{id_source=} ({idx}/{n_rows}) PSF fit failed with unexpected exception={e}")
 
         return results
 
