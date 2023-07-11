@@ -497,6 +497,7 @@ class Modeller:
         model: g2f.Model,
         fitinputs: FitInputs | None = None,
         printout: bool = False,
+        fit_linear_iter: int = 0,
         **kwargs
     ) -> FitResult:
         """Fit a model with a nonlinear optimizer.
@@ -509,6 +510,10 @@ class Modeller:
             An existing FitInputs with jacobian/residual arrays to reuse.
         printout : bool
             Whether to print diagnostic information.
+            fit_linear_iter: int = 0,
+        fit_linear_iter : int
+            The number of iterations to wait before performing a linear fit
+             during optimization. 0 disables the feature.
         kwargs
             Keyword arguments to pass to the optimizer.
 
@@ -521,6 +526,8 @@ class Modeller:
         -----
         The only supported fitter is scipy.optimize.least_squares.
         """
+        if not fit_linear_iter >= 0:
+            raise ValueError(f"{fit_linear_iter=} must be >=0")
         if fitinputs is None:
             fitinputs = FitInputs.from_model(model)
         else:
@@ -539,8 +546,10 @@ class Modeller:
                         raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
                 raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
+            if (fit_linear_iter > 0) and ((result.n_eval_resid + 1) % fit_linear_iter == 0):
+                self.fit_model_linear(model, ratio_min=1e-6)
             time_init = time.process_time()
-            model.evaluate()
+            loglikes = model.evaluate()
             result.time_eval += time.process_time() - time_init
             result.n_eval_resid += 1
             return result.inputs.residual

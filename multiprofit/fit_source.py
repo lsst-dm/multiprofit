@@ -34,7 +34,7 @@ import lsst.pex.config as pexConfig
 
 from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
-from .modeller import FitInputsDummy, LinearGaussians, Modeller
+from .modeller import FitInputsDummy, Modeller
 from .transforms import transforms_ref
 from .utils import get_params_uniq
 
@@ -282,18 +282,7 @@ class CatalogSourceFitterABC(ABC):
         if errors_bad:
             raise ValueError(f"{self.errors_expected=} keys contain duplicates from {config.flag_errors=}")
 
-        channels = {}
-        for catexp in catexps:
-            try:
-                channel = catexp.channel
-            except AttributeError:
-                band = catexp.band
-                if callable(band):
-                    band = band()
-                channel = g2f.Channel.get(band)
-            if channel not in channels:
-                channels[channel.name] = channel
-
+        channels = self.get_channels(catexps)
         model_source, priors, limits_x, limits_y = config.make_source(channels=list(channels.values()))
         params = tuple(get_params_uniq(model_source, fixed=False))
 
@@ -353,30 +342,28 @@ class CatalogSourceFitterABC(ABC):
                 else:
                     fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
 
-                if config.fit_linear:
-                    for idx_catexp, catexp in enumerate(catexps):
-                        gaussians_linear = LinearGaussians.make(model_source, channel=catexp.channel)
-                        result = self.modeller.fit_gaussians_linear(gaussians_linear, data[idx_catexp],
-                                                                    psfmodel=psfmodels[idx_catexp])
-                        values = list(result.values())[0]
-                        for (_, parameter), value in zip(gaussians_linear.gaussians_free, values):
-                            if not (value > 0.01):
-                                value = 0.01
-                                parameter.transform = transform_flux
-                                parameter.limits = limits_flux
-                            parameter.value = value
+                if config.fit_linear_init:
+                    self.modeller.fit_model_linear(
+                        model=model, ratio_min=0.01, transform_flux=transform_flux, limits_flux=limits_flux,
+                    )
 
                 result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
                 fitInputs = result_full.inputs
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
-                results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
+
+                if config.fit_linear_final:
+                    self.modeller.fit_model_linear(
+                        model=model, ratio_min=0.01, validate=True,
+                        transform_flux=transform_flux, limits_flux=limits_flux,
+                    )
 
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value
                     results[column][idx] = param.value
 
+                results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init
             except Exception as e:
                 size = 0 if fitInputs is None else size_new

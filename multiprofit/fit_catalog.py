@@ -51,7 +51,8 @@ class CatalogFitterConfig(pexConfig.Config):
     """Configuration for generic MultiProFit fitting tasks."""
     column_id = pexConfig.Field[str](default="id", doc="Catalog index column key")
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
-    fit_linear = pexConfig.Field[bool](default=True, doc="Fit linear parameters to initialize")
+    fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")
+    fit_linear_final = pexConfig.Field[bool](default=True, doc="Fit linear parameters after optimization")
     flag_errors = pexConfig.DictField(default={}, keytype=str, itemtype=str,
                                       doc="Flag column names to set, keyed by name of exception to catch")
     prefix_column = pexConfig.Field[str](default="mpf_", doc="Column name prefix")

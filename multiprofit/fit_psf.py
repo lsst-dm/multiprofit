@@ -300,18 +300,19 @@ class CatalogPsfFitter:
 
             try:
                 img_psf = catexp.get_psf_image(source)
-                data = CatalogPsfFitter._get_data(img_psf)
-                size_new = img_psf.size
-                if size_new != size:
+                cenx.value, ceny.value = (x/2. for x in img_psf.shape[::-1])
+                # Caches the jacobian residual if the kernel size is unchanged
+                if img_psf.size != size:
                     fitInputs = None
-                    size = size_new
+                    size = np.copy(img_psf.size)
                 else:
                     fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
-
+                
+                data = CatalogPsfFitter._get_data(img_psf)
                 model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
                 self.initialize_model(model=model, config=config, source=source)
 
-                if config.fit_linear:
+                if config.fit_linear_init:
                     flux_total.fixed = False
                     gaussians_linear = LinearGaussians.make(model_source, is_psf=True)
                     flux_total.fixed = True
@@ -325,6 +326,7 @@ class CatalogPsfFitter:
                     for idx_param, param in enumerate(fluxfracs):
                         param.value = result[idx_param]
                         result /= np.sum(result[idx_param + 1:])
+
                 result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
                 fitInputs = result_full.inputs
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
