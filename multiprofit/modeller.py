@@ -575,6 +575,60 @@ class Modeller:
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
         return results
 
+    # TODO: change to staticmethod if requiring py3.10+
+    @classmethod
+    def fit_model_linear(
+        cls,
+        model: g2f.Model,
+        idx_obs: int = None,
+        ratio_min: float = 0,
+        validate: bool = False,
+        transform_flux: g2f.TransformD = None,
+        limits_flux: g2f.LimitsD = None,
+    ) -> None:
+        n_data = len(model.data)
+        n_sources = len(model.sources)
+        if n_sources != 1:
+            raise ValueError("fit_model_linear does not yet support models with >1 sources")
+        if idx_obs is not None:
+            if not ((idx_obs >= 0) and (idx_obs < n_data)):
+                raise ValueError(f"{idx_obs=} not >=0 and < {len(model.data)=}")
+            indices = range(idx_obs, idx_obs + 1)
+        else:
+            indices = range(n_data)
+
+        if validate:
+            model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+            loglike_init = model.evaluate()
+        values_init = {}
+        values_new = {}
+
+        for idx_obs in indices:
+            obs = model.data[idx_obs]
+            gaussians_linear = LinearGaussians.make(model.sources[0], channel=obs.channel)
+            result = cls.fit_gaussians_linear(gaussians_linear, obs, psfmodel=model.psfmodels[idx_obs])
+            values = list(result.values())[0]
+
+            for (_, parameter), ratio in zip(gaussians_linear.gaussians_free, values):
+                values_init[parameter] = parameter.value
+                if not (ratio >= ratio_min):
+                    ratio = ratio_min
+                    if transform_flux is not None:
+                        parameter.transform = transform_flux
+                    if limits_flux is not None:
+                        parameter.limits = limits_flux
+                value_new = max(ratio*parameter.value, parameter.limits.min)
+                values_new[parameter] = value_new
+
+        for parameter, value in values_new.items():
+            parameter.value = value
+
+        if validate:
+            loglike_new = model.evaluate()
+            if not (sum(loglike_new) > sum(loglike_init)):
+                for parameter, value in values_init.items():
+                    parameter.value = value
+
     @staticmethod
     def make_components_linear(
         componentmixture: g2f.ComponentMixture,
