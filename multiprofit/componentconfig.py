@@ -27,8 +27,11 @@ from .priors import ShapePriorConfig
 from .transforms import transforms_ref
 
 parameter_names = {
+    g2f.CentroidXParameterD: 'cen_x',
+    g2f.CentroidYParameterD: 'cen_y',
     g2f.ReffXParameterD: 'reff_x',
     g2f.ReffYParameterD: 'reff_y',
+    g2f.RhoParameterD: 'rho',
     g2f.SigmaXParameterD: 'sigma_x',
     g2f.SigmaYParameterD: 'sigma_y',
 }
