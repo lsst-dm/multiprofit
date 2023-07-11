@@ -56,8 +56,6 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
     config_fit: CatalogSourceFitterConfig
     model_source: g2f.Source
     table_psf_fits: astropy.table.Table
-    background: float = 1e2
-    flux: float = 1e4
 
     @property
     def channel(self):
@@ -70,22 +68,12 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
         return self.config_fit_psf.rebuild_psfmodel(self.table_psf_fits[0])
 
     def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
-        image = g2.ImageD(n_rows=shape_img[0], n_cols=shape_img[1])
-        mask_inv = g2.ImageB(np.ones_like(image.data))
-        obs = g2f.Observation(image=image, sigma_inv=image, mask_inv=mask_inv, channel=channel)
-        model = g2f.Model(
-            g2f.Data([obs]),
-            psfmodels=[self.get_psfmodel(source)],
-            sources=[self.model_source],
+        obs = g2f.Observation(
+            image=g2.ImageD(n_rows=shape_img[0], n_cols=shape_img[1]),
+            sigma_inv=g2.ImageD(n_rows=shape_img[0], n_cols=shape_img[1]),
+            mask_inv=g2.ImageB(n_rows=shape_img[0], n_cols=shape_img[1]),
+            channel=channel,
         )
-        model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.image)
-        model.evaluate()
-        image = self.flux*model.outputs[0].data
-        sigma = np.sqrt(image + self.background)
-        image += sigma*rng.standard_normal(image.data.shape)
-        sigma = 1/sigma
-        obs = g2f.Observation(image=g2.ImageD(image), sigma_inv=g2.ImageD(sigma),
-                              mask_inv=mask_inv, channel=channel)
         return obs
 
     def __post_init__(self):
@@ -96,6 +84,9 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
 
 
 class CatalogSourceFitterTest(CatalogSourceFitterABC):
+    background: float = 1e2
+    flux: float = 1e4
+
     def initialize_model(self, model: g2f.Model, source: g2f.Source,
                          limits_x: g2f.LimitsD=None, limits_y: g2f.LimitsD=None):
         comp1, comp2 = model.sources[0].components
@@ -106,8 +97,18 @@ class CatalogSourceFitterTest(CatalogSourceFitterABC):
             limits_x.max = float(observation.image.n_cols)
         if limits_y is not None:
             limits_y.max = float(observation.image.n_rows)
-        init_component(comp1, cenx=cenx, ceny=ceny)
-        init_component(comp2, cenx=cenx, ceny=ceny, sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
+        init_component(comp1, cen_x=cenx, cen_y=ceny)
+        init_component(comp2, cen_x=cenx, cen_y=ceny, sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
+
+        # We should have done this in get_source_observation, but it gets called first
+        model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.image)
+        model.evaluate()
+        observation = model.data[0]
+        image, sigma_inv = observation.image, observation.sigma_inv
+        image.data.flat = self.flux*model.outputs[0].data
+        sigma_inv.data.flat = np.sqrt(image.data + self.background)
+        image.data.flat = image.data + sigma_inv.data*rng.standard_normal(image.data.shape)
+        sigma_inv.data.flat = 1/sigma_inv.data
 
 
 @pytest.fixture(scope='module')
@@ -147,7 +148,12 @@ def test_fit_source(config_source, table_psf_fits):
         config_fit=config_source, model_source=model_source, table_psf_fits=table_psf_fits,
     )
     fitter = CatalogSourceFitterTest()
-    results = fitter.fit(catalog_multi=catexp.get_catalog(), catexps=[catexp], config=config_source)
+    catalog_multi = catexp.get_catalog()
+    results = fitter.fit(catalog_multi=catalog_multi, catexps=[catexp], config=config_source, fit_linear_iter=3)
     assert len(results) == 1
     assert np.sum(results['mpf_unknown_flag']) == 0
     assert all(np.isfinite(list(results[0].values())))
+
+    model = fitter.get_model(0, catalog_multi=catalog_multi, catexps=[catexp], config=config_source, results=results)
+    variances = fitter.modeller.compute_variances(model)
+    assert np.all(np.isfinite(variances))
