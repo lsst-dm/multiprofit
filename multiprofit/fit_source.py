@@ -389,6 +389,61 @@ class CatalogSourceFitterABC(ABC):
                     logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}")
         return results
 
+    def get_channels(
+        self,
+        catexps: list[CatalogExposureSourcesABC],
+    ) -> dict[str, g2f.Channel]:
+        channels = {}
+        for catexp in catexps:
+            try:
+                channel = catexp.channel
+            except AttributeError:
+                band = catexp.band
+                if callable(band):
+                    band = band()
+                channel = g2f.Channel.get(band)
+            if channel not in channels:
+                channels[channel.name] = channel
+        return channels
+
+    def get_model(
+        self,
+        idx_row: int,
+        catalog_multi: Sequence,
+        catexps: list[CatalogExposureSourcesABC],
+        config: CatalogSourceFitterConfig = None,
+        results: astropy.table.Table = None,
+    ):
+        if config is None:
+            config = CatalogSourceFitterConfig()
+
+        if not idx_row >= 0:
+            raise ValueError(f"{idx_row=} !>=0")
+        if not len(catalog_multi) > idx_row:
+            raise ValueError(f"{len(catalog_multi)=} !> {idx_row=}")
+        if (results is not None) and not (len(results) > idx_row):
+            raise ValueError(f"{len(results)=} !> {idx_row=}")
+
+        channels = self.get_channels(catexps)
+        model_source, priors, limits_x, limits_y = config.make_source(channels=list(channels.values()))
+        source_multi = catalog_multi[idx_row]
+
+        model, data, psfmodels = config.make_model_data(
+            idx_source=idx_row, model_priors=(model_source, priors), catexps=catexps,
+        )
+        self.initialize_model(model, source_multi, limits_x=limits_x, limits_y=limits_y)
+
+        if results is not None:
+            params = get_params_uniq(model_source, fixed=False)
+            columns = list(results.columns)
+            row = results[idx_row]
+            idx_col_start = columns.index(f"{config.prefix_column}cen_x")
+            n_params = len(params)
+            for param, column in zip(params, columns[idx_col_start: idx_col_start + n_params]):
+                param.value = row[column]
+
+        return model
+
     @abstractmethod
     def initialize_model(
         self,
