@@ -295,7 +295,7 @@ class CatalogSourceFitterABC(ABC):
                 channels[channel.name] = channel
 
         model_source, priors, limits_x, limits_y = config.make_source(channels=list(channels.values()))
-        params = get_params_uniq(model_source, fixed=False)
+        params = tuple(get_params_uniq(model_source, fixed=False))
 
         n_rows = len(catalog_multi)
         range_idx = range(n_rows)

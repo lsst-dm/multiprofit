@@ -36,6 +36,7 @@ from .componentconfig import GaussianConfig, ParameterConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, LinearGaussians, make_psfmodel_null, Modeller
 from .psfmodel_utils import make_psf_source
+from .utils import get_params_uniq
 
 
 class CatalogExposurePsfABC(CatalogExposureABC):
@@ -250,17 +251,16 @@ class CatalogPsfFitter:
                     prior_axrat.mean = config.prior_axrat_mean
                 priors.append(prior)
 
-        params = tuple({x: None for x in model_source.parameters([], g2f.ParamFilter(fixed=False))})
-        filter_flux = g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE)
-        # Make an ordered set
-        flux_total = tuple({x: None for x in model_source.parameters(paramfilter=filter_flux)}.keys())
+        params = tuple(get_params_uniq(model_source, fixed=False))
+        flux_total = tuple(get_params_uniq(model_source, nonlinear=False, channel=g2f.Channel.NONE))
         if len(flux_total) != 1:
             raise RuntimeError(f"len({flux_total=}) != 1; PSF model is badly-formed")
         flux_total = flux_total[0]
-        filter_flux = g2f.ParamFilter(linear=False, channel=g2f.Channel.NONE, fixed=False)
         # TODO: Remove isinstance when channel filtering is fixed
-        fluxfracs = tuple({x: None for x in model_source.parameters(paramfilter=filter_flux)
-                           if isinstance(x, g2f.ProperFractionParameterD)}.keys())
+        fluxfracs = tuple(
+            x for x in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
+            if isinstance(x, g2f.ProperFractionParameterD)
+        )
         if len(fluxfracs) != (n_gaussians - 1):
             raise RuntimeError(f"len({fluxfracs=}) != {(n_gaussians - 1)=}; PSF model is badly-formed")
         gaussian = model_source.components[0]

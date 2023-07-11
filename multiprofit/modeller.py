@@ -224,11 +224,7 @@ class FitInputs(FitInputsBase):
         for idx_obs in range(n_obs):
             observation = model.data[idx_obs]
             shapes[idx_obs, :] = (observation.image.n_rows, observation.image.n_cols)
-            params = tuple({
-                x: None for x in model.parameters(
-                    paramfilter=g2f.ParamFilter(fixed=False, channel=observation.channel)
-                )
-            })
+            params = tuple(get_params_uniq(model, fixed=False, channel=observation.channel))
             n_params_obs = len(params)
             ranges_params_obs = [0] * (n_params_obs + 1)
             for idx_param in range(n_params_obs):
