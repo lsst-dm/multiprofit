@@ -375,6 +375,20 @@ class Modeller:
         return logger
 
     @staticmethod
+    def compute_variances(
+        model: g2f.Model,
+        use_svd: bool = False,
+        **kwargs
+    ):
+        hessian = model.compute_hessian(**kwargs).data
+        if use_svd:
+            u, s, v = np.linalg.svd(hessian)
+            inverse = np.dot(v.transpose(), np.dot(np.diag(s**-1), u.transpose()))
+        else:
+            inverse = np.linalg.inv(hessian)
+        return -np.diag(inverse)
+
+    @staticmethod
     def fit_gaussians_linear(
         gaussians_linear: LinearGaussians,
         observation: g2f.Observation,
