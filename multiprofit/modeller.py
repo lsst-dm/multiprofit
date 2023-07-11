@@ -346,8 +346,9 @@ class FitResult:
         None,
         title="The best-fit parameter array (un-transformed)",
     )
-    n_eval_func: int = pydantic.Field(0, title="Total number of fitness function evaluations")
-    n_eval_jac: int = pydantic.Field(0, title="Total number of Jacobian function evaluations")
+    n_eval_resid: int = pydantic.Field(0, title="Total number of self-reported residual function evaluations")
+    n_eval_func: int = pydantic.Field(0, title="Total number of optimizer-reported fitness function evaluations")
+    n_eval_jac: int = pydantic.Field(0, title="Total number of optimizer-reported Jacobian function evaluations")
     time_eval: float = pydantic.Field(0, title="Total runtime spent in model/Jacobian evaluation")
     time_run: float = pydantic.Field(0, title="Total runtime spent in fitting, excluding initial setup")
 
@@ -531,6 +532,7 @@ class Modeller:
             time_init = time.process_time()
             model.evaluate()
             result.time_eval += time.process_time() - time_init
+            result.n_eval_resid += 1
             return result.inputs.residual
 
         def jacobian_func(params_new, model, params, result):
