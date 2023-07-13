@@ -24,7 +24,6 @@ import astropy.units as u
 from collections.abc import Iterable
 import pydantic
 from pydantic.dataclasses import dataclass
-from typing import List
 
 import lsst.pex.config as pexConfig
 
@@ -57,10 +56,24 @@ class CatalogFitterConfig(pexConfig.Config):
                                       doc="Flag column names to set, keyed by name of exception to catch")
     prefix_column = pexConfig.Field[str](default="mpf_", doc="Column name prefix")
 
-    def schema(self) -> List[ColumnInfo]:
-        """Return the schema as an ordered list of columns."""
+    def schema(
+        self,
+        bands: list[str] = None,
+    ) -> list[ColumnInfo]:
+        """Return the schema as an ordered list of columns.
+
+        Parameters
+        ----------
+        bands
+            A list of band names to prefix band-dependent columns with.
+            Band prefixes should not be used if None.
+
+        Returns
+        -------
+        An ordered list of ColumnInfo instances.
+        """
         schema = [
-            ColumnInfo(key='id', dtype='i8'),
+            ColumnInfo(key=self.column_id, dtype='i8'),
             ColumnInfo(key='n_iter', dtype='i4'),
             ColumnInfo(key='time_eval', dtype='f8', unit=u.s),
             ColumnInfo(key='time_fit', dtype='f8', unit=u.s),

@@ -19,163 +19,38 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from abc import ABCMeta, abstractmethod
-from multiprofit.objects import EllipseParameters
+import gauss2d.fit as g2f
 import numpy as np
-import scipy.special as spspec
-import scipy.stats as spstats
+import lsst.pex.config as pexConfig
+
+from .transforms import transforms_ref
 
 
-class LsqPrior(metaclass=ABCMeta):
-    @abstractmethod
-    def calc_residual(self, calc_jacobian=False, delta_jacobian=1e-5):
-        """Compute the prior log likehood, residuals and optional jacobians.
+class ShapePriorConfig(pexConfig.Config):
+    prior_axrat_stddev = pexConfig.Field[float](
+        default=0,
+        doc="Prior std. dev. on axis ratio (ignored if not >0)",
+    )
+    prior_size_stddev = pexConfig.Field[float](
+        default=0,
+        doc="Prior std. dev. on size_major (ignored if not >0)",
+    )
 
-        :param calc_jacobian: `bool`; whether to compute the jacobian of the prior probability or not.
-        :param delta_jacobian: `float`; fractional change in paramater value for finite difference
-            approximation of the jacobian. Should be ignored if analytic jacobian calculation is implemented.
-        :return: result: `tuple` consisting of:
-            prior: `float`; the prior log-likelihood.
-            residual: `tuple` [`float`]; A tuple of len equal to __len__(), containing values of chi
-                chi=(value_prior_i - mean_prior_i)/std_dev_i for each of the distinct prior functions.
-            jacobians: `dict` [`multiprofit.objects.Parameter`]; a dict with an entry for each parameter that
-                the prior log likelihood depends one. Each entry has the same format as `residual`.
+    def get_shape_prior(self, ellipse: g2f.ParametricEllipse) -> g2f.ShapePrior | None:
+        use_prior_axrat = self.prior_axrat_stddev > 0 and np.isfinite(self.prior_axrat_stddev)
+        use_prior_size = self.prior_size_stddev > 0 and np.isfinite(self.prior_size_stddev)
 
-        Notes
-        -----
-        This method is intended to provide return values required for least squares fitting using
-        `scipy.optimize.least_squares`.
-        """
-        ...
-
-    @abstractmethod
-    def __len__(self):
-        """ Get the number of distinct prior functions.
-
-        :return: `int`; the number of distinct prior functions.
-        """
-        ...
-
-
-class GaussianLsqPrior(LsqPrior):
-    def calc_residual(self, calc_jacobian=False, delta_jacobian=None):
-        residual = (self.param.value - self.mean)/self.stddev
-        if not np.isfinite(residual):
-            raise RuntimeError(f'Infinite Gaussian prior residual from y={self.param.value},'
-                               f' mean={self.mean} stddev={self.stddev}')
-        prior = spstats.norm.logpdf(residual)
-        jacobians = {}
-        # PDF = k exp(-y^2/2) where k = 1/(s*sqrt(2*pi)); y = (x-m)/s [m=mean, s=sigma); dy/dx = 1/s
-        # logPDF = log(k) - y^2/2
-        # dlogPDF dy = -y
-        # dlogPDF dx = -y * dy/dx = - y/s
-        # d -(x-m)^2/(2s^2) dx = -(x-m)/s^2
-        # dlogPDF/dx = -y/s
-        if calc_jacobian:
-            jacobians[self.param] = -residual/self.stddev
-
-        return prior, (residual,), jacobians
-
-    def __len__(self):
-        return 1
-
-    def __init__(self, param, mean, stddev, transformed=False):
-        """
-
-        :param param: `multiprofit.objects.Parameter`; param to apply the prior to.
-        :param mean: float; prior mean.
-        :param stddev: float; prior standard deviation.
-        :param transformed: bool; whether the prior applies to the transformed parameter value.
-        """
-        self.param = param
-        self.mean = np.copy(mean)
-        self.stddev = np.copy(stddev)
-        self.transformed = transformed is True
-
-
-class ShapeLsqPrior(LsqPrior):
-    def calc_residual(self, calc_jacobian=False, delta_jacobian=1e-5, size_maj_min=1e-10, axrat_min=1e-5):
-        prior = 0
-        residuals = []
-        jacobians = {}
-        if self.size_mean_std or self.axrat_params:
-            size_maj, axrat, _ = self.ellipse.make_major()
-            if not axrat >= 0:
-                raise RuntimeError(f'r_eff={size_maj}, axrat={axrat} from ell={self.ellipse}')
-            if self.size_mean_std:
-                if not size_maj > size_maj_min:
-                    size_maj = size_maj_min
-                if self.size_log10:
-                    size_maj = np.log10(size_maj)
-                residual = (size_maj - self.size_mean_std[0])/self.size_mean_std[1]
-                if not np.isfinite(residual):
-                    raise RuntimeError(f'Infinite size ratio prior residual from r={size_maj} and mean, std'
-                                       f' = {self.size_mean_std}')
-                residuals.append(residual)
-                prior += spstats.norm.logpdf(residual)
-
-        if self.axrat_params:
-            if axrat < axrat_min:
-                axrat = axrat_min
-            residual = ((spspec.logit(axrat/self.axrat_params[2]) - self.axrat_params[0])
-                        / self.axrat_params[1])
-            if not np.isfinite(residual):
-                raise RuntimeError(f'Infinite axis ratio prior residual from q={axrat} and mean, std, '
-                                   f'logit stretch divisor = {self.axrat_params}')
-            residuals.append(residual)
-            prior += spstats.norm.logpdf(residual)
-
-        if calc_jacobian:
-            ell = self.ellipse
-            for param in (ell.sigma_x, ell.sigma_y, ell.rho):
-                value = float(param.get_value())
-                value_trans = float(param.value_transformed)
-                is_rho = param is ell.rho
-                delta = -delta_jacobian*(np.sign(value) + (value == 0)) if is_rho else np.max((value, 1e-3))
-                good = False
-                for sign in (1, -1):
-                    try:
-                        eps = sign*delta
-                        param.set_value(param.get_value() + eps)
-                        good = True
-                        delta = eps
-                        break
-                    except RuntimeError:
-                        pass
-                if not good or not np.abs(eps) > 0:
-                    raise RuntimeError(f"Couldn't set param {param} with eps=+/-{delta}")
-                _, residuals_new, _ = self.calc_residual(calc_jacobian=False)
-                denom_jac = float(eps)*param.transform_derivative(value)
-                jacobian = [(new - old)/denom_jac for new, old in zip(residuals_new, residuals)]
-                if not all(np.isfinite(jacobian)):
-                    raise RuntimeError(f'Non-finite ShapeLsqPrior jacobian={jacobian} for param {param}')
-                jacobians[param] = jacobian
-                # Reset to original value
-                param.set_value_transformed(value_trans)
-                if param.value != value_trans:
-                    raise RuntimeError(f'Failed to reset param {param} to value={value_trans}; check limits')
-
-        return prior, residuals, jacobians
-
-    def __len__(self):
-        return bool(self.size_mean_std) + bool(self.axrat_params)
-
-    def __init__(self, ellipse: EllipseParameters, size_mean_std=None, size_log10=True, axrat_params=None):
-        """Initialize a size/shape prior.
-
-        :param ellipse: `multiprofit.objects.EllipseParameters`; size/shape parameters.
-        :param size_mean_std: `float`, `float`; mean and std.dev. of the size prior. Ignored if None.
-        :param size_log10: `bool`; whether the prior is on the logarithm of the size rather than linear size.
-        :param axrat_params:
-        """
-        if (size_mean_std is not None and (not all(np.isfinite(size_mean_std)))) or (
-                axrat_params is not None and (not all(np.isfinite(axrat_params)))):
-            raise ValueError(f'Non-finite {self.__class__} init '
-                             f'size_mean_std={size_mean_std} and/or axrat_params={axrat_params}')
-        self.ellipse = ellipse
-        self.size_log10 = size_log10
-        self.size_mean_std = size_mean_std
-        self.axrat_params = axrat_params
+        if use_prior_axrat or use_prior_size:
+            prior_size = g2f.ParametricGaussian1D(
+                g2f.MeanParameterD(1, transform=transforms_ref["log10"]),
+                g2f.StdDevParameterD(self.prior_size_stddev)
+            ) if use_prior_size else None
+            prior_axrat = g2f.ParametricGaussian1D(
+                g2f.MeanParameterD(0, transform=transforms_ref["logit_axrat_prior"]),
+                g2f.StdDevParameterD(self.prior_axrat_stddev)
+            ) if use_prior_axrat else None
+            return g2f.ShapePrior(ellipse, prior_size, prior_axrat)
+        return None
 
 
 def get_hst_size_prior(mag_psf_i):

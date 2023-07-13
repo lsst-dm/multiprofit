@@ -19,6 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from abc import ABC, abstractmethod
 import gauss2d as g2
 import gauss2d.fit as g2f
 import logging
@@ -28,6 +29,8 @@ from pydantic.dataclasses import dataclass
 import scipy.optimize as spopt
 import time
 from typing import Any
+
+from .utils import get_params_uniq
 
 try:
     import fastnnls
@@ -51,6 +54,7 @@ if has_fastnnls:
 
 class ArbitraryAllowedConfig:
     arbitrary_types_allowed = True
+    extra = 'forbid'
 
 
 @dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
@@ -58,7 +62,7 @@ class LinearGaussians:
     """Helper for linear least-squares fitting of Gaussian mixtures.
     """
     gaussians_fixed: g2.Gaussians = pydantic.Field(title="Fixed Gaussian components")
-    gaussians_free: tuple[tuple[g2.Gaussians, g2f.Parameter], ...] = pydantic.Field(
+    gaussians_free: tuple[tuple[g2.Gaussians, g2f.ParameterD], ...] = pydantic.Field(
         title="Free Gaussian components")
 
     @staticmethod
@@ -107,7 +111,7 @@ class LinearGaussians:
             )
             if len(param_flux) != 1:
                 raise ValueError(f"Can't make linear source from {component=} with {len(param_flux)=}")
-            param_flux: g2f.Parameter = param_flux[0]
+            param_flux: g2f.ParameterD = param_flux[0]
             if param_flux.fixed:
                 gaussians_fixed.append(gaussians.at(0))
             else:
@@ -163,10 +167,177 @@ def make_psfmodel_null() -> g2f.PsfModel:
     return g2f.PsfModel(g2f.GaussianComponent.make_uniq_default_gaussians([0], True))
 
 
+class FitInputsBase(ABC):
+    @abstractmethod
+    def validate_for_model(self, model: g2f.Model) -> list[str]:
+        """Validate that existing FitInputs are valid for a Model"""
+
+
+class FitInputsDummy(FitInputsBase):
+    def validate_for_model(self, model: g2f.Model) -> list[str]:
+        return ["This is a dummy FitInputs and will never validate",]
+
+
+@dataclass(kw_only=True, config=ArbitraryAllowedConfig)
+class FitInputs(FitInputsBase):
+    jacobian: np.ndarray = pydantic.Field(None, title="The full Jacobian array")
+    jacobians: list[list[g2.ImageD]] = pydantic.Field(
+        title="Jacobian arrays (views) for each observation",
+    )
+    outputs_prior: tuple[g2.ImageD, ...] = pydantic.Field(
+        title="Jacobian arrays (views) for each free parameter's prior",
+    )
+    residual: np.ndarray = pydantic.Field(title="The full residual (chi) array")
+    residuals: list[g2.ImageD] = pydantic.Field(
+        default_factory=list,
+        title="Residual (chi) arrays (views) for each observation",
+    )
+    residuals_prior: g2.ImageD = pydantic.Field(
+        title="Shared residual array for all Prior instances",
+    )
+
+    @classmethod
+    def get_sizes(
+        cls,
+        model: g2f.Model,
+    ):
+        """Initialize Jacobian and residual arrays for a model.
+
+        Parameters
+        ----------
+        model : `gauss2d.fit.Model`
+            The model to initialize arrays for.
+        """
+        priors = model.priors
+        n_prior_residuals = sum(len(p) for p in priors)
+        params_free = tuple(get_params_uniq(model, fixed=False))
+        n_params_free = len(params_free)
+        # There's one extra validation array
+        n_params_jac = n_params_free + 1
+        if not (n_params_jac > 1):
+            raise ValueError("Can't fit model with no free parameters")
+
+        n_obs = len(model.data)
+        shapes = np.zeros((n_obs, 2), dtype=int)
+        ranges_params = [None] * n_obs
+
+        for idx_obs in range(n_obs):
+            observation = model.data[idx_obs]
+            shapes[idx_obs, :] = (observation.image.n_rows, observation.image.n_cols)
+            params = tuple({
+                x: None for x in model.parameters(
+                    paramfilter=g2f.ParamFilter(fixed=False, channel=observation.channel)
+                )
+            })
+            n_params_obs = len(params)
+            ranges_params_obs = [0] * (n_params_obs + 1)
+            for idx_param in range(n_params_obs):
+                ranges_params_obs[idx_param + 1] = params_free.index(params[idx_param]) + 1
+            ranges_params[idx_obs] = ranges_params_obs
+
+        n_free_first = len(ranges_params[0])
+        assert all([len(rp) == n_free_first for rp in ranges_params[1:]])
+
+        return n_obs, n_params_jac, n_prior_residuals, shapes
+
+    @classmethod
+    def from_model(
+        cls,
+        model: g2f.Model,
+    ):
+        """Initialize Jacobian and residual arrays for a model.
+
+        Parameters
+        ----------
+        model : `gauss2d.fit.Model`
+            The model to initialize arrays for.
+        """
+        n_obs, n_params_jac, n_prior_residuals, shapes = cls.get_sizes(model)
+        n_data_obs = np.cumsum(np.prod(shapes, axis=1))
+        n_data = n_data_obs[-1]
+        size_data = n_data + n_prior_residuals
+        shape_jacobian = (size_data, n_params_jac)
+        jacobian = np.zeros(shape_jacobian)
+        jacobians = [None]*n_obs
+        outputs_prior = [None]*n_params_jac
+        for idx in range(n_params_jac):
+            outputs_prior[idx] = g2.ImageD(jacobian[n_data:, idx].view().reshape((1, n_prior_residuals)))
+
+        residual = np.zeros(size_data)
+        residuals = [None]*n_obs
+        residuals_prior = g2.ImageD(residual[n_data:].reshape(1, n_prior_residuals))
+
+        offset = 0
+        for idx_obs in range(n_obs):
+            shape = shapes[idx_obs, :]
+            size_obs = shape[0]*shape[1]
+            end = offset + size_obs
+            jacobians_obs = [None]*n_params_jac
+            for idx_jac in range(n_params_jac):
+                jacobians_obs[idx_jac] = g2.ImageD(jacobian[offset:end, idx_jac].view().reshape(shape))
+            jacobians[idx_obs] = jacobians_obs
+            residuals[idx_obs] = g2.ImageD(residual[offset:end].view().reshape(shape))
+            offset = end
+            if offset != n_data_obs[idx_obs]:
+                raise RuntimeError(f"Assigned {offset=} data points != {n_data_obs[idx_obs]=}")
+        return cls(
+            jacobian=jacobian, jacobians=jacobians,
+            residual=residual, residuals=residuals,
+            outputs_prior=outputs_prior, residuals_prior=residuals_prior,
+        )
+
+    def validate_for_model(self, model: g2f.Model) -> list[str]:
+        n_obs, n_params_jac, n_prior_residuals, shapes = self.get_sizes(model)
+        n_data = np.sum(np.prod(shapes, axis=1))
+        size_data = n_data + n_prior_residuals
+        shape_jacobian = (size_data, n_params_jac)
+
+        errors = []
+
+        if self.jacobian.shape != shape_jacobian:
+            errors.append(f"{self.jacobian.shape=} != {shape_jacobian=}")
+
+        if len(self.jacobians) != n_obs:
+            errors.append(f"{len(self.jacobians)=} != {n_obs=}")
+
+        if len(self.residuals) != n_obs:
+            errors.append(f"{len(self.residuals)=} != {n_obs=}")
+
+        if not errors:
+            for idx_obs in range(n_obs):
+                shape_obs = shapes[idx_obs, :]
+                jacobian_obs = self.jacobians[idx_obs]
+                n_jacobian_obs = len(jacobian_obs)
+                if n_jacobian_obs != n_params_jac:
+                    errors.append(f"len(self.jacobians[{idx_obs}])={n_jacobian_obs} != {n_params_jac=}")
+                else:
+                    for idx_jac in range(n_jacobian_obs):
+                        if not all(jacobian_obs[idx_jac].shape == shape_obs):
+                            errors.append(f"{jacobian_obs[idx_jac].shape=} != {shape_obs=}")
+                if not all(self.residuals[idx_obs].shape == shape_obs):
+                    errors.append(f"{self.residuals[idx_obs].shape=} != {shape_obs=}")
+
+        shape_residual_prior = (n_prior_residuals, n_params_jac)
+        if len(self.outputs_prior) != n_params_jac:
+            errors.append(f"{len(self.outputs_prior)=} != {n_params_jac=}")
+        elif n_prior_residuals > 0:
+            for idx in range(n_params_jac):
+                if self.outputs_prior[idx].shape != shape_residual_prior:
+                    errors.append(f"{self.outputs_prior[idx].shape=} != {shape_residual_prior=}")
+
+        if n_prior_residuals > 0:
+            shape_residual_prior = (1, n_prior_residuals)
+            if self.residuals_prior.shape != shape_residual_prior:
+                errors.append(f"{self.residuals_prior.shape=} != {shape_residual_prior=}")
+
+        return errors
+
+
 @dataclass(kw_only=True, config=ArbitraryAllowedConfig)
 class FitResult:
     """Results from a Modeller fit, including metadata.
     """
+    inputs: FitInputs | None = pydantic.Field(None, title="The fit input arrays")
     result: Any | None = pydantic.Field(
         None,
         title="The result object of the fit, directly from the optimizer",
@@ -179,16 +350,6 @@ class FitResult:
     n_eval_jac: int = pydantic.Field(0, title="Total number of Jacobian function evaluations")
     time_eval: float = pydantic.Field(0, title="Total runtime spent in model/Jacobian evaluation")
     time_run: float = pydantic.Field(0, title="Total runtime spent in fitting, excluding initial setup")
-    jacobian: np.ndarray | None = pydantic.Field(None, title="The full Jacobian array")
-    jacobians: list[list[g2.ImageD]] = pydantic.Field(
-        default_factory=list,
-        title="Jacobian arrays (views) for each observation",
-    )
-    residual: np.ndarray | None = pydantic.Field(None, title="The full residual (chi) array")
-    residuals: list[g2.ImageD] = pydantic.Field(
-        default_factory=list,
-        title="Residual (chi) arrays (views) for each observation",
-    )
 
 
 class Modeller:
@@ -323,8 +484,7 @@ class Modeller:
     def fit_model(
         self,
         model: g2f.Model,
-        jacobian: np.ndarray = None,
-        residual: np.ndarray = None,
+        fitinputs: FitInputs | None = None,
         printout: bool = False,
         **kwargs
     ) -> FitResult:
@@ -334,10 +494,8 @@ class Modeller:
         ----------
         model : `gauss2d.fit.Model`
             The model to fit.
-        jacobian : `numpy.array`
-            An existing Jacobian array, if any.
-        residual : `numpy.array`
-            An existing scaled residual (chi) array, if any.
+        fitinputs : `FitInputs`
+            An existing FitInputs with jacobian/residual arrays to reuse.
         printout : bool
             Whether to print diagnostic information.
         kwargs
@@ -352,35 +510,44 @@ class Modeller:
         -----
         The only supported fitter is scipy.optimize.least_squares.
         """
+        if fitinputs is None:
+            fitinputs = FitInputs.from_model(model)
+        else:
+            errors = fitinputs.validate_for_model(model)
+            if errors:
+                newline = "\n"
+                raise ValueError(f"fitinputs validation got errors:\n{newline.join(errors)}")
+
         def residual_func(params_new, model, params, result):
             if not all(~np.isnan(params_new)):
                 raise InvalidProposalError(f"optimizer for {model=} proposed non-finite {params_new=}")
             try:
                 for param, value in zip(params, params_new):
                     param.value_transformed = value
+                    if not np.isfinite(param.value):
+                        raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
                 raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
             time_init = time.process_time()
             model.evaluate()
             result.time_eval += time.process_time() - time_init
-            return residual
+            return result.inputs.residual
 
         def jacobian_func(params_new, model, params, result):
-            return -result.jacobian
-
-        params_free = self.get_params_free(model=model)
-        n_params_free = len(params_free)
-
-        jacobian, jacobians, residual, residuals = self.make_jacobians(
-            model, jacobian=jacobian, residual=residual)
+            return -result.inputs.jacobian[:, 1:]
 
         model.setup_evaluators(
             evaluatormode=g2f.Model.EvaluatorMode.jacobian,
-            outputs=jacobians,
-            residuals=residuals,
+            outputs=fitinputs.jacobians,
+            residuals=fitinputs.residuals,
+            outputs_prior=fitinputs.outputs_prior,
+            residuals_prior=fitinputs.residuals_prior,
             print=printout,
+            force=True,
         )
 
+        params_free = tuple(get_params_uniq(model, fixed=False))
+        n_params_free = len(params_free)
         bounds = ([None]*n_params_free, [None]*n_params_free)
         params_init = [None]*n_params_free
 
@@ -392,37 +559,19 @@ class Modeller:
                 raise RuntimeError(f'{param=}.value={param.value_transforme} not within {limits=}')
             params_init[idx] = param.value_transformed
 
-        results = FitResult(jacobian=jacobian[:, 1:], jacobians=jacobians, residual=residual,
-                            residuals=residuals)
+        results = FitResult(inputs=fitinputs)
         time_init = time.process_time()
         result_opt = spopt.least_squares(
             residual_func, params_init, jac=jacobian_func, bounds=bounds,
             args=(model, params_free, results), x_scale='jac',
             **kwargs
         )
+        results.time_run = time.process_time() - time_init
         results.result = result_opt
         results.params_best = result_opt.x
-        results.time_run = time.process_time() - time_init
         results.n_eval_func = result_opt.nfev
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
-        results.jacobian = jacobian
         return results
-
-    @staticmethod
-    def get_params_free(model: g2f.Model) -> tuple[g2f.Parameter]:
-        """Get the list of free parameters for a model.
-
-        Parameters
-        ----------
-        model : `gauss2d.fit.Model`
-            The model to retrieve parameters for.
-
-        Returns
-        -------
-        parameters : `tuple[gauss2d.fit.Parameter]`
-            The list of free parameters.
-        """
-        return tuple({x: None for x in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))})
 
     @staticmethod
     def make_components_linear(
@@ -469,97 +618,3 @@ class Modeller:
             components_new[idx] = component_new
         return components_new
 
-    @staticmethod
-    def make_jacobians(model: g2f.Model, jacobian: np.ndarray = None, residual: np.ndarray = None):
-        """Initialize Jacobian and residual arrays for a model.
-
-        Parameters
-        ----------
-        model : `gauss2d.fit.Model`
-            The model to initialize arrays for.
-        jacobian : `np.ndarray`
-            A pre-existing Jacobian array, if any.
-        residual : `np.ndarray`
-            A pre-existing scaled residual (chi) array, if any.
-
-        Returns
-        -------
-        jacobian : `np.ndarray`
-            A Jacobian array of the required length for fitting.
-        jacobians : list[list[gauss2d.ImageD]
-            A list of Jacobian arrays (views) for each observation
-            in the model data.
-        residual : `np.ndarray`
-            A scaled residual (chi) array of the required length for fitting.
-        residuals : list[gauss2d.ImageD]
-            A list of scaled residual (chi) arrays (views) for each observation
-            in the model data.
-
-        Raises
-        ------
-        ValueError
-            Raised if the provided jacobian or residual arrays are the wrong length.
-        """
-        params_free = Modeller.get_params_free(model)
-        n_params_free = len(params_free)
-        # There's one extra validation array
-        n_params_jac = n_params_free + 1
-        if not (n_params_jac > 1):
-            raise ValueError("Can't fit model with no free parameters")
-
-        n_data = len(model.data)
-        shapes = np.zeros((n_data, 2), dtype=int)
-        ranges_params = [None] * n_data
-
-        for idx_obs in range(n_data):
-            observation = model.data[idx_obs]
-            shapes[idx_obs, :] = (observation.image.n_rows, observation.image.n_cols)
-            params = tuple({
-                x: None for x in model.parameters(
-                    paramfilter=g2f.ParamFilter(fixed=False, channel=observation.channel)
-                )
-            })
-            n_params_obs = len(params)
-            ranges_params_obs = [0] * (n_params_obs + 1)
-            for idx_param in range(n_params_obs):
-                ranges_params_obs[idx_param + 1] = params_free.index(params[idx_param]) + 1
-            ranges_params[idx_obs] = ranges_params_obs
-
-        n_free_first = len(ranges_params[0])
-        assert all([len(rp) == n_free_first for rp in ranges_params[1:]])
-
-        n_priors = 0
-        datasize = np.sum(np.prod(shapes, axis=1)) + n_priors
-
-        has_jacobian = jacobian is not None
-        shape_jacobian = (datasize, n_params_jac)
-        if has_jacobian:
-            if jacobian.shape != shape_jacobian:
-                raise ValueError(f"{jacobian.shape=} != {shape_jacobian=}")
-        else:
-            jacobian = np.zeros(shape_jacobian)
-        jacobians = [None] * n_data
-
-        has_residual = residual is not None
-        if has_residual:
-            if residual.size != datasize:
-                raise ValueError(f"{residual.size=} != {datasize=}")
-        else:
-            residual = np.zeros(datasize)
-        residuals = [None] * n_data
-        # jacobian_prior = self.jacobian[datasize:, ].view()
-
-        offset = 0
-        for idx_obs in range(n_data):
-            shape = shapes[idx_obs, :]
-            size_obs = shape[0] * shape[1]
-            end = offset + size_obs
-            ranges_params_obs = ranges_params[idx_obs]
-            jacobians_obs = [None] * (len(ranges_params_obs))
-            for idx_param, idx_jac in enumerate(ranges_params_obs):
-                jacobians_obs[idx_param] = g2.ImageD(jacobian[offset:end, idx_jac].view().reshape(shape))
-            jacobians[idx_obs] = jacobians_obs
-            residuals[idx_obs] = g2.ImageD(residual[offset:end].view().reshape(shape))
-            offset = end
-
-        return jacobian, jacobians, residual, residuals

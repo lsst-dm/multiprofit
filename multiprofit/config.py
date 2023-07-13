@@ -19,14 +19,29 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from gauss2d.fit import LimitsD as Limits
+import lsst.pex.config as pexConfig
+from typing import Any
 
-# TODO: Replace with a parameter factory and/or profile factory
-limits_ref = {
-    "none": Limits(),
-    "axrat": Limits(min=1e-2, max=1),
-    "con": Limits(min=1, max=10),
-    "n_ser": Limits(min=0.3, max=6.0),
-    "n_ser_multigauss": Limits(min=0.5, max=6.0),
-    "rho": Limits(min=-0.999, max=0.999),
-}
+
+def set_config_from_dict(
+    config: pexConfig.Config | pexConfig.dictField.Dict | pexConfig.configDictField.ConfigDict | dict,
+    overrides: dict[str, Any],
+):
+    is_config_dict = hasattr(config, "__getitem__")
+    if is_config_dict:
+        keys = tuple(config.keys())
+        for key in keys:
+            if key not in overrides:
+                del config[key]
+    for key, value in overrides.items():
+        if isinstance(value, dict):
+            attr = config[key] if is_config_dict else getattr(config, key)
+            set_config_from_dict(attr, value)
+        else:
+            try:
+                if is_config_dict:
+                    config[key] = value
+                else:
+                    setattr(config, key, value)
+            except Exception as e:
+                print(e)
