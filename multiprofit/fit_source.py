@@ -180,23 +180,30 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         if bands is None or not (len(bands) > 0):
             raise ValueError("PSF CatalogSourceFitter must provide at least one band")
         columns = super().schema(bands)
-        for idx in range(self.n_pointsources):
-            prefix_comp = f"ps{idx + 1}_"
-            for band in bands:
-                columns.append(ColumnInfo(key=f'{prefix_comp}{band}_flux', dtype='f8'))
+        suffixes = ('', '_err') if self.compute_errors else ('',)
+        for suffix in suffixes:
+            if suffix == '_err':
+                if self.fit_cenx:
+                    columns.append(ColumnInfo(key=f'cen_x{suffix}', dtype='f8', unit=u.pix))
+                if self.fit_ceny:
+                    columns.append(ColumnInfo(key=f'cen_y{suffix}', dtype='f8', unit=u.pix))
+            for idx in range(self.n_pointsources):
+                prefix_comp = f"ps{idx + 1}_"
+                for band in bands:
+                    columns.append(ColumnInfo(key=f'{prefix_comp}{band}_flux{suffix}', dtype='f8'))
 
-        for idx, name_comp in enumerate(self.sersics.keys()):
-            prefix_comp = f"{name_comp}_"
-            columns_comp = [
-                ColumnInfo(key=f'{prefix_comp}sigma_x', dtype='f8', unit=u.pix),
-                ColumnInfo(key=f'{prefix_comp}sigma_y', dtype='f8', unit=u.pix),
-                ColumnInfo(key=f'{prefix_comp}rho', dtype='f8', unit=u.pix),
-            ]
-            for band in bands:
-                columns_comp.append(
-                    ColumnInfo(key=f'{prefix_comp}{band}_flux', dtype='f8', unit=u.Unit(self.unit_flux))
-                )
-            columns.extend(columns_comp)
+            for idx, name_comp in enumerate(self.sersics.keys()):
+                prefix_comp = f"{name_comp}_"
+                columns_comp = [
+                    ColumnInfo(key=f'{prefix_comp}sigma_x{suffix}', dtype='f8', unit=u.pix),
+                    ColumnInfo(key=f'{prefix_comp}sigma_y{suffix}', dtype='f8', unit=u.pix),
+                    ColumnInfo(key=f'{prefix_comp}rho{suffix}', dtype='f8', unit=u.pix),
+                ]
+                for band in bands:
+                    columns_comp.append(
+                        ColumnInfo(key=f'{prefix_comp}{band}_flux{suffix}', dtype='f8', unit=u.Unit(self.unit_flux))
+                    )
+                columns.extend(columns_comp)
 
         return columns
 
@@ -295,7 +302,10 @@ class CatalogSourceFitterABC(ABC):
         idx_flag_first = keys.index("unknown_flag")
         idx_var_first = keys.index("cen_x")
         assert idx_var_first > idx_flag_first
-        columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:]]
+        idx_var_last = idx_var_first + len(params)
+        columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:idx_var_last]]
+        columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last:]]
+        assert len(columns_write_err) == (len(params) - (not config.fit_cenx) - (not config.fit_ceny))
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {'config': config.toDict()}
         results = Table(data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns],
@@ -362,6 +372,19 @@ class CatalogSourceFitterABC(ABC):
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value
                     results[column][idx] = param.value
+
+                if config.compute_errors:
+                    errors = None
+                    try:
+                        errors = np.sqrt(self.modeller.compute_variances(model, transformed=False))
+                    except Exception:
+                        try:
+                            errors = np.sqrt(self.modeller.compute_variances(model, transformed=False, use_svd=True))
+                        except Exception:
+                            pass
+                    if errors is not None:
+                        for value, column in zip(errors, columns_write_err):
+                            results[column][idx] = value
 
                 results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init

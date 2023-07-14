@@ -50,6 +50,7 @@ class ColumnInfo:
 class CatalogFitterConfig(pexConfig.Config):
     """Configuration for generic MultiProFit fitting tasks."""
     column_id = pexConfig.Field[str](default="id", doc="Catalog index column key")
+    compute_errors = pexConfig.Field[bool](default=True, doc="Compute sqrt(variances) of each free parameter")
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
     fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")
     fit_linear_final = pexConfig.Field[bool](default=True, doc="Fit linear parameters after optimization")
