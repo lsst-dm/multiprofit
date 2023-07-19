@@ -87,13 +87,13 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
 
 class CatalogSourceFitterConfig(CatalogFitterConfig):
     """Configuration for the MultiProFit profile fitter."""
-    fit_cenx = pexConfig.Field[bool](default=True, doc="Fit x centroid parameter")
-    fit_ceny = pexConfig.Field[bool](default=True, doc="Fit y centroid parameter")
+    fit_cen_x = pexConfig.Field[bool](default=True, doc="Fit x centroid parameter")
+    fit_cen_y = pexConfig.Field[bool](default=True, doc="Fit y centroid parameter")
     n_pointsources = pexConfig.Field[int](default=0, doc="Number of central point source components")
-    prior_cenx_stddev = pexConfig.Field[float](default=0,
-                                               doc="Prior std. dev. on x centroid (ignored if not >0)")
-    prior_ceny_stddev = pexConfig.Field[float](default=0,
-                                               doc="Prior std. dev. on y centroid (ignored if not >0)")
+    prior_cen_x_stddev = pexConfig.Field[float](default=0,
+                                                doc="Prior std. dev. on x centroid (ignored if not >0)")
+    prior_cen_y_stddev = pexConfig.Field[float](default=0,
+                                                doc="Prior std. dev. on y centroid (ignored if not >0)")
 
     # TODO: Verify that component names don't clash
     sersics = pexConfig.ConfigDictField(
@@ -135,12 +135,13 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
     def make_source(
         self,
         channels: list[g2f.Channel],
-    ) -> tuple[g2f.Source, list[g2f.Prior], g2f.LimitsD, g2f.LimitsD]:
+    ) -> tuple[g2f.Source, list[g2f.Prior], g2f.LimitsD, g2f.LimitsD,
+               g2f.CentroidXParameterD, g2f.CentroidXParameterD]:
         limits_x = g2f.LimitsD(min=0, max=np.Inf)
         limits_y = g2f.LimitsD(min=0, max=np.Inf)
-        cenx = g2f.CentroidXParameterD(value=0, limits=limits_x, fixed=not self.fit_cenx)
-        ceny = g2f.CentroidYParameterD(value=0, limits=limits_y, fixed=not self.fit_ceny)
-        centroid = g2f.CentroidParameters(cenx, ceny)
+        cen_x = g2f.CentroidXParameterD(value=0, limits=limits_x, fixed=not self.fit_cen_x)
+        cen_y = g2f.CentroidYParameterD(value=0, limits=limits_y, fixed=not self.fit_cen_y)
+        centroid = g2f.CentroidParameters(cen_x, cen_y)
         priors = []
         n_sersics = len(self.sersics)
         components = [None]*(self.n_pointsources + n_sersics)
@@ -163,15 +164,15 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
             components[idx] = component
             priors.extend(priors_comp)
             idx += 1
-        if self.prior_cenx_stddev > 0 and np.isfinite(self.prior_cenx_stddev):
+        if self.prior_cen_x_stddev > 0 and np.isfinite(self.prior_cen_x_stddev):
             priors.append(
-                g2f.GaussianPrior(centroid.x_param_ptr, 0, self.prior_cenx_stddev)
+                g2f.GaussianPrior(centroid.x_param_ptr, 0, self.prior_cen_x_stddev)
             )
-        if self.prior_ceny_stddev > 0 and np.isfinite(self.prior_ceny_stddev):
+        if self.prior_cen_y_stddev > 0 and np.isfinite(self.prior_cen_y_stddev):
             priors.append(
-                g2f.GaussianPrior(centroid.y_param_ptr, 0, self.prior_ceny_stddev)
+                g2f.GaussianPrior(centroid.y_param_ptr, 0, self.prior_cen_y_stddev)
             )
-        return g2f.Source(components), priors, limits_x, limits_y
+        return g2f.Source(components), priors, limits_x, limits_y, cen_x, cen_y
 
     def schema(
         self,
@@ -183,9 +184,9 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         suffixes = ('', '_err') if self.compute_errors else ('',)
         for suffix in suffixes:
             if suffix == '_err':
-                if self.fit_cenx:
+                if self.fit_cen_x:
                     columns.append(ColumnInfo(key=f'cen_x{suffix}', dtype='f8', unit=u.pix))
-                if self.fit_ceny:
+                if self.fit_cen_y:
                     columns.append(ColumnInfo(key=f'cen_y{suffix}', dtype='f8', unit=u.pix))
             for idx in range(self.n_pointsources):
                 prefix_comp = f"ps{idx + 1}_"
@@ -290,7 +291,9 @@ class CatalogSourceFitterABC(ABC):
             raise ValueError(f"{self.errors_expected=} keys contain duplicates from {config.flag_errors=}")
 
         channels = self.get_channels(catexps)
-        model_source, priors, limits_x, limits_y = config.make_source(channels=list(channels.values()))
+        model_source, priors, limits_x, limits_y, cen_x, cen_y = config.make_source(
+            channels=tuple(channels.values())
+        )
         params = tuple(get_params_uniq(model_source, fixed=False))
 
         n_rows = len(catalog_multi)
@@ -300,12 +303,14 @@ class CatalogSourceFitterABC(ABC):
         keys = [column.key for column in columns]
         prefix = config.prefix_column
         idx_flag_first = keys.index("unknown_flag")
-        idx_var_first = keys.index("cen_x")
-        assert idx_var_first > idx_flag_first
+        idx_flag_last = keys.index("cen_x")
+        assert idx_flag_last > idx_flag_first
+        idx_var_first = idx_flag_last + (not config.fit_cen_x) + (not config.fit_cen_x)
         idx_var_last = idx_var_first + len(params)
+        column_cen_x, column_cen_y = (f"{prefix}cen_{v}" for v in ("x", "y"))
         columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:idx_var_last]]
         columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last:]]
-        assert len(columns_write_err) == (len(params) - (not config.fit_cenx) - (not config.fit_ceny))
+        assert len(columns_write_err) == len(params)
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {'config': config.toDict()}
         results = Table(data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns],
@@ -316,7 +321,7 @@ class CatalogSourceFitterABC(ABC):
         for idx in range(idx_flag_first, len(columns)):
             column = columns[idx]
             dtype = results.columns[idx].dtype
-            if idx < idx_var_first:
+            if idx < idx_flag_last:
                 assert dtype == bool
                 assert column.key.endswith("_flag")
             else:
@@ -372,6 +377,11 @@ class CatalogSourceFitterABC(ABC):
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value
                     results[column][idx] = param.value
+
+                if not config.fit_cen_x:
+                    results[column_cen_x][idx] = cen_x.value
+                if not config.fit_cen_y:
+                    results[column_cen_y][idx] = cen_y.value
 
                 if config.compute_errors:
                     errors = None
@@ -435,7 +445,7 @@ class CatalogSourceFitterABC(ABC):
             raise ValueError(f"{len(results)=} !> {idx_row=}")
 
         channels = self.get_channels(catexps)
-        model_source, priors, limits_x, limits_y = config.make_source(channels=list(channels.values()))
+        model_source, priors, limits_x, limits_y, *_ = config.make_source(channels=list(channels.values()))
         source_multi = catalog_multi[idx_row]
 
         model, data, psfmodels = config.make_model_data(
