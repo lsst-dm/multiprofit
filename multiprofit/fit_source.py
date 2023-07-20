@@ -87,6 +87,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
 
 class CatalogSourceFitterConfig(CatalogFitterConfig):
     """Configuration for the MultiProFit profile fitter."""
+    convert_cen_xy_to_radec = pexConfig.Field[bool](default=True, doc="Convert cen x/y params to RA/dec")
     fit_cen_x = pexConfig.Field[bool](default=True, doc="Fit x centroid parameter")
     fit_cen_y = pexConfig.Field[bool](default=True, doc="Fit y centroid parameter")
     n_pointsources = pexConfig.Field[int](default=0, doc="Number of central point source components")
@@ -202,10 +203,13 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                 ]
                 for band in bands:
                     columns_comp.append(
-                        ColumnInfo(key=f'{prefix_comp}{band}_flux{suffix}', dtype='f8', unit=u.Unit(self.unit_flux))
+                        ColumnInfo(key=f'{prefix_comp}{band}_flux{suffix}', dtype='f8',
+                                   unit=u.Unit(self.unit_flux))
                     )
                 columns.extend(columns_comp)
-
+            if self.convert_cen_xy_to_radec:
+                columns.append(ColumnInfo(key=f'cen_ra{suffix}', dtype='f8', unit=u.deg))
+                columns.append(ColumnInfo(key=f'cen_dec{suffix}', dtype='f8', unit=u.deg))
         return columns
 
 
@@ -309,8 +313,12 @@ class CatalogSourceFitterABC(ABC):
         idx_var_last = idx_var_first + len(params)
         column_cen_x, column_cen_y = (f"{prefix}cen_{v}" for v in ("x", "y"))
         columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:idx_var_last]]
-        columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last:]]
+        n_radec = 2*config.convert_cen_xy_to_radec
+        columns_radec = [f"{prefix}{col.key}" for col in columns[idx_var_last:idx_var_last + n_radec]]
+        idx_var_last += n_radec
+        columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last:len(columns) - n_radec]]
         assert len(columns_write_err) == len(params)
+        columns_radec_err = [f"{prefix}{col.key}" for col in columns[len(columns) - n_radec:len(columns)]]
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {'config': config.toDict()}
         results = Table(data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns],
@@ -383,18 +391,38 @@ class CatalogSourceFitterABC(ABC):
                 if not config.fit_cen_y:
                     results[column_cen_y][idx] = cen_y.value
 
+                if config.convert_cen_xy_to_radec:
+                    radec = self.get_model_radec(row, cen_x.value, cen_y.value)
+                    for value, column in zip(radec, columns_radec):
+                        results[column][idx] = value
+
                 if config.compute_errors:
                     errors = None
                     try:
                         errors = np.sqrt(self.modeller.compute_variances(model, transformed=False))
                     except Exception:
                         try:
-                            errors = np.sqrt(self.modeller.compute_variances(model, transformed=False, use_svd=True))
+                            errors = np.sqrt(self.modeller.compute_variances(model, transformed=False,
+                                                                             use_svd=True))
                         except Exception:
                             pass
                     if errors is not None:
                         for value, column in zip(errors, columns_write_err):
                             results[column][idx] = value
+                        if config.convert_cen_xy_to_radec:
+                            if not config.fit_cen_x and config.fit_cen_y:
+                                # Note this will make naive tests that check for all-finite results fail
+                                radec_err = np.nan, np.nan
+                            else:
+                                # TODO: improve this
+                                # For one, it won't work right at RA = 359.9999...
+                                # Could consider dividing by sqrt(2) but it would multiply out later
+                                radec_err = np.array(self.get_model_radec(
+                                    row, cen_x.value + errors[0], cen_y.value + errors[1],
+                                ))
+                                radec_err -= radec
+                            for value, column in zip(radec_err, columns_radec_err):
+                                results[column][idx] = value
 
                 results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init
@@ -463,6 +491,9 @@ class CatalogSourceFitterABC(ABC):
                 param.value = row[column]
 
         return model
+
+    def get_model_radec(self, source: Mapping[str, Any], cen_x: float, cen_y: float) -> tuple[float, float]:
+        return np.nan, np.nan
 
     @abstractmethod
     def initialize_model(

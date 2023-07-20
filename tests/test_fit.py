@@ -87,6 +87,9 @@ class CatalogSourceFitterTest(CatalogSourceFitterABC):
     background: float = 1e2
     flux: float = 1e4
 
+    def get_model_radec(self, source: Mapping[str, Any], cen_x: float, cen_y: float) -> tuple[float, float]:
+        return float(cen_x), float(cen_y)
+
     def initialize_model(self, model: g2f.Model, source: g2f.Source,
                          limits_x: g2f.LimitsD=None, limits_y: g2f.LimitsD=None):
         comp1, comp2 = model.sources[0].components
