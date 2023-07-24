@@ -93,7 +93,7 @@ def make_psf_source(
         if not ((sigma_x >= 0) and (sigma_y >= 0)):
             errors.append(f"sigma_xs[{idx}]={sigma_x} and/or sigma_ys[{idx}]={sigma_y} !>=0")
         if not (limits_rho.check(rho)):
-            errors.append("rhos[{idx}]={rho} !within({limits_rho=})")
+            errors.append(f"rhos[{idx}]={rho} !within({limits_rho=})")
         if not (frac >= 0):
             errors.append(f"fluxes[{idx}]={frac} !>0")
     if errors:
