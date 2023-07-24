@@ -27,13 +27,21 @@ from .transforms import transforms_ref
 
 
 class ShapePriorConfig(pexConfig.Config):
+    prior_axrat_mean = pexConfig.Field[float](
+        default=0.7,
+        doc="Prior mean on axis ratio (prior ignored if not >0)",
+    )
     prior_axrat_stddev = pexConfig.Field[float](
         default=0,
-        doc="Prior std. dev. on axis ratio (ignored if not >0)",
+        doc="Prior std. dev. on axis ratio",
+    )
+    prior_size_mean = pexConfig.Field[float](
+        default=1,
+        doc="Prior std. dev. on size_major",
     )
     prior_size_stddev = pexConfig.Field[float](
         default=0,
-        doc="Prior std. dev. on size_major (ignored if not >0)",
+        doc="Prior std. dev. on size_major (prior ignored if not >0)",
     )
 
     def get_shape_prior(self, ellipse: g2f.ParametricEllipse) -> g2f.ShapePrior | None:
