@@ -30,7 +30,7 @@ import scipy.optimize as spopt
 import time
 from typing import Any
 
-from .utils import get_params_uniq
+from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
     import fastnnls
@@ -50,11 +50,6 @@ fitmethods_linear = {
 }
 if has_fastnnls:
     fitmethods_linear['fastnnls.fnnls'] = {}
-
-
-class ArbitraryAllowedConfig:
-    arbitrary_types_allowed = True
-    extra = 'forbid'
 
 
 @dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
