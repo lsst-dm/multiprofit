@@ -154,10 +154,12 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                     sigma_y=g2f.SigmaYParameterD(0, fixed=True),
                     rho=g2f.RhoParameterD(0, fixed=True),
                 ),
-                integral=g2f.LinearIntegralModel(
-                    {channel: g2f.IntegralParameterD(1.0, transform=transforms_ref['log10'])
-                     for channel in channels}
-                ),
+                integral=g2f.LinearIntegralModel({
+                    channel: g2f.IntegralParameterD(
+                        1.0, transform=transforms_ref['log10'], label=channel.name
+                    )
+                    for channel in channels
+                }),
             )
         idx = self.n_pointsources
         for sersic in self.sersics.values():
