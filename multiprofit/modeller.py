@@ -23,6 +23,7 @@ from abc import ABC, abstractmethod
 import gauss2d as g2
 import gauss2d.fit as g2f
 import logging
+import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
@@ -324,10 +325,24 @@ class FitInputs(FitInputsBase):
         return errors
 
 
+class ModelFitConfig(pexConfig.Config):
+    fit_linear_iter = pexConfig.Field[int](
+        doc="The number of iterations to wait before performing a linear fit during optimization."
+            " Default 0 disables the feature.",
+        default=0,
+    )
+
+    def validate(self):
+        if not self.fit_linear_iter >= 0:
+            raise ValueError(f"{self.fit_linear_iter=} must be >=0")
+
+
 @dataclass(kw_only=True, config=ArbitraryAllowedConfig)
 class FitResult:
     """Results from a Modeller fit, including metadata.
     """
+    # TODO: Why does setting this default to ModelFitConfig() cause a circular import??
+    config: ModelFitConfig = pydantic.Field(None, title="The configuration for fitting")
     inputs: FitInputs | None = pydantic.Field(None, title="The fit input arrays")
     result: Any | None = pydantic.Field(
         None,
@@ -337,9 +352,12 @@ class FitResult:
         None,
         title="The best-fit parameter array (un-transformed)",
     )
-    n_eval_resid: int = pydantic.Field(0, title="Total number of self-reported residual function evaluations")
-    n_eval_func: int = pydantic.Field(0, title="Total number of optimizer-reported fitness function evaluations")
-    n_eval_jac: int = pydantic.Field(0, title="Total number of optimizer-reported Jacobian function evaluations")
+    n_eval_resid: int = pydantic.Field(
+        0, title="Total number of self-reported residual function evaluations")
+    n_eval_func: int = pydantic.Field(
+        0, title="Total number of optimizer-reported fitness function evaluations")
+    n_eval_jac: int = pydantic.Field(
+        0, title="Total number of optimizer-reported Jacobian function evaluations")
     time_eval: float = pydantic.Field(0, title="Total runtime spent in model/Jacobian evaluation")
     time_run: float = pydantic.Field(0, title="Total runtime spent in fitting, excluding initial setup")
 
@@ -492,7 +510,7 @@ class Modeller:
         model: g2f.Model,
         fitinputs: FitInputs | None = None,
         printout: bool = False,
-        fit_linear_iter: int = 0,
+        config: ModelFitConfig = None,
         **kwargs
     ) -> FitResult:
         """Fit a model with a nonlinear optimizer.
@@ -505,10 +523,8 @@ class Modeller:
             An existing FitInputs with jacobian/residual arrays to reuse.
         printout : bool
             Whether to print diagnostic information.
-            fit_linear_iter: int = 0,
-        fit_linear_iter : int
-            The number of iterations to wait before performing a linear fit
-             during optimization. 0 disables the feature.
+        config : ModelFitConfig
+            Configuration settings for model fitting.
         kwargs
             Keyword arguments to pass to the optimizer.
 
@@ -521,8 +537,9 @@ class Modeller:
         -----
         The only supported fitter is scipy.optimize.least_squares.
         """
-        if not fit_linear_iter >= 0:
-            raise ValueError(f"{fit_linear_iter=} must be >=0")
+        if config is None:
+            config = ModelFitConfig()
+        config.validate()
         if fitinputs is None:
             fitinputs = FitInputs.from_model(model)
         else:
@@ -541,6 +558,8 @@ class Modeller:
                         raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
                 raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
+            config_fit = result.config
+            fit_linear_iter = config_fit.fit_linear_iter
             if (fit_linear_iter > 0) and ((result.n_eval_resid + 1) % fit_linear_iter == 0):
                 self.fit_model_linear(model, ratio_min=1e-6)
             time_init = time.process_time()
@@ -568,14 +587,23 @@ class Modeller:
         params_init = [None]*n_params_free
 
         for idx, param in enumerate(params_free):
-            limits = param.transform.limits if hasattr(param.transform, 'limits') else param.limits
+            limits = param.limits
+            # If the transform has limits and is more restrictive, use those limits
+            if hasattr(param.transform, 'limits'):
+                limits_transform = param.transform.limits
+                n_within = limits.check(limits_transform.min) + limits.check(limits_transform.min)
+                if n_within == 2:
+                    limits = limits_transform
+                elif n_within != 0:
+                    raise ValueError(f"{param=} {param.limits=} and {param.transform.limits=}"
+                                     f" intersect; one must be a subset of the other")
             bounds[0][idx] = param.transform.forward(limits.min)
             bounds[1][idx] = param.transform.forward(limits.max)
-            if not (limits.min <= param.value <= limits.max):
-                raise RuntimeError(f'{param=}.value={param.value_transforme} not within {limits=}')
+            if not limits.check(param.value):
+                raise RuntimeError(f'{param=}.value_transformed={param.value} not within {limits=}')
             params_init[idx] = param.value_transformed
 
-        results = FitResult(inputs=fitinputs)
+        results = FitResult(inputs=fitinputs, config=config)
         time_init = time.process_time()
         result_opt = spopt.least_squares(
             residual_func, params_init, jac=jacobian_func, bounds=bounds,
@@ -597,8 +625,6 @@ class Modeller:
         idx_obs: int = None,
         ratio_min: float = 0,
         validate: bool = False,
-        transform_flux: g2f.TransformD = None,
-        limits_flux: g2f.LimitsD = None,
     ) -> None:
         n_data = len(model.data)
         n_sources = len(model.sources)
@@ -624,13 +650,9 @@ class Modeller:
             values = list(result.values())[0]
 
             for (_, parameter), ratio in zip(gaussians_linear.gaussians_free, values):
-                values_init[parameter] = parameter.value
+                values_init[parameter] = float(parameter.value)
                 if not (ratio >= ratio_min):
                     ratio = ratio_min
-                    if transform_flux is not None:
-                        parameter.transform = transform_flux
-                    if limits_flux is not None:
-                        parameter.limits = limits_flux
                 value_new = max(ratio*parameter.value, parameter.limits.min)
                 values_new[parameter] = value_new
 

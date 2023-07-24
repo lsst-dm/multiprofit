@@ -24,9 +24,14 @@ from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
 from multiprofit.config import set_config_from_dict
-from multiprofit.componentconfig import GaussianConfig, init_component, ParameterConfig, SersicConfig, SersicIndexConfig
+from multiprofit.componentconfig import (
+    GaussianConfig, init_component, ParameterConfig, SersicConfig, SersicIndexConfig,
+)
 from multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
-from multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
+from multiprofit.fit_source import (
+    CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig,
+)
+from multiprofit.modeller import ModelFitConfig
 import numpy as np
 import pytest
 from typing import Any, Mapping
@@ -120,9 +125,10 @@ def config_psf():
 
 
 @pytest.fixture(scope='module')
-def config_source():
+def config_source_fit():
     # TODO: Separately test n_pointsources=0 and sersics={}
     return CatalogSourceFitterConfig(
+        config_fit=ModelFitConfig(fit_linear_iter=3),
         n_pointsources=1,
         sersics={"comp1": SersicConfig(sersicindex=SersicIndexConfig(fixed=True))},
     )
@@ -142,21 +148,22 @@ def test_fit_psf(config_psf, table_psf_fits):
     assert len(psfmodel.components) == len(config_psf.gaussians)
 
 
-def test_fit_source(config_source, table_psf_fits):
-    model_source, *_ = config_source.make_source(channels=[channel])
+def test_fit_source(config_source_fit, table_psf_fits):
+    model_source, *_ = config_source_fit.make_source(channels=[channel])
     # Have to do this here so that the model initializes its observation with
     # the extended component having the right size
     init_component(model_source.components[1], sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
     catexp = CatalogExposureSourcesTest(
-        config_fit=config_source, model_source=model_source, table_psf_fits=table_psf_fits,
+        config_fit=config_source_fit, model_source=model_source, table_psf_fits=table_psf_fits,
     )
     fitter = CatalogSourceFitterTest()
     catalog_multi = catexp.get_catalog()
-    results = fitter.fit(catalog_multi=catalog_multi, catexps=[catexp], config=config_source, fit_linear_iter=3)
+    results = fitter.fit(catalog_multi=catalog_multi, catexps=[catexp], config=config_source_fit)
     assert len(results) == 1
     assert np.sum(results['mpf_unknown_flag']) == 0
     assert all(np.isfinite(list(results[0].values())))
 
-    model = fitter.get_model(0, catalog_multi=catalog_multi, catexps=[catexp], config=config_source, results=results)
+    model = fitter.get_model(0, catalog_multi=catalog_multi, catexps=[catexp], config=config_source_fit,
+                             results=results)
     variances = fitter.modeller.compute_variances(model)
     assert np.all(np.isfinite(variances))

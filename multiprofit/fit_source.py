@@ -341,9 +341,6 @@ class CatalogSourceFitterABC(ABC):
         size, size_new = 0, 0
         fitInputs = FitInputsDummy()
 
-        limits_flux = g2f.LimitsD(1e-6, 1e6, 'unreliable flux limits')
-        transform_flux = g2f.LogitLimitedTransformD(limits_flux)
-
         for idx in range_idx:
             time_init = time.process_time()
             row = results[idx]
@@ -367,22 +364,20 @@ class CatalogSourceFitterABC(ABC):
                 else:
                     fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
 
+                # TODO: set limits_flux, transform_flux if not config.fit_linear_init
                 if config.fit_linear_init:
-                    self.modeller.fit_model_linear(
-                        model=model, ratio_min=0.01, transform_flux=transform_flux, limits_flux=limits_flux,
-                    )
+                    self.modeller.fit_model_linear(model=model, ratio_min=1e-3)
 
-                result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
+                result_full = self.modeller.fit_model(
+                    model, fitinputs=fitInputs, config=config.config_fit, **kwargs
+                )
                 fitInputs = result_full.inputs
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
 
                 if config.fit_linear_final:
-                    self.modeller.fit_model_linear(
-                        model=model, ratio_min=0.01, validate=True,
-                        transform_flux=transform_flux, limits_flux=limits_flux,
-                    )
+                    self.modeller.fit_model_linear(model=model, ratio_min=0.01, validate=True)
 
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value
@@ -394,7 +389,7 @@ class CatalogSourceFitterABC(ABC):
                     results[column_cen_y][idx] = cen_y.value
 
                 if config.convert_cen_xy_to_radec:
-                    radec = self.get_model_radec(row, cen_x.value, cen_y.value)
+                    radec = self.get_model_radec(source_multi, cen_x.value, cen_y.value)
                     for value, column in zip(radec, columns_radec):
                         results[column][idx] = value
 
@@ -420,11 +415,11 @@ class CatalogSourceFitterABC(ABC):
                                 # For one, it won't work right at RA = 359.9999...
                                 # Could consider dividing by sqrt(2) but it would multiply out later
                                 radec_err = np.array(self.get_model_radec(
-                                    row, cen_x.value + errors[0], cen_y.value + errors[1],
+                                    source_multi, cen_x.value + errors[0], cen_y.value + errors[1],
                                 ))
                                 radec_err -= radec
                             for value, column in zip(radec_err, columns_radec_err):
-                                results[column][idx] = value
+                                results[column][idx] = np.abs(value)
 
                 results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init

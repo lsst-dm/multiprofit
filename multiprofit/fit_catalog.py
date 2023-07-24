@@ -22,10 +22,11 @@
 from abc import ABC, abstractmethod
 import astropy.units as u
 from collections.abc import Iterable
+import lsst.pex.config as pexConfig
 import pydantic
 from pydantic.dataclasses import dataclass
 
-import lsst.pex.config as pexConfig
+from .modeller import ModelFitConfig
 
 
 class CatalogExposureABC(ABC):
@@ -51,6 +52,7 @@ class CatalogFitterConfig(pexConfig.Config):
     """Configuration for generic MultiProFit fitting tasks."""
     column_id = pexConfig.Field[str](default="id", doc="Catalog index column key")
     compute_errors = pexConfig.Field[bool](default=True, doc="Compute sqrt(variances) of each free parameter")
+    config_fit = pexConfig.ConfigField[ModelFitConfig](default=ModelFitConfig(), doc="Fitter configuration")
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
     fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")
     fit_linear_final = pexConfig.Field[bool](default=True, doc="Fit linear parameters after optimization")
