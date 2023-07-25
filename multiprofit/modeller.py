@@ -705,7 +705,9 @@ class Modeller:
                     g2f.CentroidXParameterD(gaussian.centroid.x, fixed=True),
                     g2f.CentroidYParameterD(gaussian.centroid.y, fixed=True),
                 ),
-                g2f.LinearIntegralModel({g2f.Channel.NONE: g2f.IntegralParameterD(gaussian.integral.value)}),
+                g2f.LinearIntegralModel([
+                    (g2f.Channel.NONE, g2f.IntegralParameterD(gaussian.integral.value)),
+                ]),
             )
             components_new[idx] = component_new
         return components_new

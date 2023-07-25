@@ -111,10 +111,10 @@ class GaussianConfig(EllipticalComponentConfig):
         return g2f.GaussianComponent(
             centroid=centroid,
             ellipse=ellipse,
-            integral=g2f.LinearIntegralModel(
-                {channel: g2f.IntegralParameterD(1.0, transform=transform_flux)
-                 for channel in channels}
-            ),
+            integral=g2f.LinearIntegralModel([
+                (channel, g2f.IntegralParameterD(1.0, transform=transform_flux))
+                for channel in channels
+            ]),
         ), ([] if prior is None else [prior])
 
 
@@ -143,7 +143,7 @@ class SersicConfig(EllipticalComponentConfig):
         transform_size = transforms_ref['log10']
         transform_rho = transforms_ref['logit_rho']
         integral = g2f.LinearIntegralModel(
-            {channel: g2f.IntegralParameterD(1.0, transform=transform_flux) for channel in channels}
+            [(channel, g2f.IntegralParameterD(1.0, transform=transform_flux)) for channel in channels]
         )
         if self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed:
             ellipse = g2f.GaussianParametricEllipse(

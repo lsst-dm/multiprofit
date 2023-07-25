@@ -155,15 +155,15 @@ def psfmodels(channels, config, data, limits):
         for c in range(n_comps):
             is_last = c == n_last
             last = g2f.FractionalIntegralModel(
-                {
-                    g2f.Channel.NONE: g2f.ProperFractionParameterD(
+                [
+                    (g2f.Channel.NONE, g2f.ProperFractionParameterD(
                         (is_last == 1) or (0.5 + 0.5*(c > 0)), fixed=is_last,
                         transform=transforms_ref['logit']
-                    )
-                },
-                g2f.LinearIntegralModel({
-                    g2f.Channel.NONE: g2f.IntegralParameterD(1.0, fixed=True)
-                }) if (c == 0) else last,
+                    ))
+                ],
+                g2f.LinearIntegralModel([
+                    (g2f.Channel.NONE, g2f.IntegralParameterD(1.0, fixed=True))
+                ]) if (c == 0) else last,
                 is_last,
             )
             components[c] = g2f.GaussianComponent(
@@ -235,9 +235,9 @@ def get_sources(channels, config, limits: Limits, transforms: Transforms):
             g2f.CentroidYParameterD(config.n_rows*position_ratio, limits=limits.y),
         )
         for c in range(n_components):
-            fluxes = {
-                channel: g2f.IntegralParameterD(flux, label=channel.name) for channel in channels.values()
-            }
+            fluxes = [
+                (channel, g2f.IntegralParameterD(flux, label=channel.name)) for channel in channels.values()
+            ]
             size = compconf.size_base + c*compconf.size_increment
             # Needs to not be exactly 1.0 because of linear interpolation
             # (this breaks finite differencing at any delta +/- a knot)

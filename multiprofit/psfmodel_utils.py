@@ -111,14 +111,14 @@ def make_psf_source(
     for c in range(n_gaussians):
         is_last = c == n_last
         last = g2f.FractionalIntegralModel(
-            {
-                g2f.Channel.NONE: g2f.ProperFractionParameterD(
+            [
+                (g2f.Channel.NONE, g2f.ProperFractionParameterD(
                     fracs[c], fixed=is_last, transform=transforms['frac']
-                )
-            },
-            g2f.LinearIntegralModel({
-                g2f.Channel.NONE: g2f.IntegralParameterD(1.0, fixed=True)
-            }) if (c == 0) else last,
+                ))
+            ],
+            g2f.LinearIntegralModel([
+                (g2f.Channel.NONE, g2f.IntegralParameterD(1.0, fixed=True))
+            ]) if (c == 0) else last,
             is_last,
         )
         components[c] = g2f.GaussianComponent(
