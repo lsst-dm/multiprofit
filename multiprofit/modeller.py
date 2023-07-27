@@ -625,7 +625,7 @@ class Modeller:
         idx_obs: int = None,
         ratio_min: float = 0,
         validate: bool = False,
-    ) -> None:
+    ) -> tuple[np.ndarray, np.ndarray]:
         n_data = len(model.data)
         n_sources = len(model.sources)
         if n_sources != 1:
@@ -640,6 +640,8 @@ class Modeller:
         if validate:
             model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
             loglike_init = model.evaluate()
+        else:
+            loglike_init = None
         values_init = {}
         values_new = {}
 
@@ -664,6 +666,9 @@ class Modeller:
             if not (sum(loglike_new) > sum(loglike_init)):
                 for parameter, value in values_init.items():
                     parameter.value = value
+        else:
+            loglike_new = None
+        return loglike_init, loglike_new
 
     @staticmethod
     def make_components_linear(
