@@ -376,12 +376,16 @@ class CatalogSourceFitterABC(ABC):
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
 
-                if config.fit_linear_final:
-                    self.modeller.fit_model_linear(model=model, ratio_min=0.01, validate=True)
-
+                # Set all params to best fit values (in case the optimizer didn't)
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value
                     results[column][idx] = param.value
+
+                if config.fit_linear_final:
+                    loglike_init, loglike_new = self.modeller.fit_model_linear(
+                        model=model, ratio_min=0.01, validate=True
+                    )
+                    loglike_diff = np.sum(loglike_new) - np.sum(loglike_init)
 
                 if not config.fit_cen_x:
                     results[column_cen_x][idx] = cen_x.value
