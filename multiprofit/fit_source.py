@@ -156,7 +156,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                 ),
                 integral=g2f.LinearIntegralModel([
                     (channel, g2f.IntegralParameterD(
-                        1.0, transform=transforms_ref['log10'], label=channel.name
+                        1.0, transform=transforms_ref['log10'], label=f'Pt. Src {channel.name}-band'
                     ))
                     for channel in channels
                 ]),
@@ -340,6 +340,10 @@ class CatalogSourceFitterABC(ABC):
         # dummy size for first iteration
         size, size_new = 0, 0
         fitInputs = FitInputsDummy()
+        plot = False
+        errors_hessian = config.compute_errors == "INV_HESSIAN"
+        errors_hessian_bestfit = config.compute_errors == "INV_HESSIAN_BESTFIT"
+        compute_errors = errors_hessian or errors_hessian_bestfit
 
         for idx in range_idx:
             time_init = time.process_time()
@@ -386,6 +390,9 @@ class CatalogSourceFitterABC(ABC):
                         model=model, ratio_min=0.01, validate=True
                     )
                     loglike_diff = np.sum(loglike_new) - np.sum(loglike_init)
+                    # TODO: See if it makes sense to set only flux params
+                    for param, column in zip(params, columns_write):
+                        results[column][idx] = param.value
 
                 if not config.fit_cen_x:
                     results[column_cen_x][idx] = cen_x.value
@@ -397,17 +404,63 @@ class CatalogSourceFitterABC(ABC):
                     for value, column in zip(radec, columns_radec):
                         results[column][idx] = value
 
-                if config.compute_errors:
-                    errors = None
-                    try:
-                        errors = np.sqrt(self.modeller.compute_variances(model, transformed=False))
-                    except Exception:
+                if compute_errors:
+                    errors = []
+                    model_eval = model
+                    if errors_hessian_bestfit:
+                        # Model sans prior
+                        model_eval = g2f.Model(data=model.data, psfmodels=model.psfmodels,
+                                               sources=model.sources)
+                        model_eval.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
+                        model_eval.evaluate()
+                        img_data_old = []
+                        for obs, output in zip(model_eval.data, model_eval.outputs):
+                            img_data_old.append(obs.image.data.copy())
+                            img = obs.image.data
+                            img.flat = (
+                                output.data.flat
+                            )
+                            # To make this a real bootstrap, could do this (but would need to iterate):
+                            # + rng.standard_normal(img.size) * obs.sigma_inv.data.flat
+
+                    kwargs_err = {'findiff_add': 1e-8, 'findiff_frac': 1e-6}
+                    for return_negative in (False, True):
+                        if return_negative:
+                            kwargs_err = {'findiff_add': 1e-3, 'findiff_frac': 1e-3}
+                        if errors and errors[-1][1] == 0:
+                            break
                         try:
-                            errors = np.sqrt(self.modeller.compute_variances(model, transformed=False,
-                                                                             use_svd=True))
+                            errors_iter = np.sqrt(self.modeller.compute_variances(
+                                model_eval, transformed=False, return_negative=return_negative, **kwargs_err
+                            ))
+                            errors.append((errors_iter, np.sum(errors_iter > 0)))
                         except Exception:
-                            pass
-                    if errors is not None:
+                            try:
+                                errors_iter = np.sqrt(self.modeller.compute_variances(
+                                    model_eval, transformed=False, return_negative=return_negative,
+                                    use_svd=True, **kwargs_err,
+                                ))
+                                errors.append((errors_iter, np.sum(errors_iter > 0)))
+                            except Exception:
+                                pass
+
+                    if errors_hessian_bestfit:
+                        for obs, img_datum_old in zip(model.data, img_data_old):
+                            obs.image.data.flat = img_datum_old.flat
+
+                    if errors:
+                        idx_min = np.argmax([err[1] for err in errors])
+                        errors = errors[idx_min][0]
+                        if plot:
+                            errors_plot = np.clip(errors, 0, 1000)
+                            errors_plot[~np.isfinite(errors_plot)] = 0
+                            from multiprofit.plots import plot_loglike, plt
+                            try:
+                                plot_loglike(model, errors=errors)
+                            except Exception as e:
+                                for param in params:
+                                    param.fixed = False
+
                         for value, column in zip(errors, columns_write_err):
                             results[column][idx] = value
                         if config.convert_cen_xy_to_radec:

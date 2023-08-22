@@ -51,7 +51,15 @@ class ColumnInfo:
 class CatalogFitterConfig(pexConfig.Config):
     """Configuration for generic MultiProFit fitting tasks."""
     column_id = pexConfig.Field[str](default="id", doc="Catalog index column key")
-    compute_errors = pexConfig.Field[bool](default=True, doc="Compute sqrt(variances) of each free parameter")
+    compute_errors = pexConfig.ChoiceField[str](
+        default="INV_HESSIAN_BESTFIT",
+        doc="Whether/how to compute sqrt(variances) of each free parameter",
+        allowed={
+            "NONE": "no errors computed",
+            "INV_HESSIAN": "inverse hessian using noisy image as data",
+            "INV_HESSIAN_BESTFIT": "inverse hessian using best-fit model as data",
+        }
+    )
     config_fit = pexConfig.ConfigField[ModelFitConfig](default=ModelFitConfig(), doc="Fitter configuration")
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
     fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")

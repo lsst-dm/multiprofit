@@ -50,15 +50,15 @@ class ShapePriorConfig(pexConfig.Config):
 
         if use_prior_axrat or use_prior_size:
             prior_size = g2f.ParametricGaussian1D(
-                g2f.MeanParameterD(1, transform=transforms_ref["log10"]),
+                g2f.MeanParameterD(self.prior_size_mean, transform=transforms_ref["log10"]),
                 g2f.StdDevParameterD(self.prior_size_stddev)
             ) if use_prior_size else None
             prior_axrat = g2f.ParametricGaussian1D(
-                g2f.MeanParameterD(0, transform=transforms_ref["logit_axrat_prior"]),
+                g2f.MeanParameterD(self.prior_axrat_mean, transform=transforms_ref["logit_axrat_prior"]),
                 g2f.StdDevParameterD(self.prior_axrat_stddev)
             ) if use_prior_axrat else None
             return g2f.ShapePrior(ellipse, prior_size, prior_axrat)
-        return None
+            return None
 
 
 def get_hst_size_prior(mag_psf_i):

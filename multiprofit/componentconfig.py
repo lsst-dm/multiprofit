@@ -138,14 +138,20 @@ class SersicConfig(EllipticalComponentConfig):
         self,
         centroid: g2f.CentroidParameters,
         channels: list[g2f.Channel],
+        label_integral: str | None = None
     ) -> tuple[g2f.Component, list[g2f.Prior]]:
+        is_gaussian = self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed
+        if label_integral is None:
+            label_integral = f"{'Gaussian' if is_gaussian else 'Sersic'} {{channel}}-band"
         transform_flux = transforms_ref['log10']
         transform_size = transforms_ref['log10']
         transform_rho = transforms_ref['logit_rho']
         integral = g2f.LinearIntegralModel(
-            [(channel, g2f.IntegralParameterD(1.0, transform=transform_flux)) for channel in channels]
+            [(channel, g2f.IntegralParameterD(1.0, transform=transform_flux,
+                                              label=label_integral.format(channel=channel)))
+             for channel in channels]
         )
-        if self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed:
+        if is_gaussian:
             ellipse = g2f.GaussianParametricEllipse(
                 sigma_x=g2f.SigmaXParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
                 sigma_y=g2f.SigmaYParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),

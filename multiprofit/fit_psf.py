@@ -122,7 +122,7 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
 
     def setDefaults(self):
         self.prefix_column = "mpf_psf_"
-        self.compute_errors = False
+        self.compute_errors = "NONE"
 
 
 class CatalogPsfFitter:
@@ -230,7 +230,7 @@ class CatalogPsfFitter:
             config = CatalogPsfFitterConfig()
         if logger is None:
             logger = CatalogPsfFitter._get_logger()
-        if config.compute_errors:
+        if config.compute_errors != "NONE":
             raise ValueError("CatalogPsfFitter doesn't support computing errors")
 
         errors_expected = set(self.errors_expected.values())

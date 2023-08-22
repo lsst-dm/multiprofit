@@ -32,13 +32,14 @@ from multiprofit.fit_source import (
     CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig,
 )
 from multiprofit.modeller import ModelFitConfig
+from multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
 from typing import Any, Mapping
 
 rng = np.random.default_rng(1)
 
-channel = g2f.Channel.get("r")
+channels = (g2f.Channel.get("g"), g2f.Channel.get("r"))
 shape_img = (23, 27)
 sigma_x_init, sigma_y_init, rho_init = 2.5, 3.6, -0.25
 
@@ -56,15 +57,12 @@ class CatalogExposurePsfTest(CatalogExposurePsfABC):
         return image + 1e-4*rng.standard_normal(image.shape)
 
 
-@dataclass(frozen=True)
+@dataclass(kw_only=True, frozen=True)
 class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
+    channel: g2f.Channel = g2f.Channel.NONE
     config_fit: CatalogSourceFitterConfig
     model_source: g2f.Source
     table_psf_fits: astropy.table.Table
-
-    @property
-    def channel(self):
-        return channel
 
     def get_catalog(self) -> astropy.table.Table:
         return astropy.table.Table({'id': [0]})
@@ -77,7 +75,7 @@ class CatalogExposureSourcesTest(CatalogExposureSourcesABC):
             image=g2.ImageD(n_rows=shape_img[0], n_cols=shape_img[1]),
             sigma_inv=g2.ImageD(n_rows=shape_img[0], n_cols=shape_img[1]),
             mask_inv=g2.ImageB(n_rows=shape_img[0], n_cols=shape_img[1]),
-            channel=channel,
+            channel=self.channel,
         )
         return obs
 
@@ -106,22 +104,39 @@ class CatalogSourceFitterTest(CatalogSourceFitterABC):
         if limits_y is not None:
             limits_y.max = float(observation.image.n_rows)
         init_component(comp1, cen_x=cenx, cen_y=ceny)
-        init_component(comp2, cen_x=cenx, cen_y=ceny, sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
+        init_component(comp2, cen_x=cenx, cen_y=ceny, sigma_x=sigma_x_init, sigma_y=sigma_y_init,
+                       rho=rho_init)
 
         # We should have done this in get_source_observation, but it gets called first
         model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.image)
         model.evaluate()
-        observation = model.data[0]
-        image, sigma_inv = observation.image, observation.sigma_inv
-        image.data.flat = self.flux*model.outputs[0].data
-        sigma_inv.data.flat = np.sqrt(image.data + self.background)
-        image.data.flat = image.data + sigma_inv.data*rng.standard_normal(image.data.shape)
-        sigma_inv.data.flat = 1/sigma_inv.data
+
+        has_imgs = hasattr(self, "_images")
+        if not has_imgs:
+            self._images = []
+
+        for idx_obs, observation in enumerate(model.data):
+            image, sigma_inv = observation.image, observation.sigma_inv
+            image.data.flat = self.flux*model.outputs[0].data
+            sigma_inv.data.flat = np.sqrt(image.data + self.background)
+            if has_imgs:
+                image.data.flat = self._images[idx_obs].flat
+            else:
+                image.data.flat = image.data + sigma_inv.data*rng.standard_normal(image.data.shape)
+                self._images.append(image.data)
+            sigma_inv.data.flat = 1/sigma_inv.data
+
+        self.params_values_init = tuple(
+            param.value*(self.flux if isinstance(param, g2f.IntegralParameterD) else 1.0)
+            for param in get_params_uniq(model, fixed=False)
+        )
 
 
 @pytest.fixture(scope='module')
 def config_psf():
-    return CatalogPsfFitterConfig(gaussians={'comp1': GaussianConfig(size=ParameterConfig(value_initial=1.5))})
+    return CatalogPsfFitterConfig(
+        gaussians={'comp1': GaussianConfig(size=ParameterConfig(value_initial=1.5))},
+    )
 
 
 @pytest.fixture(scope='module')
@@ -130,7 +145,15 @@ def config_source_fit():
     return CatalogSourceFitterConfig(
         config_fit=ModelFitConfig(fit_linear_iter=3),
         n_pointsources=1,
-        sersics={"comp1": SersicConfig(sersicindex=SersicIndexConfig(fixed=True))},
+        sersics={
+            "comp1": SersicConfig(
+                prior_size_mean=sigma_y_init,
+                prior_size_stddev=1.0,
+                prior_axrat_mean=sigma_x_init/sigma_y_init,
+                prior_axrat_stddev=0.2,
+                sersicindex=SersicIndexConfig(fixed=True),
+            )
+        },
     )
 
 
@@ -149,21 +172,62 @@ def test_fit_psf(config_psf, table_psf_fits):
 
 
 def test_fit_source(config_source_fit, table_psf_fits):
-    model_source, *_ = config_source_fit.make_source(channels=[channel])
+    model_source, *_ = config_source_fit.make_source(channels=channels)
     # Have to do this here so that the model initializes its observation with
     # the extended component having the right size
     init_component(model_source.components[1], sigma_x=sigma_x_init, sigma_y=sigma_y_init, rho=rho_init)
-    catexp = CatalogExposureSourcesTest(
-        config_fit=config_source_fit, model_source=model_source, table_psf_fits=table_psf_fits,
+    catexps = tuple(
+        CatalogExposureSourcesTest(
+            channel=channel, config_fit=config_source_fit,
+            model_source=model_source, table_psf_fits=table_psf_fits,
+        )
+        for channel in channels
     )
     fitter = CatalogSourceFitterTest()
-    catalog_multi = catexp.get_catalog()
-    results = fitter.fit(catalog_multi=catalog_multi, catexps=[catexp], config=config_source_fit)
+    catalog_multi = catexps[0].get_catalog()
+    results = fitter.fit(catalog_multi=catalog_multi, catexps=catexps, config=config_source_fit)
     assert len(results) == 1
     assert np.sum(results['mpf_unknown_flag']) == 0
     assert all(np.isfinite(list(results[0].values())))
 
-    model = fitter.get_model(0, catalog_multi=catalog_multi, catexps=[catexp], config=config_source_fit,
+    model = fitter.get_model(0, catalog_multi=catalog_multi, catexps=catexps, config=config_source_fit,
                              results=results)
-    variances = fitter.modeller.compute_variances(model)
-    assert np.all(np.isfinite(variances))
+
+    variances = []
+    for return_negative in (False, True):
+        variances.append(
+            fitter.modeller.compute_variances(model, transformed=False, return_negative=return_negative)
+        )
+        if return_negative:
+            variances = np.array(variances)
+            variances[variances <= 0] = 0
+            variances = list(variances)
+        else:
+            assert np.all(variances[-1] > 0)
+
+    # Bootstrap errors
+    model.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
+    model.evaluate()
+    img_data_old = []
+    for obs, output in zip(model.data, model.outputs):
+        img_data_old.append(obs.image.data.copy())
+        img = obs.image.data
+        img.flat = output.data.flat #+ rng.standard_normal(img.size) * obs.sigma_inv.data.flat
+    variances_bootstrap = fitter.modeller.compute_variances(model, transformed=False, return_negative=False)
+    for obs, img_datum_old in zip(model.data, img_data_old):
+        obs.image.data.flat = img_datum_old.flat
+
+    # TODO: Enable this test by default and write to file or null device?
+    plot = True
+    if plot:
+        from multiprofit.plots import ErrorValues, plot_loglike, plt
+        errors_plot = {
+            'inv_hessian': ErrorValues(values=np.sqrt(variances[0]),
+                                       kwargs_plot={'linestyle': '-', 'color': 'r'}),
+            'inv_hessian_neg': ErrorValues(values=np.sqrt(variances[1]),
+                                           kwargs_plot={'linestyle': '--', 'color': 'r'}),
+            'bootstrap_param': ErrorValues(values=np.sqrt(variances_bootstrap),
+                                           kwargs_plot={'linestyle': '-', 'color': 'b'}),
+        }
+        plot_loglike(model, errors=errors_plot, values_reference=fitter.params_values_init)
+        plt.show()

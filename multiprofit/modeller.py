@@ -391,11 +391,11 @@ class Modeller:
     ):
         hessian = model.compute_hessian(**kwargs).data
         if use_svd:
-            u, s, v = np.linalg.svd(hessian)
+            u, s, v = np.linalg.svd(-hessian)
             inverse = np.dot(v.transpose(), np.dot(np.diag(s**-1), u.transpose()))
         else:
-            inverse = np.linalg.inv(hessian)
-        return -np.diag(inverse)
+            inverse = np.linalg.inv(-hessian)
+        return np.diag(inverse)
 
     @staticmethod
     def fit_gaussians_linear(
@@ -716,4 +716,3 @@ class Modeller:
             )
             components_new[idx] = component_new
         return components_new
-
