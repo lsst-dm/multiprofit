@@ -60,6 +60,10 @@ class CatalogFitterConfig(pexConfig.Config):
             "INV_HESSIAN_BESTFIT": "inverse hessian using best-fit model as data",
         }
     )
+    compute_errors_no_covar = pexConfig.Field[bool](
+        default=True,
+        doc="Whether to compute parameter errors independently, ignoring covariances",
+    )
     config_fit = pexConfig.ConfigField[ModelFitConfig](default=ModelFitConfig(), doc="Fitter configuration")
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
     fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")

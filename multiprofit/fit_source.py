@@ -423,24 +423,30 @@ class CatalogSourceFitterABC(ABC):
                             # To make this a real bootstrap, could do this (but would need to iterate):
                             # + rng.standard_normal(img.size) * obs.sigma_inv.data.flat
 
-                    kwargs_err = {'findiff_add': 1e-8, 'findiff_frac': 1e-6}
+                    kwargs_err = {
+                        'findiff_add': 1e-8, 'findiff_frac': 1e-6,
+                        'use_diag_only': config.compute_errors_no_covar,
+                    }
                     for return_negative in (False, True):
                         if return_negative:
-                            kwargs_err = {'findiff_add': 1e-3, 'findiff_frac': 1e-3}
+                            kwargs_err = {
+                                'findiff_add': 1e-3, 'findiff_frac': 1e-3,
+                                'use_diag_only': config.compute_errors_no_covar,
+                            }
                         if errors and errors[-1][1] == 0:
                             break
                         try:
                             errors_iter = np.sqrt(self.modeller.compute_variances(
                                 model_eval, transformed=False, return_negative=return_negative, **kwargs_err
                             ))
-                            errors.append((errors_iter, np.sum(errors_iter > 0)))
+                            errors.append((errors_iter, np.sum(~(errors_iter > 0))))
                         except Exception:
                             try:
                                 errors_iter = np.sqrt(self.modeller.compute_variances(
                                     model_eval, transformed=False, return_negative=return_negative,
                                     use_svd=True, **kwargs_err,
                                 ))
-                                errors.append((errors_iter, np.sum(errors_iter > 0)))
+                                errors.append((errors_iter, np.sum(~(errors_iter > 0))))
                             except Exception:
                                 pass
 

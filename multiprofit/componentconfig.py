@@ -142,7 +142,7 @@ class SersicConfig(EllipticalComponentConfig):
     ) -> tuple[g2f.Component, list[g2f.Prior]]:
         is_gaussian = self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed
         if label_integral is None:
-            label_integral = f"{'Gaussian' if is_gaussian else 'Sersic'} {{channel}}-band"
+            label_integral = f"{'Gaussian' if is_gaussian else 'Sersic'} {{channel.name}}-band"
         transform_flux = transforms_ref['log10']
         transform_size = transforms_ref['log10']
         transform_rho = transforms_ref['logit_rho']

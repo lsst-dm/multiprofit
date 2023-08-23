@@ -386,10 +386,13 @@ class Modeller:
     @staticmethod
     def compute_variances(
         model: g2f.Model,
+        use_diag_only: bool = False,
         use_svd: bool = False,
         **kwargs
     ):
         hessian = model.compute_hessian(**kwargs).data
+        if use_diag_only:
+            return -1/np.diag(hessian)
         if use_svd:
             u, s, v = np.linalg.svd(-hessian)
             inverse = np.dot(v.transpose(), np.dot(np.diag(s**-1), u.transpose()))
