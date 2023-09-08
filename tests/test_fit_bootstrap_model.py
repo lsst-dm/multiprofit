@@ -42,6 +42,7 @@ sigma_x_src, sigma_y_src, rho_src = 2.5, 3.6, -0.25
 # TODO: These can be parameterized; should they be?
 compute_errors_no_covar = True
 n_sources = 5
+# This is for interactive debugging
 plot = False
 
 
@@ -69,6 +70,7 @@ def config_source_fit():
         },
         convert_cen_xy_to_radec=False,
         compute_errors_no_covar=compute_errors_no_covar,
+        compute_errors_from_jacobian=False,
     )
 
 
@@ -132,7 +134,8 @@ def test_fit_source(config_source_fit, table_psf_fits):
     variances = []
     for return_negative in (False, True):
         variances.append(
-            fitter.modeller.compute_variances(model, transformed=False, return_negative=return_negative)
+            fitter.modeller.compute_variances(model, transformed=False,
+                                              options=g2f.HessianOptions(return_negative=return_negative))
         )
         if return_negative:
             variances = np.array(variances)
@@ -149,23 +152,32 @@ def test_fit_source(config_source_fit, table_psf_fits):
         img_data_old.append(obs.image.data.copy())
         img = obs.image.data
         img.flat = output.data.flat
-    variances_bootstrap = fitter.modeller.compute_variances(model, transformed=False, return_negative=False)
-    variances_bootstrap_diag = fitter.modeller.compute_variances(model, transformed=False, return_negative=False,
-                                                                 use_diag_only=True)
+    options_hessian = g2f.HessianOptions(return_negative=return_negative)
+    variances_bootstrap = fitter.modeller.compute_variances(
+        model, transformed=False, options=options_hessian)
+    variances_bootstrap_diag = fitter.modeller.compute_variances(
+        model, transformed=False, options=options_hessian, use_diag_only=True)
     for obs, img_datum_old in zip(model.data, img_data_old):
         obs.image.data.flat = img_datum_old.flat
+    variances_jac = fitter.modeller.compute_variances(model, transformed=False)
+    variances_jac_diag = fitter.modeller.compute_variances(model, transformed=False, use_diag_only=True)
 
     errors_plot = {
         'inv_hess': ErrorValues(values=np.sqrt(variances[0]),
                                 kwargs_plot={'linestyle': '-', 'color': 'r'}),
         '-inv_hess': ErrorValues(values=np.sqrt(variances[1]),
                                  kwargs_plot={'linestyle': '--', 'color': 'r'}),
+        'inv_jac': ErrorValues(values=np.sqrt(variances_jac),
+                               kwargs_plot={'linestyle': '-.', 'color': 'r'}),
         'boot_hess': ErrorValues(values=np.sqrt(variances_bootstrap),
                                  kwargs_plot={'linestyle': '-', 'color': 'b'}),
         'boot_diag': ErrorValues(values=np.sqrt(variances_bootstrap_diag),
                                  kwargs_plot={'linestyle': '--', 'color': 'b'}),
+        'boot_jac_diag': ErrorValues(values=np.sqrt(variances_jac_diag),
+                                     kwargs_plot={'linestyle': '-.', 'color': 'm'}),
     }
     fig, ax = plot_loglike(model, errors=errors_plot, values_reference=fitter.params_values_init)
     if plot:
         plt.tight_layout()
         plt.show()
+        plt.close()

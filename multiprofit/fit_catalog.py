@@ -60,6 +60,10 @@ class CatalogFitterConfig(pexConfig.Config):
             "INV_HESSIAN_BESTFIT": "inverse hessian using best-fit model as data",
         }
     )
+    compute_errors_from_jacobian = pexConfig.Field[bool](
+        default=True,
+        doc="Whether to estimate the Hessian from the Jacobian first, with finite differencing as a backup",
+    )
     compute_errors_no_covar = pexConfig.Field[bool](
         default=True,
         doc="Whether to compute parameter errors independently, ignoring covariances",

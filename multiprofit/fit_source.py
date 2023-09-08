@@ -345,6 +345,14 @@ class CatalogSourceFitterABC(ABC):
         errors_hessian_bestfit = config.compute_errors == "INV_HESSIAN_BESTFIT"
         compute_errors = errors_hessian or errors_hessian_bestfit
 
+        kwargs_err_default = {
+            True: {
+                'options': g2f.HessianOptions(findiff_add=1e-3, findiff_frac=1e-3),
+                'use_diag_only': config.compute_errors_no_covar,
+            },
+            False: {'options': g2f.HessianOptions(findiff_add=1e-6, findiff_frac=1e-6)},
+        }
+
         for idx in range_idx:
             time_init = time.process_time()
             row = results[idx]
@@ -407,48 +415,50 @@ class CatalogSourceFitterABC(ABC):
                 if compute_errors:
                     errors = []
                     model_eval = model
-                    if errors_hessian_bestfit:
-                        # Model sans prior
-                        model_eval = g2f.Model(data=model.data, psfmodels=model.psfmodels,
-                                               sources=model.sources)
-                        model_eval.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
-                        model_eval.evaluate()
-                        img_data_old = []
-                        for obs, output in zip(model_eval.data, model_eval.outputs):
-                            img_data_old.append(obs.image.data.copy())
-                            img = obs.image.data
-                            img.flat = (
-                                output.data.flat
-                            )
-                            # To make this a real bootstrap, could do this (but would need to iterate):
-                            # + rng.standard_normal(img.size) * obs.sigma_inv.data.flat
-
-                    kwargs_err = {
-                        'findiff_add': 1e-8, 'findiff_frac': 1e-6,
-                        'use_diag_only': config.compute_errors_no_covar,
-                    }
-                    for return_negative in (False, True):
-                        if return_negative:
-                            kwargs_err = {
-                                'findiff_add': 1e-3, 'findiff_frac': 1e-3,
-                                'use_diag_only': config.compute_errors_no_covar,
-                            }
-                        if errors and errors[-1][1] == 0:
-                            break
+                    errors_iter = None
+                    if config.compute_errors_from_jacobian:
                         try:
                             errors_iter = np.sqrt(self.modeller.compute_variances(
-                                model_eval, transformed=False, return_negative=return_negative, **kwargs_err
+                                model_eval, transformed=False, use_diag_only=config.compute_errors_no_covar,
                             ))
                             errors.append((errors_iter, np.sum(~(errors_iter > 0))))
-                        except Exception:
+                        except Exception as e:
+                            pass
+                    if errors_iter is None:
+                        if errors_hessian_bestfit:
+                            # Model sans prior
+                            model_eval = g2f.Model(data=model.data, psfmodels=model.psfmodels,
+                                                   sources=model.sources)
+                            model_eval.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
+                            model_eval.evaluate()
+                            img_data_old = []
+                            for obs, output in zip(model_eval.data, model_eval.outputs):
+                                img_data_old.append(obs.image.data.copy())
+                                img = obs.image.data
+                                img.flat = (
+                                    output.data.flat
+                                )
+                                # To make this a real bootstrap, could do this (but would need to iterate):
+                                # + rng.standard_normal(img.size) * obs.sigma_inv.data.flat
+
+                        for return_negative in (False, True):
+                            kwargs_err = kwargs_err_default[return_negative]
+                            if errors and errors[-1][1] == 0:
+                                break
                             try:
                                 errors_iter = np.sqrt(self.modeller.compute_variances(
-                                    model_eval, transformed=False, return_negative=return_negative,
-                                    use_svd=True, **kwargs_err,
+                                    model_eval, transformed=False, **kwargs_err
                                 ))
                                 errors.append((errors_iter, np.sum(~(errors_iter > 0))))
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                try:
+                                    errors_iter = np.sqrt(self.modeller.compute_variances(
+                                        model_eval, transformed=False, use_svd=True, **kwargs_err,
+                                    ))
+                                    errors.append((errors_iter, np.sum(~(errors_iter > 0))))
+                                except Exception:
+                                    pass
+
 
                     if errors_hessian_bestfit:
                         for obs, img_datum_old in zip(model.data, img_data_old):
