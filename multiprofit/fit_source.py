@@ -531,7 +531,27 @@ class CatalogSourceFitterABC(ABC):
         catexps: list[CatalogExposureSourcesABC],
         config: CatalogSourceFitterConfig = None,
         results: astropy.table.Table = None,
-    ):
+    ) -> g2f.Model:
+        """Reconstruct the model for a single row of a fit catalog.
+
+        Parameters
+        ----------
+        idx_row
+            The index of the row in the catalog.
+        catalog_multi
+            The multi-band catalog originally used for initialization.
+        catexps
+            The catalog-exposure pairs to reconstruct the model for.
+        config
+            The configuration used to generate sources. Default-initialized if None.
+        results
+            The corresponding best-fit parameter catalog to initialize parameter values from.
+
+        Returns
+        -------
+        model
+            The reconstructed model.
+        """
         if config is None:
             config = CatalogSourceFitterConfig()
 
