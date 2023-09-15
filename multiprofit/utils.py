@@ -23,6 +23,11 @@ import gauss2d.fit as g2f
 import numpy as np
 
 
+class ArbitraryAllowedConfig:
+    arbitrary_types_allowed = True
+    extra = 'forbid'
+
+
 def get_params_uniq(parametric: g2f.Parametric, **kwargs):
     """Get a sorted set of parameters matching a filter"""
     return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()

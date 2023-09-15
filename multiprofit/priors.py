@@ -27,13 +27,21 @@ from .transforms import transforms_ref
 
 
 class ShapePriorConfig(pexConfig.Config):
+    prior_axrat_mean = pexConfig.Field[float](
+        default=0.7,
+        doc="Prior mean on axis ratio (prior ignored if not >0)",
+    )
     prior_axrat_stddev = pexConfig.Field[float](
         default=0,
-        doc="Prior std. dev. on axis ratio (ignored if not >0)",
+        doc="Prior std. dev. on axis ratio",
+    )
+    prior_size_mean = pexConfig.Field[float](
+        default=1,
+        doc="Prior std. dev. on size_major",
     )
     prior_size_stddev = pexConfig.Field[float](
         default=0,
-        doc="Prior std. dev. on size_major (ignored if not >0)",
+        doc="Prior std. dev. on size_major (prior ignored if not >0)",
     )
 
     def get_shape_prior(self, ellipse: g2f.ParametricEllipse) -> g2f.ShapePrior | None:
@@ -42,15 +50,15 @@ class ShapePriorConfig(pexConfig.Config):
 
         if use_prior_axrat or use_prior_size:
             prior_size = g2f.ParametricGaussian1D(
-                g2f.MeanParameterD(1, transform=transforms_ref["log10"]),
+                g2f.MeanParameterD(self.prior_size_mean, transform=transforms_ref["log10"]),
                 g2f.StdDevParameterD(self.prior_size_stddev)
             ) if use_prior_size else None
             prior_axrat = g2f.ParametricGaussian1D(
-                g2f.MeanParameterD(0, transform=transforms_ref["logit_axrat_prior"]),
+                g2f.MeanParameterD(self.prior_axrat_mean, transform=transforms_ref["logit_axrat_prior"]),
                 g2f.StdDevParameterD(self.prior_axrat_stddev)
             ) if use_prior_axrat else None
             return g2f.ShapePrior(ellipse, prior_size, prior_axrat)
-        return None
+            return None
 
 
 def get_hst_size_prior(mag_psf_i):

@@ -93,7 +93,7 @@ def make_psf_source(
         if not ((sigma_x >= 0) and (sigma_y >= 0)):
             errors.append(f"sigma_xs[{idx}]={sigma_x} and/or sigma_ys[{idx}]={sigma_y} !>=0")
         if not (limits_rho.check(rho)):
-            errors.append("rhos[{idx}]={rho} !within({limits_rho=})")
+            errors.append(f"rhos[{idx}]={rho} !within({limits_rho=})")
         if not (frac >= 0):
             errors.append(f"fluxes[{idx}]={frac} !>0")
     if errors:
@@ -111,14 +111,14 @@ def make_psf_source(
     for c in range(n_gaussians):
         is_last = c == n_last
         last = g2f.FractionalIntegralModel(
-            {
-                g2f.Channel.NONE: g2f.ProperFractionParameterD(
+            [
+                (g2f.Channel.NONE, g2f.ProperFractionParameterD(
                     fracs[c], fixed=is_last, transform=transforms['frac']
-                )
-            },
-            g2f.LinearIntegralModel({
-                g2f.Channel.NONE: g2f.IntegralParameterD(1.0, fixed=True)
-            }) if (c == 0) else last,
+                ))
+            ],
+            g2f.LinearIntegralModel([
+                (g2f.Channel.NONE, g2f.IntegralParameterD(1.0, fixed=True))
+            ]) if (c == 0) else last,
             is_last,
         )
         components[c] = g2f.GaussianComponent(

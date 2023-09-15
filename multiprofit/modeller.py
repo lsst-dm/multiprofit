@@ -23,6 +23,7 @@ from abc import ABC, abstractmethod
 import gauss2d as g2
 import gauss2d.fit as g2f
 import logging
+import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
@@ -30,7 +31,7 @@ import scipy.optimize as spopt
 import time
 from typing import Any
 
-from .utils import get_params_uniq
+from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
     import fastnnls
@@ -50,11 +51,6 @@ fitmethods_linear = {
 }
 if has_fastnnls:
     fitmethods_linear['fastnnls.fnnls'] = {}
-
-
-class ArbitraryAllowedConfig:
-    arbitrary_types_allowed = True
-    extra = 'forbid'
 
 
 @dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
@@ -224,11 +220,7 @@ class FitInputs(FitInputsBase):
         for idx_obs in range(n_obs):
             observation = model.data[idx_obs]
             shapes[idx_obs, :] = (observation.image.n_rows, observation.image.n_cols)
-            params = tuple({
-                x: None for x in model.parameters(
-                    paramfilter=g2f.ParamFilter(fixed=False, channel=observation.channel)
-                )
-            })
+            params = tuple(get_params_uniq(model, fixed=False, channel=observation.channel))
             n_params_obs = len(params)
             ranges_params_obs = [0] * (n_params_obs + 1)
             for idx_param in range(n_params_obs):
@@ -333,10 +325,24 @@ class FitInputs(FitInputsBase):
         return errors
 
 
+class ModelFitConfig(pexConfig.Config):
+    fit_linear_iter = pexConfig.Field[int](
+        doc="The number of iterations to wait before performing a linear fit during optimization."
+            " Default 0 disables the feature.",
+        default=0,
+    )
+
+    def validate(self):
+        if not self.fit_linear_iter >= 0:
+            raise ValueError(f"{self.fit_linear_iter=} must be >=0")
+
+
 @dataclass(kw_only=True, config=ArbitraryAllowedConfig)
 class FitResult:
     """Results from a Modeller fit, including metadata.
     """
+    # TODO: Why does setting this default to ModelFitConfig() cause a circular import??
+    config: ModelFitConfig = pydantic.Field(None, title="The configuration for fitting")
     inputs: FitInputs | None = pydantic.Field(None, title="The fit input arrays")
     result: Any | None = pydantic.Field(
         None,
@@ -346,8 +352,12 @@ class FitResult:
         None,
         title="The best-fit parameter array (un-transformed)",
     )
-    n_eval_func: int = pydantic.Field(0, title="Total number of fitness function evaluations")
-    n_eval_jac: int = pydantic.Field(0, title="Total number of Jacobian function evaluations")
+    n_eval_resid: int = pydantic.Field(
+        0, title="Total number of self-reported residual function evaluations")
+    n_eval_func: int = pydantic.Field(
+        0, title="Total number of optimizer-reported fitness function evaluations")
+    n_eval_jac: int = pydantic.Field(
+        0, title="Total number of optimizer-reported Jacobian function evaluations")
     time_eval: float = pydantic.Field(0, title="Total runtime spent in model/Jacobian evaluation")
     time_run: float = pydantic.Field(0, title="Total runtime spent in fitting, excluding initial setup")
 
@@ -372,6 +382,23 @@ class Modeller:
         logger.level = logging.INFO
 
         return logger
+
+    @staticmethod
+    def compute_variances(
+        model: g2f.Model,
+        use_diag_only: bool = False,
+        use_svd: bool = False,
+        **kwargs
+    ):
+        hessian = model.compute_hessian(**kwargs).data
+        if use_diag_only:
+            return -1/np.diag(hessian)
+        if use_svd:
+            u, s, v = np.linalg.svd(-hessian)
+            inverse = np.dot(v.transpose(), np.dot(np.diag(s**-1), u.transpose()))
+        else:
+            inverse = np.linalg.inv(-hessian)
+        return np.diag(inverse)
 
     @staticmethod
     def fit_gaussians_linear(
@@ -486,6 +513,7 @@ class Modeller:
         model: g2f.Model,
         fitinputs: FitInputs | None = None,
         printout: bool = False,
+        config: ModelFitConfig = None,
         **kwargs
     ) -> FitResult:
         """Fit a model with a nonlinear optimizer.
@@ -498,6 +526,8 @@ class Modeller:
             An existing FitInputs with jacobian/residual arrays to reuse.
         printout : bool
             Whether to print diagnostic information.
+        config : ModelFitConfig
+            Configuration settings for model fitting.
         kwargs
             Keyword arguments to pass to the optimizer.
 
@@ -510,6 +540,9 @@ class Modeller:
         -----
         The only supported fitter is scipy.optimize.least_squares.
         """
+        if config is None:
+            config = ModelFitConfig()
+        config.validate()
         if fitinputs is None:
             fitinputs = FitInputs.from_model(model)
         else:
@@ -528,9 +561,14 @@ class Modeller:
                         raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
                 raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
+            config_fit = result.config
+            fit_linear_iter = config_fit.fit_linear_iter
+            if (fit_linear_iter > 0) and ((result.n_eval_resid + 1) % fit_linear_iter == 0):
+                self.fit_model_linear(model, ratio_min=1e-6)
             time_init = time.process_time()
-            model.evaluate()
+            loglikes = model.evaluate()
             result.time_eval += time.process_time() - time_init
+            result.n_eval_resid += 1
             return result.inputs.residual
 
         def jacobian_func(params_new, model, params, result):
@@ -552,14 +590,23 @@ class Modeller:
         params_init = [None]*n_params_free
 
         for idx, param in enumerate(params_free):
-            limits = param.transform.limits if hasattr(param.transform, 'limits') else param.limits
+            limits = param.limits
+            # If the transform has limits and is more restrictive, use those limits
+            if hasattr(param.transform, 'limits'):
+                limits_transform = param.transform.limits
+                n_within = limits.check(limits_transform.min) + limits.check(limits_transform.min)
+                if n_within == 2:
+                    limits = limits_transform
+                elif n_within != 0:
+                    raise ValueError(f"{param=} {param.limits=} and {param.transform.limits=}"
+                                     f" intersect; one must be a subset of the other")
             bounds[0][idx] = param.transform.forward(limits.min)
             bounds[1][idx] = param.transform.forward(limits.max)
-            if not (limits.min <= param.value <= limits.max):
-                raise RuntimeError(f'{param=}.value={param.value_transforme} not within {limits=}')
+            if not limits.check(param.value):
+                raise RuntimeError(f'{param=}.value_transformed={param.value} not within {limits=}')
             params_init[idx] = param.value_transformed
 
-        results = FitResult(inputs=fitinputs)
+        results = FitResult(inputs=fitinputs, config=config)
         time_init = time.process_time()
         result_opt = spopt.least_squares(
             residual_func, params_init, jac=jacobian_func, bounds=bounds,
@@ -572,6 +619,59 @@ class Modeller:
         results.n_eval_func = result_opt.nfev
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
         return results
+
+    # TODO: change to staticmethod if requiring py3.10+
+    @classmethod
+    def fit_model_linear(
+        cls,
+        model: g2f.Model,
+        idx_obs: int = None,
+        ratio_min: float = 0,
+        validate: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        n_data = len(model.data)
+        n_sources = len(model.sources)
+        if n_sources != 1:
+            raise ValueError("fit_model_linear does not yet support models with >1 sources")
+        if idx_obs is not None:
+            if not ((idx_obs >= 0) and (idx_obs < n_data)):
+                raise ValueError(f"{idx_obs=} not >=0 and < {len(model.data)=}")
+            indices = range(idx_obs, idx_obs + 1)
+        else:
+            indices = range(n_data)
+
+        if validate:
+            model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+            loglike_init = model.evaluate()
+        else:
+            loglike_init = None
+        values_init = {}
+        values_new = {}
+
+        for idx_obs in indices:
+            obs = model.data[idx_obs]
+            gaussians_linear = LinearGaussians.make(model.sources[0], channel=obs.channel)
+            result = cls.fit_gaussians_linear(gaussians_linear, obs, psfmodel=model.psfmodels[idx_obs])
+            values = list(result.values())[0]
+
+            for (_, parameter), ratio in zip(gaussians_linear.gaussians_free, values):
+                values_init[parameter] = float(parameter.value)
+                if not (ratio >= ratio_min):
+                    ratio = ratio_min
+                value_new = max(ratio*parameter.value, parameter.limits.min)
+                values_new[parameter] = value_new
+
+        for parameter, value in values_new.items():
+            parameter.value = value
+
+        if validate:
+            loglike_new = model.evaluate()
+            if not (sum(loglike_new) > sum(loglike_init)):
+                for parameter, value in values_init.items():
+                    parameter.value = value
+        else:
+            loglike_new = None
+        return loglike_init, loglike_new
 
     @staticmethod
     def make_components_linear(
@@ -613,8 +713,9 @@ class Modeller:
                     g2f.CentroidXParameterD(gaussian.centroid.x, fixed=True),
                     g2f.CentroidYParameterD(gaussian.centroid.y, fixed=True),
                 ),
-                g2f.LinearIntegralModel({g2f.Channel.NONE: g2f.IntegralParameterD(gaussian.integral.value)}),
+                g2f.LinearIntegralModel([
+                    (g2f.Channel.NONE, g2f.IntegralParameterD(gaussian.integral.value)),
+                ]),
             )
             components_new[idx] = component_new
         return components_new
-

@@ -22,10 +22,11 @@
 from abc import ABC, abstractmethod
 import astropy.units as u
 from collections.abc import Iterable
+import lsst.pex.config as pexConfig
 import pydantic
 from pydantic.dataclasses import dataclass
 
-import lsst.pex.config as pexConfig
+from .modeller import ModelFitConfig
 
 
 class CatalogExposureABC(ABC):
@@ -50,8 +51,27 @@ class ColumnInfo:
 class CatalogFitterConfig(pexConfig.Config):
     """Configuration for generic MultiProFit fitting tasks."""
     column_id = pexConfig.Field[str](default="id", doc="Catalog index column key")
+    compute_errors = pexConfig.ChoiceField[str](
+        default="INV_HESSIAN_BESTFIT",
+        doc="Whether/how to compute sqrt(variances) of each free parameter",
+        allowed={
+            "NONE": "no errors computed",
+            "INV_HESSIAN": "inverse hessian using noisy image as data",
+            "INV_HESSIAN_BESTFIT": "inverse hessian using best-fit model as data",
+        }
+    )
+    compute_errors_from_jacobian = pexConfig.Field[bool](
+        default=True,
+        doc="Whether to estimate the Hessian from the Jacobian first, with finite differencing as a backup",
+    )
+    compute_errors_no_covar = pexConfig.Field[bool](
+        default=True,
+        doc="Whether to compute parameter errors independently, ignoring covariances",
+    )
+    config_fit = pexConfig.ConfigField[ModelFitConfig](default=ModelFitConfig(), doc="Fitter configuration")
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
-    fit_linear = pexConfig.Field[bool](default=True, doc="Fit linear parameters to initialize")
+    fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")
+    fit_linear_final = pexConfig.Field[bool](default=True, doc="Fit linear parameters after optimization")
     flag_errors = pexConfig.DictField(default={}, keytype=str, itemtype=str,
                                       doc="Flag column names to set, keyed by name of exception to catch")
     prefix_column = pexConfig.Field[str](default="mpf_", doc="Column name prefix")
