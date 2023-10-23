@@ -22,7 +22,7 @@
 from importlib.util import find_spec
 import numpy as np
 import matplotlib.pyplot as plt
-from multiprofit.fitutils import get_model
+from lsst.multiprofit.fitutils import get_model
 import gauss2d as g2
 import timeit
 

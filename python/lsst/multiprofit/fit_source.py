@@ -470,7 +470,7 @@ class CatalogSourceFitterABC(ABC):
                         if plot:
                             errors_plot = np.clip(errors, 0, 1000)
                             errors_plot[~np.isfinite(errors_plot)] = 0
-                            from multiprofit.plots import plot_loglike, plt
+                            from .plots import plot_loglike, plt
                             try:
                                 plot_loglike(model, errors=errors)
                             except Exception as e:

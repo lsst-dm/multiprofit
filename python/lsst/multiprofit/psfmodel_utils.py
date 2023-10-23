@@ -23,7 +23,7 @@ import gauss2d.fit as g2f
 
 import numpy as np
 
-from multiprofit.limits import limits_ref
+from .limits import limits_ref
 
 
 def make_psf_source(

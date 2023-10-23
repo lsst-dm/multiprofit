@@ -24,8 +24,8 @@ import copy
 import galsim as gs
 import gauss2d
 import gauss2d.fit as g2f
-import multiprofit.objects as mpfobj
-import multiprofit.utils as mpfutil
+import .objects as mpfobj
+import .utils as mpfutil
 import numpy as np
 import scipy.interpolate as spinterp
 import scipy.optimize as spopt

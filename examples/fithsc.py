@@ -18,9 +18,9 @@ import gauss2d as g2
 import gauss2d.fit as g2f
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from multiprofit.componentconfig import SersicConfig, SersicIndexConfig
-from multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig, CatalogPsfFitter
-from multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
+from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
+from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig, CatalogPsfFitter
+from lsst.multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
 import numpy as np
 from typing import Any, Iterable, Mapping
 

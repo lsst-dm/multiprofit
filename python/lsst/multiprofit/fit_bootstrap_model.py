@@ -24,13 +24,13 @@ from dataclasses import dataclass
 from functools import cached_property
 import gauss2d as g2
 import gauss2d.fit as g2f
-from multiprofit.config import set_config_from_dict
-from multiprofit.componentconfig import init_component
-from multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig
-from multiprofit.fit_source import (
+from .config import set_config_from_dict
+from .componentconfig import init_component
+from .fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig
+from .fit_source import (
     CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig,
 )
-from multiprofit.utils import get_params_uniq
+from .utils import get_params_uniq
 import numpy as np
 from typing import Any, Mapping
 

@@ -20,17 +20,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
-from multiprofit.componentconfig import (
+from lsst.multiprofit.componentconfig import (
     GaussianConfig, init_component, ParameterConfig, SersicConfig, SersicIndexConfig,
 )
-from multiprofit.fit_bootstrap_model import (
+from lsst.multiprofit.fit_bootstrap_model import (
     CatalogExposurePsfBootstrap, CatalogExposureSourcesBootstrap, CatalogSourceFitterBootstrap,
 )
-from multiprofit.fit_psf import CatalogPsfFitter, CatalogPsfFitterConfig
-from multiprofit.fit_source import CatalogSourceFitterConfig
-from multiprofit.modeller import ModelFitConfig
-from multiprofit.plots import ErrorValues, plot_catalog_bootstrap, plot_loglike
-from multiprofit.utils import get_params_uniq
+from lsst.multiprofit.fit_psf import CatalogPsfFitter, CatalogPsfFitterConfig
+from lsst.multiprofit.fit_source import CatalogSourceFitterConfig
+from lsst.multiprofit.modeller import ModelFitConfig
+from lsst.multiprofit.plots import ErrorValues, plot_catalog_bootstrap, plot_loglike
+from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
 

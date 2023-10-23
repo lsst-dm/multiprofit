@@ -23,11 +23,11 @@ from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
 import math
-from multiprofit.modeller import (
+from lsst.multiprofit.modeller import (
     fitmethods_linear, LinearGaussians, make_image_gaussians, make_psfmodel_null, Modeller,
 )
-from multiprofit.transforms import transforms_ref
-from multiprofit.utils import get_params_uniq
+from lsst.multiprofit.transforms import transforms_ref
+from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
 import scipy.optimize as spopt

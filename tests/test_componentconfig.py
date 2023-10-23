@@ -1,5 +1,5 @@
-from multiprofit.config import set_config_from_dict
-from multiprofit.componentconfig import EllipticalComponentConfig
+from lsst.multiprofit.config import set_config_from_dict
+from lsst.multiprofit.componentconfig import EllipticalComponentConfig
 
 
 def test_EllipticalComponentConfig():
