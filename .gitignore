@@ -4,12 +4,17 @@ dist/
 multiprofit.egg-info/
 */__pycache__/
 
+version.py
+
 # IDE folders and files
 .cache/
 .idea/
 .theia/
 .vscode/
 compile_commands.json
+
+# test outputs
+tests/.tests
 
 # pytest plugins
 .hypothesis/
