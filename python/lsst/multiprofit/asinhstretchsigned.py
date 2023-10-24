@@ -31,9 +31,8 @@ def _prepare(values, clip=True, out=None):
     Prepare the data by optionally clipping and copying, and return the
     array that should be subsequently used for in-place calculations.
     """
-
     if clip:
-        return np.clip(values, 0., 1., out=out)
+        return np.clip(values, 0.0, 1.0, out=out)
     else:
         if out is None:
             return np.array(values, copy=True)
@@ -59,7 +58,7 @@ class AsinhStretchSigned(apvis.BaseStretch):
         to logarithmic behavior, expressed as a fraction of the
         normalized image.  Must be in the range between 0 and 1.
         Default is 0.1
-    """
+    """  # noqa: W505
 
     def __init__(self, a=0.1):
         super().__init__()
@@ -74,14 +73,14 @@ class AsinhStretchSigned(apvis.BaseStretch):
         np.abs(values, out=values)
         np.true_divide(values, self.a, out=values)
         np.arcsinh(values, out=values)
-        np.true_divide(values, np.arcsinh(1. / self.a), out=values)
-        np.true_divide(1. + signs*values, 2., out=values)
+        np.true_divide(values, np.arcsinh(1.0 / self.a), out=values)
+        np.true_divide(1.0 + signs * values, 2.0, out=values)
         return values
 
     @property
     def inverse(self):
         """A stretch object that performs the inverse operation."""
-        return SinhStretchSigned(a=1. / np.arcsinh(1. / self.a))
+        return SinhStretchSigned(a=1.0 / np.arcsinh(1.0 / self.a))
 
 
 class SinhStretchSigned(apvis.BaseStretch):
@@ -99,24 +98,24 @@ class SinhStretchSigned(apvis.BaseStretch):
         The ``a`` parameter used in the above formula.  Default is 1/3.
     """
 
-    def __init__(self, a=1. / 3.):
+    def __init__(self, a=1.0 / 3.0):
         super().__init__()
         self.a = a
 
-#    [docs]
+    #    [docs]
 
     def __call__(self, values, clip=True, out=None):
         values = _prepare(values, clip=clip, out=out)
-        values *= 2.
-        values -= 1.
+        values *= 2.0
+        values -= 1.0
         np.true_divide(values, self.a, out=values)
         np.sinh(values, out=values)
-        np.true_divide(values, np.sinh(1. / self.a), out=values)
-        values += 1.
-        values /= 2.
+        np.true_divide(values, np.sinh(1.0 / self.a), out=values)
+        values += 1.0
+        values /= 2.0
         return values
 
     @property
     def inverse(self):
         """A stretch object that performs the inverse operation."""
-        return AsinhStretchSigned(a=1. / np.sinh(1. / self.a))
+        return AsinhStretchSigned(a=1.0 / np.sinh(1.0 / self.a))

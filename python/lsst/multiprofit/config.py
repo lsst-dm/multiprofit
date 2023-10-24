@@ -27,6 +27,15 @@ def set_config_from_dict(
     config: pexConfig.Config | pexConfig.dictField.Dict | pexConfig.configDictField.ConfigDict | dict,
     overrides: dict[str, Any],
 ):
+    """Set `lsst.pex.config` params from a dict.
+
+    Parameters
+    ----------
+    config
+        A config, dictField or configDictField object.
+    overrides
+        A dict of key-value pairs to override in the config.
+    """
     is_config_dict = hasattr(config, "__getitem__")
     if is_config_dict:
         keys = tuple(config.keys())

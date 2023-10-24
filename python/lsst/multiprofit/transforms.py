@@ -25,11 +25,31 @@ import numpy as np
 from .limits import limits_ref
 
 
-def get_logit_limited(lower, upper, factor=1.0, name=None):
+def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str = None):
+    """Get a logit transform stretched to span a different range than [0,1].
+
+    Parameters
+    ----------
+    lower
+        The lower limit of the range to span.
+    upper
+        The upper limit of the range to span.
+    factor
+        A multiplicative factor to apply to the transformed result.
+    name
+        A descriptive name for the transform.
+
+    Returns
+    -------
+        A modified logit transform as specified.
+    """
     return g2f.LogitLimitedTransformD(
         limits=g2f.LimitsD(
-            min=lower, max=upper, name=name if name is not None else
-            f"LogitLimitedTransformD(min={lower}, max={upper}, factor={factor})",
+            min=lower,
+            max=upper,
+            name=name
+            if name is not None
+            else f"LogitLimitedTransformD(min={lower}, max={upper}, factor={factor})",
         ),
         factor=factor,
     )
@@ -41,22 +61,41 @@ def verify_transform_derivative(
     derivative: float = None,
     abs_max: float = 1e6,
     dx_ratios=None,
-    **kwargs
+    **kwargs,
 ):
-    """ Verify a transform derivative at a given value.
+    """Verify that the derivative of a transform class is correct.
 
-    :param transform: gauss2d.fit.TransformD; a transform to verify.
-    :param value_transformed: float; the un-transformed value at which to verify the transform.
-    :param abs_max: float; x value where verification skipped if np.abs(derivative) > x
-    :param dx_ratios: float[]; iterable of ratios to set dx for finite differencing (signed),
-        where dx = value*ratio (not transformed). Only used if dx is None.
-        Default: [1e-4, -1e-4, 1e-6, 1e-6, 1e-8, -1e-8, 1e-10, -1e-10, 1e-12, -1e-12, 1e-14, -1e-14]
-        Verification will test all values in order until at least one passes.
-    :param kwargs: dict; args to pass to np.isclose when comparing derivative to finite difference e.g.
-        atol, rtol
-    :param derivative: float; the nominal derivative at value_transformed.
-        Must equal transform.derivative(value_transformed) for correct results.
-    :return: bool; whether the derivative is correct or not.
+    Parameters
+    ----------
+    transform
+        The transform to verify.
+    value_transformed
+        The un-transformed value at which to verify the transform.
+    derivative
+        The nominal derivative at value_transformed.
+        Must equal transform.derivative(value_transformed).
+    abs_max
+        x value where verification is skipped if np.abs(derivative) > x.
+    dx_ratios
+        Iterable of signed ratios to set dx for finite differencing.
+        dx = value*ratio (untransformed). Only used if dx is None.
+    kwargs
+        Keyword arguments to pass to np.isclose when comparing derivatives to
+        finite differences.
+
+    Raises
+    ------
+    RuntimeError
+        Raised if the transform derivative doesn't match finite differences
+        within the specified tolerances.
+
+    Notes
+    -----
+    derivative should only be specified if it has previously been computed for
+    the exact value_transformed, to avoid re-computing it unnecessarily.
+
+    Default dx_ratios are [1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 1e-14].
+    Verification will test all ratios until at least one passes.
     """
     # Skip testing finite differencing if the derivative is very large
     # This might happen e.g. near the limits of the transformation
@@ -80,8 +119,9 @@ def verify_transform_derivative(
                 break
     if not is_close:
         raise RuntimeError(
-            f'{transform} derivative={derivative:.8e} != last '
-            f'finite diff.={fin_diff:8e} with dx={dx} dx_abs_max={abs_max}')
+            f"{transform} derivative={derivative:.8e} != last "
+            f"finite diff.={fin_diff:8e} with dx={dx} dx_abs_max={abs_max}"
+        )
 
 
 transforms_ref = {

@@ -62,7 +62,7 @@ def make_psf_source(
     Parameter lists must all be the same length.
     """
     if limits_rho is None:
-        limits_rho = limits_ref['rho']
+        limits_rho = limits_ref["rho"]
     if sigma_xs is None:
         sigma_xs = [1.5, 3.0] if sigma_ys is not None else sigma_ys
     if sigma_ys is None:
@@ -71,15 +71,15 @@ def make_psf_source(
     if n_gaussians == 0:
         raise ValueError(f"{n_gaussians=}!>0")
     if rhos is None:
-        rhos = [0.]*n_gaussians
+        rhos = [0.0] * n_gaussians
     if fracs is None:
-        fracs = np.arange(1, n_gaussians + 1)/n_gaussians
+        fracs = np.arange(1, n_gaussians + 1) / n_gaussians
     if transforms is None:
         transforms = {}
     transforms_default = {
-        'frac': transforms.get('frac', g2f.LogitTransformD()),
-        'rho': transforms.get('rho', g2f.LogitLimitedTransformD(limits=limits_rho)),
-        'sigma': transforms.get('sigma', g2f.Log10TransformD()),
+        "frac": transforms.get("frac", g2f.LogitTransformD()),
+        "rho": transforms.get("rho", g2f.LogitLimitedTransformD(limits=limits_rho)),
+        "sigma": transforms.get("sigma", g2f.Log10TransformD()),
     }
     for key, value in transforms_default.items():
         if key not in transforms:
@@ -98,7 +98,7 @@ def make_psf_source(
             errors.append(f"fluxes[{idx}]={frac} !>0")
     if errors:
         raise ValueError("; ".join(errors))
-    fracs[-1] = 1.
+    fracs[-1] = 1.0
 
     components = [None] * n_gaussians
     cenx = g2f.CentroidXParameterD(0, limits=g2f.LimitsD(min=0, max=100))
@@ -112,20 +112,21 @@ def make_psf_source(
         is_last = c == n_last
         last = g2f.FractionalIntegralModel(
             [
-                (g2f.Channel.NONE, g2f.ProperFractionParameterD(
-                    fracs[c], fixed=is_last, transform=transforms['frac']
-                ))
+                (
+                    g2f.Channel.NONE,
+                    g2f.ProperFractionParameterD(fracs[c], fixed=is_last, transform=transforms["frac"]),
+                )
             ],
-            g2f.LinearIntegralModel([
-                (g2f.Channel.NONE, g2f.IntegralParameterD(1.0, fixed=True))
-            ]) if (c == 0) else last,
+            g2f.LinearIntegralModel([(g2f.Channel.NONE, g2f.IntegralParameterD(1.0, fixed=True))])
+            if (c == 0)
+            else last,
             is_last,
         )
         components[c] = g2f.GaussianComponent(
             g2f.GaussianParametricEllipse(
-                g2f.SigmaXParameterD(sigma_xs[c], transform=transforms['sigma']),
-                g2f.SigmaYParameterD(sigma_ys[c], transform=transforms['sigma']),
-                g2f.RhoParameterD(rhos[c], transform=transforms['rho']),
+                g2f.SigmaXParameterD(sigma_xs[c], transform=transforms["sigma"]),
+                g2f.SigmaYParameterD(sigma_ys[c], transform=transforms["sigma"]),
+                g2f.RhoParameterD(rhos[c], transform=transforms["rho"]),
             ),
             centroid,
             last,

@@ -14,6 +14,8 @@ ln10 = np.log(10)
 
 @dataclass(kw_only=True)
 class ErrorValues:
+    """Configuration for plotting uncertainties."""
+
     kwargs_plot: dict = field(default_factory=dict)
     values: np.ndarray
 
@@ -24,7 +26,7 @@ def plot_catalog_bootstrap(
     paramvals_ref=None,
     plot_total_fluxes: bool = False,
     plot_colors: bool = False,
-    **kwargs
+    **kwargs,
 ):
     """Plot a bootstrap catalog for a single source model.
 
@@ -54,7 +56,7 @@ def plot_catalog_bootstrap(
     if n_bins is None:
         n_bins = np.max([int(np.ceil(np.sqrt(n_sources))), 10])
 
-    config = catalog_bootstrap.meta['config']
+    config = catalog_bootstrap.meta["config"]
     prefix = config["prefix_column"]
     suffix_err = "_err"
 
@@ -65,7 +67,7 @@ def plot_catalog_bootstrap(
     if paramvals_ref and (len(paramvals_ref) != n_params_init):
         raise ValueError(f"{len(paramvals_ref)=} != {n_params_init=}")
 
-    results_good = catalog_bootstrap[catalog_bootstrap['mpf_n_iter'] > 0]
+    results_good = catalog_bootstrap[catalog_bootstrap["mpf_n_iter"] > 0]
 
     if plot_total_fluxes or plot_colors:
         if paramvals_ref:
@@ -77,14 +79,14 @@ def plot_catalog_bootstrap(
             results_dict[colname_meas] = results_good[colname_meas]
             results_dict[colname_err] = results_good[colname_err]
 
-        colnames_flux = [colname for colname in colnames_meas if colname.endswith('_flux')]
+        colnames_flux = [colname for colname in colnames_meas if colname.endswith("_flux")]
 
         colnames_flux_band = defaultdict(list)
         colnames_flux_comp = defaultdict(list)
 
         for colname in colnames_flux:
             colname_short = colname.partition(prefix)[-1]
-            comp, band = colname_short[:-5].split('_')
+            comp, band = colname_short[:-5].split("_")
             colnames_flux_band[band].append(colname)
             colnames_flux_comp[comp].append(colname)
 
@@ -94,7 +96,7 @@ def plot_catalog_bootstrap(
                 is_err = suffix == "_err"
                 colname_flux = f"{prefix}{band}_flux{suffix}"
                 total = np.sum(
-                    [results_good[f'{colname}{suffix}']**(1 + is_err) for colname in colnames_band], axis=0
+                    [results_good[f"{colname}{suffix}"] ** (1 + is_err) for colname in colnames_band], axis=0
                 )
                 if is_err:
                     total = np.sqrt(total)
@@ -106,9 +108,9 @@ def plot_catalog_bootstrap(
 
             if band_prev:
                 flux_prev, flux = (results_dict[f"{prefix}{b}_flux"] for b in (band_prev, band))
-                mag_prev, mag = (-2.5*np.log10(flux_b) for flux_b in (flux_prev, flux))
+                mag_prev, mag = (-2.5 * np.log10(flux_b) for flux_b in (flux_prev, flux))
                 mag_err_prev, mag_err = (
-                    results_dict[f"{prefix}{b}_flux{suffix_err}"]/(-0.4*flux_b*ln10)
+                    results_dict[f"{prefix}{b}_flux{suffix_err}"] / (-0.4 * flux_b * ln10)
                     for b, flux_b in ((band_prev, flux_prev), (band, flux))
                 )
                 colname_color = f"{prefix}{band_prev}-{band}_flux"
@@ -116,10 +118,10 @@ def plot_catalog_bootstrap(
                 colnames_err.append(f"{colname_color}{suffix_err}")
 
                 results_dict[colname_color] = mag_prev - mag
-                results_dict[f"{colname_color}{suffix_err}"] = 2.5/ln10*np.hypot(mag_err, mag_err_prev)
+                results_dict[f"{colname_color}{suffix_err}"] = 2.5 / ln10 * np.hypot(mag_err, mag_err_prev)
                 if paramvals_ref:
                     mag_prev_ref, mag_ref = (
-                        -2.5*np.log10(paramvals_ref[f"{prefix}{b}_flux"]) for b in (band_prev, band)
+                        -2.5 * np.log10(paramvals_ref[f"{prefix}{b}_flux"]) for b in (band_prev, band)
                     )
                     paramvals_ref[colname_color] = mag_prev_ref - mag_ref
 
@@ -147,21 +149,21 @@ def plot_catalog_bootstrap(
         median_err = np.median(errors)
 
         axis = ax[idx_row][idx_col]
-        axis.hist(values, bins=n_bins, color='b', label='fit values', **kwargs)
+        axis.hist(values, bins=n_bins, color="b", label="fit values", **kwargs)
 
-        label = 'median +/- stddev'
+        label = "median +/- stddev"
         for offset in (-std, 0, std):
-            axis.axvline(median + offset, label=label, color='k')
+            axis.axvline(median + offset, label=label, color="k")
             label = None
         if paramvals_ref is not None:
             value_ref = paramvals_ref[idx_colname]
-            label_value = f' {value_ref=:.3e} bias={median - value_ref:.3e}'
-            axis.axvline(value_ref, label='reference', color='k', linestyle='--')
+            label_value = f" {value_ref=:.3e} bias={median - value_ref:.3e}"
+            axis.axvline(value_ref, label="reference", color="k", linestyle="--")
         else:
-            label_value = f' {median=:.3e}'
-        axis.hist(median + errors, bins=n_bins, color='r', label='median + error', **kwargs)
-        axis.set_title(f'{colname_short} {std=:.3e} vs {median_err=:.3e}')
-        axis.set_xlabel(f'{colname_short} {label_value}')
+            label_value = f" {median=:.3e}"
+        axis.hist(median + errors, bins=n_bins, color="r", label="median + error", **kwargs)
+        axis.set_title(f"{colname_short} {std=:.3e} vs {median_err=:.3e}")
+        axis.set_xlabel(f"{colname_short} {label_value}")
         axis.legend()
 
         idx_col += 1
@@ -174,8 +176,11 @@ def plot_catalog_bootstrap(
 
 
 def plot_loglike(
-    model: g2f.Model, params: list[g2f.ParameterD] = None, n_values: int = 15,
-    errors: dict[str, ErrorValues] = None, values_reference: np.ndarray = None,
+    model: g2f.Model,
+    params: list[g2f.ParameterD] = None,
+    n_values: int = 15,
+    errors: dict[str, ErrorValues] = None,
+    values_reference: np.ndarray = None,
 ):
     """Plot the loglikehood and derivatives vs free parameter values around
        best-fit values.
@@ -214,12 +219,12 @@ def plot_loglike(
         raise ValueError(f"{len(values_reference)=} != {n_params=}")
 
     n_rows = n_params
-    fig, ax = plt.subplots(nrows=n_rows, ncols=2, figsize=(10, 3*n_rows))
+    fig, ax = plt.subplots(nrows=n_rows, ncols=2, figsize=(10, 3 * n_rows))
     axes = [ax] if (n_rows == 1) else ax
 
     n_loglikes = len(loglike_init)
     labels = [channel.name for channel in model.data.channels]
-    labels.extend(['prior', 'total'])
+    labels.extend(["prior", "total"])
 
     for param in params:
         param.fixed = True
@@ -228,10 +233,10 @@ def plot_loglike(
         value_init = param.value
         param.fixed = False
         values = [value_init]
-        loglikes = [loglike_init*0]
+        loglikes = [loglike_init * 0]
         dlls = [loglike_grads[row]]
 
-        diff_init = 1e-4*np.sign(loglike_grads[row])
+        diff_init = 1e-4 * np.sign(loglike_grads[row])
         diff = diff_init
 
         # TODO: This entire scheme should be improved/replaced
@@ -239,7 +244,7 @@ def plot_loglike(
         # Option: Try to fit a curve once there are a couple of points
         # on each side of the peak
         idx_prev = -1
-        for idx in range(2*n_values):
+        for idx in range(2 * n_values):
             try:
                 param.value_transformed += diff
                 loglikes_new = np.array(model.evaluate()) - loglike_init
@@ -258,7 +263,7 @@ def plot_loglike(
                     idx_prev = 0
                 else:
                     idx_prev = -1
-            except RuntimeError as e:
+            except RuntimeError:
                 break
         param.value = value_init
         param.fixed = True
@@ -272,28 +277,28 @@ def plot_loglike(
         for idx in range(n_loglikes):
             subplot.plot(values, [loglike[idx] for loglike in loglikes], label=labels[idx])
         subplot.plot(values, np.sum(loglikes, axis=1), label=labels[-1])
-        vline_kwargs = dict(ymin=np.min(loglikes) - 1, ymax=np.max(loglikes) + 1, color='k')
+        vline_kwargs = dict(ymin=np.min(loglikes) - 1, ymax=np.max(loglikes) + 1, color="k")
         subplot.vlines(value_init, **vline_kwargs)
 
-        suffix = f' {param.label}' if param.label else ''
+        suffix = f" {param.label}" if param.label else ""
         subplot.legend()
         subplot.set_title(f"{param.name}{suffix}")
-        subplot.set_ylabel('loglike')
-        subplot.set_ylim(vline_kwargs['ymin'], vline_kwargs['ymax'])
+        subplot.set_ylabel("loglike")
+        subplot.set_ylim(vline_kwargs["ymin"], vline_kwargs["ymax"])
 
         subplot = axes[row][1]
         subplot.plot(values, dlls)
-        subplot.axhline(0, color='k')
+        subplot.axhline(0, color="k")
         subplot.set_ylabel("dloglike/dx")
 
         vline_kwargs = dict(ymin=np.min(dlls), ymax=np.max(dlls))
-        subplot.vlines(value_init, **vline_kwargs, color='k', label='fit')
+        subplot.vlines(value_init, **vline_kwargs, color="k", label="fit")
         if values_reference is not None:
-            subplot.vlines(values_reference[row], **vline_kwargs, color='b', label='ref')
+            subplot.vlines(values_reference[row], **vline_kwargs, color="b", label="ref")
 
         cycler_linestyle = cycle(linestyles_default)
         for name_error, valerr in errors.items():
-            linestyle = valerr.kwargs_plot.pop('linestyle', next(cycler_linestyle))
+            linestyle = valerr.kwargs_plot.pop("linestyle", next(cycler_linestyle))
             for idx_ax in range(2):
                 axes[row][idx_ax].vlines(
                     [value_init - valerr.values[row], value_init + valerr.values[row]],

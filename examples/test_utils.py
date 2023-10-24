@@ -22,6 +22,7 @@
 from importlib.util import find_spec
 import numpy as np
 import matplotlib.pyplot as plt
+# TODO: Replace with e.g. fit_source.get_model?
 from lsst.multiprofit.fitutils import get_model
 import gauss2d as g2
 import timeit
@@ -181,7 +182,7 @@ def get_setup(xdim=15, ydim=15, r_major=1, axrat=1, angle=0, nsub=1,
         f'xdim={xdim}',
         f'ydim={ydim}',
         f'centroid = g2.Centroid({xdim}/2, {ydim}/2)',
-        f'kernel = g2.Gaussian(centroid=g2.Centroid(0, 0),'
+        'kernel = g2.Gaussian(centroid=g2.Centroid(0, 0),'
         'ellipse=g2.Ellipse(sigma_x=0., sigma_y=0))',
         'ellipse = g2.Ellipse(g2.EllipseMajor('
         f'r_major={r_major}*g2.M_SIGMA_HWHM, axrat={axrat}, angle={angle}, degrees=True))',
@@ -318,7 +319,7 @@ def gaussian_test(xdim=49, ydim=51, reffs=None, angs=None, axrats=None, nbenchma
                         ang_rad = np.deg2rad(ang)
                         for key in ("dev", "exp"):
                             times[f"mmf-{key}"] = np.min(timeit.repeat(
-                                f"msf.evaluate().addToImage(img)",
+                                "msf.evaluate().addToImage(img)",
                                 setup=(
                                     f"import numpy as np;"
                                     f"from lsst.shapelet import RadialProfile;"
@@ -360,7 +361,7 @@ def gradient_test(dimx=5, dimy=4, flux=1e4, reff=2, axrat=0.5, ang=0, bg=1e3,
                   reff_psf=0, axrat_psf=0.95, ang_psf=0, n_psfs=1, printout=False, plot=False):
 
     if n_psfs > 1:
-        raise ValueError(f"n_psfs>1 not yet supported")
+        raise ValueError("n_psfs>1 not yet supported")
 
     cen_x, cen_y = dimx/2., dimy/2.
     # Keep this in units of sigma, not re==FWHM/2

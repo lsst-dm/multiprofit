@@ -40,17 +40,35 @@ from .utils import get_params_uniq
 
 
 class CatalogExposurePsfABC(CatalogExposureABC):
+    """A CatalogExposure for PSF fitting."""
+
     @abstractmethod
     def get_psf_image(self, source: astropy.table.Row | Mapping[str, Any]) -> np.array:
-        """Return a normalized, centered, odd-sized PSF image array."""
+        """Get a PSF image for a specific source.
+
+        Parameters
+        ----------
+        source
+            The source row/dict.
+
+        Returns
+        -------
+           The image of the PSF.
+
+        Notes
+        -----
+        The PSF image should be normalized, and centered in a 2D array of odd
+        dimensions on both sides.
+        """
 
 
 class CatalogPsfFitterConfig(CatalogFitterConfig):
     """Configuration for MultiProFit PSF image fitter."""
+
     gaussians = pexConfig.ConfigDictField(
         default={
-            'comp1': GaussianConfig(size=ParameterConfig(value_initial=1.5)),
-            'comp2': GaussianConfig(size=ParameterConfig(value_initial=3.0)),
+            "comp1": GaussianConfig(size=ParameterConfig(value_initial=1.5)),
+            "comp2": GaussianConfig(size=ParameterConfig(value_initial=3.0)),
         },
         doc="Gaussian components",
         itemtype=GaussianConfig,
@@ -78,10 +96,10 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         """
         n_gaussians = len(self.gaussians)
         idx_gauss_max = n_gaussians - 1
-        sigma_xs = [0.]*n_gaussians
-        sigma_ys = [0.]*n_gaussians
-        rhos = [0.]*n_gaussians
-        fracs = [1.]*n_gaussians
+        sigma_xs = [0.0] * n_gaussians
+        sigma_ys = [0.0] * n_gaussians
+        rhos = [0.0] * n_gaussians
+        fracs = [1.0] * n_gaussians
 
         for idx, (name, config) in enumerate(self.gaussians.items()):
             sigma_xs[idx] = params[f"{self.prefix_column}{name}_sigma_x"]
@@ -102,7 +120,7 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         if bands is not None:
             if len(bands) != 1:
                 raise ValueError("CatalogPsfFitter doesn't support multiple bands")
-            prefix_band = f'{bands[0]}_'
+            prefix_band = f"{bands[0]}_"
         schema = super().schema(bands)
         n_gaussians = len(self.gaussians)
         idx_gauss_max = n_gaussians - 1
@@ -110,12 +128,12 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         for idx_gauss, name in enumerate(self.gaussians.keys()):
             prefix_comp = f"{name}_{prefix_band}"
             columns_comp = [
-                ColumnInfo(key=f'{prefix_comp}sigma_x', dtype='f8', unit=u.pix),
-                ColumnInfo(key=f'{prefix_comp}sigma_y', dtype='f8', unit=u.pix),
-                ColumnInfo(key=f'{prefix_comp}rho', dtype='f8', unit=u.pix),
+                ColumnInfo(key=f"{prefix_comp}sigma_x", dtype="f8", unit=u.pix),
+                ColumnInfo(key=f"{prefix_comp}sigma_y", dtype="f8", unit=u.pix),
+                ColumnInfo(key=f"{prefix_comp}rho", dtype="f8", unit=u.pix),
             ]
             if idx_gauss != idx_gauss_max:
-                columns_comp.append(ColumnInfo(key=f'{prefix_comp}fluxfrac', dtype='f8'))
+                columns_comp.append(ColumnInfo(key=f"{prefix_comp}fluxfrac", dtype="f8"))
             schema.extend(columns_comp)
 
         return schema
@@ -141,6 +159,7 @@ class CatalogPsfFitter:
     Any exceptions raised and not in errors_expected will be logged in a
     generic unknown_flag failure column.
     """
+
     def __init__(
         self,
         modeller: Modeller = None,
@@ -172,20 +191,22 @@ class CatalogPsfFitter:
         """
         # TODO: Improve these arbitrary definitions
         # Look at S/N of PSF stars?
-        background = np.std(img_psf[img_psf < 2*np.abs(np.min(img_psf))])
+        background = np.std(img_psf[img_psf < 2 * np.abs(np.min(img_psf))])
         # Hacky fix; PSFs shouldn't have negative values but often do
         min_psf = np.min(img_psf)
         if not (background > -min_psf):
             background = -1.1 * min_psf
         img_sig_inv = np.sqrt(gain / (img_psf + background))
-        return g2f.Data([
-            g2f.Observation(
-                channel=g2f.Channel.NONE,
-                image=g2.ImageD(img_psf),
-                sigma_inv=g2.ImageD(img_sig_inv),
-                mask_inv=g2.ImageB(np.ones_like(img_psf)),
-            )
-        ])
+        return g2f.Data(
+            [
+                g2f.Observation(
+                    channel=g2f.Channel.NONE,
+                    image=g2.ImageD(img_psf),
+                    sigma_inv=g2.ImageD(img_sig_inv),
+                    mask_inv=g2.ImageB(np.ones_like(img_psf)),
+                )
+            ]
+        )
 
     @staticmethod
     def _get_logger() -> logging.Logger:
@@ -201,7 +222,7 @@ class CatalogPsfFitter:
         catexp: CatalogExposurePsfABC,
         config: CatalogPsfFitterConfig = None,
         logger: logging.Logger = None,
-        **kwargs
+        **kwargs,
     ) -> astropy.table.Table:
         """Fit PSF models for a catalog with MultiProFit.
 
@@ -261,7 +282,8 @@ class CatalogPsfFitter:
         flux_total = flux_total[0]
         # TODO: Remove isinstance when channel filtering is fixed
         fluxfracs = tuple(
-            x for x in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
+            x
+            for x in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
             if isinstance(x, g2f.ProperFractionParameterD)
         )
         if len(fluxfracs) != (n_gaussians - 1):
@@ -283,9 +305,10 @@ class CatalogPsfFitter:
         idx_var_first = keys.index("cen_x")
         columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:]]
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
-        meta = {'config': config.toDict()}
-        results = Table(data=np.full(n_rows, np.nan, dtype=dtypes), units=[x.unit for x in columns],
-                        meta=meta)
+        meta = {"config": config.toDict()}
+        results = Table(
+            data=np.full(n_rows, np.nan, dtype=dtypes), units=[x.unit for x in columns], meta=meta
+        )
         # Set nan-default flags to False instead
         for flag in columns[idx_flag_first:idx_var_first]:
             results[f"{prefix}{flag.key}"] = False
@@ -303,17 +326,17 @@ class CatalogPsfFitter:
 
             try:
                 img_psf = catexp.get_psf_image(source)
-                cenx.value, ceny.value = (x/2. for x in img_psf.shape[::-1])
+                cenx.value, ceny.value = (x / 2.0 for x in img_psf.shape[::-1])
+                data = CatalogPsfFitter._get_data(img_psf)
+                model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
+                self.initialize_model(model=model, config=config, source=source)
+
                 # Caches the jacobian residual if the kernel size is unchanged
                 if img_psf.size != size:
                     fitInputs = None
                     size = np.copy(img_psf.size)
                 else:
                     fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
-                
-                data = CatalogPsfFitter._get_data(img_psf)
-                model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
-                self.initialize_model(model=model, config=config, source=source)
 
                 if config.fit_linear_init:
                     flux_total.fixed = False
@@ -322,20 +345,23 @@ class CatalogPsfFitter:
                     result = self.modeller.fit_gaussians_linear(gaussians_linear, data[0])
                     result = list(result.values())[0]
                     # Re-normalize fluxes (hopefully close already)
-                    result = np.clip(result*np.array([
-                        x[0].at(0).integral.value for x in gaussians_linear.gaussians_free
-                    ]), 1e-2, 0.99)
+                    result = np.clip(
+                        result
+                        * np.array([x[0].at(0).integral.value for x in gaussians_linear.gaussians_free]),
+                        1e-2,
+                        0.99,
+                    )
                     result /= np.sum(result)
                     for idx_param, param in enumerate(fluxfracs):
                         param.value = result[idx_param]
-                        result /= np.sum(result[idx_param + 1:])
+                        result /= np.sum(result[idx_param + 1 :])
 
                 result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
                 fitInputs = result_full.inputs
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
-                results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2)/size
+                results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2) / size
 
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value
@@ -347,8 +373,9 @@ class CatalogPsfFitter:
                 column = self.errors_expected.get(e.__class__, "")
                 if column:
                     row[f"{prefix}{column}"] = True
-                    logger.info(f"{id_source=} ({idx}/{n_rows}) PSF fit failed with not unexpected"
-                                f" exception={e}")
+                    logger.info(
+                        f"{id_source=} ({idx}/{n_rows}) PSF fit failed with not unexpected" f" exception={e}"
+                    )
                 else:
                     row[f"{prefix}unknown_flag"] = True
                     logger.info(f"{id_source=} ({idx}/{n_rows}) PSF fit failed with unexpected exception={e}")
@@ -378,7 +405,7 @@ class CatalogPsfFitter:
             Hard limits for the source's y centroid.
         """
         n_rows, n_cols = model.data[0].image.data.shape
-        cen_x, cen_y = n_cols/2.0, n_rows/2.0
+        cen_x, cen_y = n_cols / 2.0, n_rows / 2.0
         centroids = set()
         if limits_x is None:
             limits_x = g2f.LimitsD(0, n_cols)

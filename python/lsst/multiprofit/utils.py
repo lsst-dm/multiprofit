@@ -20,12 +20,18 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
+import numpy
 import numpy as np
 
 
 class ArbitraryAllowedConfig:
+    """Pydantic config to allow arbitrary typed Fields.
+
+    Also disallows unused init kwargs.
+    """
+
     arbitrary_types_allowed = True
-    extra = 'forbid'
+    extra = "forbid"
 
 
 def get_params_uniq(parametric: g2f.Parametric, **kwargs):
@@ -33,7 +39,8 @@ def get_params_uniq(parametric: g2f.Parametric, **kwargs):
     return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()
 
 
-def normalize(ndarray, return_sum=False):
+def normalize(ndarray: numpy.ndarray, return_sum: bool = False):
+    """Normalize a numpy array."""
     total = np.sum(ndarray)
     ndarray /= total
     if return_sum:
