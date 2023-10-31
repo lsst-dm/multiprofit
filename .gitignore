@@ -2,8 +2,10 @@
 build/
 dist/
 multiprofit.egg-info/
-*/__pycache__/
-
+__pycache__/
+.coverage
+.sconsign.dblite
+config.log
 version.py
 
 # IDE folders and files
