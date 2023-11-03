@@ -25,7 +25,7 @@ import numpy as np
 from .limits import limits_ref
 
 
-def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str = None):
+def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str | None = None):
     """Get a logit transform stretched to span a different range than [0,1].
 
     Parameters
@@ -58,7 +58,7 @@ def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str
 def verify_transform_derivative(
     transform: g2f.TransformD,
     value_transformed: float,
-    derivative: float = None,
+    derivative: float | None = None,
     abs_max: float = 1e6,
     dx_ratios=None,
     **kwargs,
