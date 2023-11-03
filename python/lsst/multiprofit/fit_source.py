@@ -218,7 +218,8 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                 for band in bands:
                     columns_comp.append(
                         ColumnInfo(
-                            key=f"{prefix_comp}{band}_flux{suffix}", dtype="f8", unit=u.Unit(self.unit_flux)
+                            key=f"{prefix_comp}{band}_flux{suffix}", dtype="f8",
+                            unit=u.Unit(self.unit_flux) if self.unit_flux else None,
                         )
                     )
                 columns.extend(columns_comp)

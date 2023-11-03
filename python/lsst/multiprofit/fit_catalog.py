@@ -51,7 +51,7 @@ class ColumnInfo:
     dtype: str = pydantic.Field(title="Column data type name (numpy or otherwise)")
     key: str = pydantic.Field(title="Column key (name)")
     description: str = pydantic.Field("", title="Column description")
-    unit: u.UnitBase = pydantic.Field(u.Unit(""), title="Column unit (astropy)")
+    unit: u.UnitBase | None = pydantic.Field(None, title="Column unit (astropy)")
 
 
 class CatalogFitterConfig(pexConfig.Config):
