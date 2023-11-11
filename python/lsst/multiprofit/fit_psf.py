@@ -39,6 +39,10 @@ from .psfmodel_utils import make_psf_source
 from .utils import get_params_uniq
 
 
+class PsfRebuildFitFlagError(RuntimeError):
+    """RuntimeError for when a PSF can't be rebuilt because the fit failed"""
+
+
 class CatalogExposurePsfABC(CatalogExposureABC):
     """A CatalogExposure for PSF fitting."""
 
@@ -94,6 +98,11 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         psfmodel : `g2f.PsfModel`
             The rebuilt PSF model.
         """
+        # TODO: Improve _flag checking (add a total _flag column)
+        for flag in (col for col in params.keys() if col.endswith("_flag")):
+            if params[flag]:
+                raise PsfRebuildFitFlagError(f"Failed to rebuild PSF; {flag} set")
+
         n_gaussians = len(self.gaussians)
         idx_gauss_max = n_gaussians - 1
         sigma_xs = [0.0] * n_gaussians

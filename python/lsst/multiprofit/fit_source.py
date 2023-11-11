@@ -498,10 +498,10 @@ class CatalogSourceFitterABC(ABC):
                         if plot:
                             errors_plot = np.clip(errors, 0, 1000)
                             errors_plot[~np.isfinite(errors_plot)] = 0
-                            from .plots import plot_loglike
+                            from .plots import plot_loglike, ErrorValues
 
                             try:
-                                plot_loglike(model, errors=errors)
+                                plot_loglike(model, errors={'err': ErrorValues(values=errors_plot)})
                             except Exception:
                                 for param in params:
                                     param.fixed = False
