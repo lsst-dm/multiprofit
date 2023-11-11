@@ -446,6 +446,7 @@ class CatalogSourceFitterABC(ABC):
                         except Exception:
                             pass
                     if errors_iter is None:
+                        img_data_old = []
                         if errors_hessian_bestfit:
                             # Model sans prior
                             model_eval = g2f.Model(
@@ -453,7 +454,6 @@ class CatalogSourceFitterABC(ABC):
                             )
                             model_eval.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
                             model_eval.evaluate()
-                            img_data_old = []
                             for obs, output in zip(model_eval.data, model_eval.outputs):
                                 img_data_old.append(obs.image.data.copy())
                                 img = obs.image.data
@@ -488,9 +488,9 @@ class CatalogSourceFitterABC(ABC):
                                 except Exception:
                                     pass
 
-                    if errors_hessian_bestfit:
-                        for obs, img_datum_old in zip(model.data, img_data_old):
-                            obs.image.data.flat = img_datum_old.flat
+                        if errors_hessian_bestfit:
+                            for obs, img_datum_old in zip(model.data, img_data_old):
+                                obs.image.data.flat = img_datum_old.flat
 
                     if errors:
                         idx_min = np.argmax([err[1] for err in errors])
