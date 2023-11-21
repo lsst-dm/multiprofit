@@ -34,32 +34,35 @@ from typing import Any
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
-    import fastnnls
+    # TODO: try importlib.util.find_spec
+    import fastnnls # noqa
+
     has_fastnnls = True
 except ImportError:
     has_fastnnls = False
 
 
 class InvalidProposalError(ValueError):
-    pass
+    """Error for an invalid parameter proposal."""
 
 
 fitmethods_linear = {
-    'scipy.optimize.nnls': {},
-    'scipy.optimize.lsq_linear': {'bounds': (1e-5, np.Inf), 'method': 'bvls'},
-    'numpy.linalg.lstsq': {'rcond': 1e-3},
+    "scipy.optimize.nnls": {},
+    "scipy.optimize.lsq_linear": {"bounds": (1e-5, np.Inf), "method": "bvls"},
+    "numpy.linalg.lstsq": {"rcond": 1e-3},
 }
 if has_fastnnls:
-    fitmethods_linear['fastnnls.fnnls'] = {}
+    fitmethods_linear["fastnnls.fnnls"] = {}
 
 
 @dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
 class LinearGaussians:
-    """Helper for linear least-squares fitting of Gaussian mixtures.
-    """
+    """Helper for linear least-squares fitting of Gaussian mixtures."""
+
     gaussians_fixed: g2.Gaussians = pydantic.Field(title="Fixed Gaussian components")
     gaussians_free: tuple[tuple[g2.Gaussians, g2f.ParameterD], ...] = pydantic.Field(
-        title="Free Gaussian components")
+        title="Free Gaussian components"
+    )
 
     @staticmethod
     def make(
@@ -102,9 +105,7 @@ class LinearGaussians:
                 n_g = len(gaussians)
                 if n_g != 1:
                     raise ValueError(f"{component=} has {gaussians=} of len {n_g=}!=1")
-            param_flux = component.parameters(
-                paramfilter=g2f.ParamFilter(nonlinear=False, channel=channel)
-            )
+            param_flux = component.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=channel))
             if len(param_flux) != 1:
                 raise ValueError(f"Can't make linear source from {component=} with {len(param_flux)=}")
             param_flux: g2f.ParameterD = param_flux[0]
@@ -113,8 +114,9 @@ class LinearGaussians:
             else:
                 gaussians_free.append((gaussians, param_flux))
 
-        return LinearGaussians(gaussians_fixed=g2.Gaussians(gaussians_fixed),
-                               gaussians_free=tuple(gaussians_free))
+        return LinearGaussians(
+            gaussians_fixed=g2.Gaussians(gaussians_fixed), gaussians_free=tuple(gaussians_free)
+        )
 
 
 def make_image_gaussians(
@@ -143,11 +145,13 @@ def make_image_gaussians(
         gaussians_kernel = g2.Gaussians([g2.Gaussian()])
     n_gaussians_kernel = len(gaussians_kernel)
     n_gaussians_source = len(gaussians_source)
-    gaussians = g2.ConvolvedGaussians([
-        g2.ConvolvedGaussian(source=source, kernel=kernel)
-        for source in (gaussians_source.at(idx) for idx in range(n_gaussians_source))
-        for kernel in (gaussians_kernel.at(idx) for idx in range(n_gaussians_kernel))
-    ])
+    gaussians = g2.ConvolvedGaussians(
+        [
+            g2.ConvolvedGaussian(source=source, kernel=kernel)
+            for source in (gaussians_source.at(idx) for idx in range(n_gaussians_source))
+            for kernel in (gaussians_kernel.at(idx) for idx in range(n_gaussians_kernel))
+        ]
+    )
     return g2.make_gaussians_pixel_D(gaussians=gaussians, **kwargs)
 
 
@@ -164,18 +168,41 @@ def make_psfmodel_null() -> g2f.PsfModel:
 
 
 class FitInputsBase(ABC):
+    """Interface for inputs to a model fit."""
+
     @abstractmethod
     def validate_for_model(self, model: g2f.Model) -> list[str]:
-        """Validate that existing FitInputs are valid for a Model"""
+        """Check that this FitInputs is valid for a Model.
+
+        Parameters
+        ----------
+        model
+            The model to validate with.
+
+        Returns
+        -------
+        errors
+            A list of validation errors, if any.
+        """
 
 
 class FitInputsDummy(FitInputsBase):
+    """A dummy FitInputs that always fails to validate.
+
+    This class can be used to initialize a FitInputsBase that may be
+    reassigned to a non-dummy derived instance in a loop.
+    """
+
     def validate_for_model(self, model: g2f.Model) -> list[str]:
-        return ["This is a dummy FitInputs and will never validate",]
+        return [
+            "This is a dummy FitInputs and will never validate",
+        ]
 
 
 @dataclass(kw_only=True, config=ArbitraryAllowedConfig)
 class FitInputs(FitInputsBase):
+    """Model fit inputs for gauss2dfit."""
+
     jacobian: np.ndarray = pydantic.Field(None, title="The full Jacobian array")
     jacobians: list[list[g2.ImageD]] = pydantic.Field(
         title="Jacobian arrays (views) for each observation",
@@ -250,21 +277,21 @@ class FitInputs(FitInputsBase):
         size_data = n_data + n_prior_residuals
         shape_jacobian = (size_data, n_params_jac)
         jacobian = np.zeros(shape_jacobian)
-        jacobians = [None]*n_obs
-        outputs_prior = [None]*n_params_jac
+        jacobians = [None] * n_obs
+        outputs_prior = [None] * n_params_jac
         for idx in range(n_params_jac):
             outputs_prior[idx] = g2.ImageD(jacobian[n_data:, idx].view().reshape((1, n_prior_residuals)))
 
         residual = np.zeros(size_data)
-        residuals = [None]*n_obs
+        residuals = [None] * n_obs
         residuals_prior = g2.ImageD(residual[n_data:].reshape(1, n_prior_residuals))
 
         offset = 0
         for idx_obs in range(n_obs):
             shape = shapes[idx_obs, :]
-            size_obs = shape[0]*shape[1]
+            size_obs = shape[0] * shape[1]
             end = offset + size_obs
-            jacobians_obs = [None]*n_params_jac
+            jacobians_obs = [None] * n_params_jac
             for idx_jac in range(n_params_jac):
                 jacobians_obs[idx_jac] = g2.ImageD(jacobian[offset:end, idx_jac].view().reshape(shape))
             jacobians[idx_obs] = jacobians_obs
@@ -273,9 +300,12 @@ class FitInputs(FitInputsBase):
             if offset != n_data_obs[idx_obs]:
                 raise RuntimeError(f"Assigned {offset=} data points != {n_data_obs[idx_obs]=}")
         return cls(
-            jacobian=jacobian, jacobians=jacobians,
-            residual=residual, residuals=residuals,
-            outputs_prior=outputs_prior, residuals_prior=residuals_prior,
+            jacobian=jacobian,
+            jacobians=jacobians,
+            residual=residual,
+            residuals=residuals,
+            outputs_prior=outputs_prior,
+            residuals_prior=residuals_prior,
         )
 
     def validate_for_model(self, model: g2f.Model) -> list[str]:
@@ -326,9 +356,11 @@ class FitInputs(FitInputsBase):
 
 
 class ModelFitConfig(pexConfig.Config):
+    """Configuration for model fitting."""
+
     fit_linear_iter = pexConfig.Field[int](
         doc="The number of iterations to wait before performing a linear fit during optimization."
-            " Default 0 disables the feature.",
+        " Default 0 disables the feature.",
         default=0,
     )
 
@@ -339,9 +371,9 @@ class ModelFitConfig(pexConfig.Config):
 
 @dataclass(kw_only=True, config=ArbitraryAllowedConfig)
 class FitResult:
-    """Results from a Modeller fit, including metadata.
-    """
-    # TODO: Why does setting this default to ModelFitConfig() cause a circular import??
+    """Results from a Modeller fit, including metadata."""
+
+    # TODO: Why does setting default=ModelFitConfig() cause a circular import?
     config: ModelFitConfig = pydantic.Field(None, title="The configuration for fitting")
     inputs: FitInputs | None = pydantic.Field(None, title="The fit input arrays")
     result: Any | None = pydantic.Field(
@@ -352,12 +384,13 @@ class FitResult:
         None,
         title="The best-fit parameter array (un-transformed)",
     )
-    n_eval_resid: int = pydantic.Field(
-        0, title="Total number of self-reported residual function evaluations")
+    n_eval_resid: int = pydantic.Field(0, title="Total number of self-reported residual function evaluations")
     n_eval_func: int = pydantic.Field(
-        0, title="Total number of optimizer-reported fitness function evaluations")
+        0, title="Total number of optimizer-reported fitness function evaluations"
+    )
     n_eval_jac: int = pydantic.Field(
-        0, title="Total number of optimizer-reported Jacobian function evaluations")
+        0, title="Total number of optimizer-reported Jacobian function evaluations"
+    )
     time_eval: float = pydantic.Field(0, title="Total runtime spent in model/Jacobian evaluation")
     time_run: float = pydantic.Field(0, title="Total runtime spent in fitting, excluding initial setup")
 
@@ -370,6 +403,7 @@ class Modeller:
     logger : `logging.Logger`
         The logger. Defaults to calling `_getlogger`.
     """
+
     def __init__(self, logger=None):
         if logger is None:
             logger = self._get_logger()
@@ -384,15 +418,10 @@ class Modeller:
         return logger
 
     @staticmethod
-    def compute_variances(
-        model: g2f.Model,
-        use_diag_only: bool = False,
-        use_svd: bool = False,
-        **kwargs
-    ):
+    def compute_variances(model: g2f.Model, use_diag_only: bool = False, use_svd: bool = False, **kwargs):
         hessian = model.compute_hessian(**kwargs).data
         if use_diag_only:
-            return -1/np.diag(hessian)
+            return -1 / np.diag(hessian)
         if use_svd:
             u, s, v = np.linalg.svd(-hessian)
             inverse = np.dot(v.transpose(), np.dot(np.diag(s**-1), u.transpose()))
@@ -432,7 +461,7 @@ class Modeller:
         if psfmodel is None:
             psfmodel = make_psfmodel_null()
         if fitmethods is None:
-            fitmethods = {'scipy.optimize.nnls': fitmethods_linear['scipy.optimize.nnls']}
+            fitmethods = {"scipy.optimize.nnls": fitmethods_linear["scipy.optimize.nnls"]}
         else:
             for fitmethod in fitmethods:
                 if fitmethod not in fitmethods_linear:
@@ -456,7 +485,8 @@ class Modeller:
             image_fixed = make_image_gaussians(
                 gaussians_source=gaussians_linear.gaussians_fixed,
                 gaussians_kernel=gaussians_psf,
-                n_rows=shape[0], n_cols=shape[1],
+                n_rows=shape[0],
+                n_cols=shape[1],
             ).data
             if mask_inv is not None:
                 image_fixed = image_fixed[mask_inv]
@@ -465,22 +495,22 @@ class Modeller:
 
         x = np.zeros((size, n_params))
 
-        params = [None]*n_params
+        params = [None] * n_params
         for idx_param, (gaussians_free, param) in enumerate(gaussians_linear.gaussians_free):
             image_free = make_image_gaussians(
                 gaussians_source=gaussians_free,
                 gaussians_kernel=gaussians_psf,
-                n_rows=shape[0], n_cols=shape[1],
+                n_rows=shape[0],
+                n_cols=shape[1],
             ).data
-            x[:, idx_param] = (
-                (image_free if mask_inv is None else image_free[mask_inv])*sigma_inv
-            ).flat
+            x[:, idx_param] = ((image_free if mask_inv is None else image_free[mask_inv]) * sigma_inv).flat
             params[idx_param] = param
 
         y = observation.image.data
         if plot:
             import matplotlib.pyplot as plt
-            plt.imshow(y, origin='lower')
+
+            plt.imshow(y, origin="lower")
             plt.show()
         if mask_inv is not None:
             y = y[mask_inv]
@@ -491,15 +521,16 @@ class Modeller:
         results = {}
 
         for fitmethod, kwargs in fitmethods.items():
-            if fitmethod == 'scipy.optimize.nnls':
+            if fitmethod == "scipy.optimize.nnls":
                 values = spopt.nnls(x, y)[0]
-            elif fitmethod == 'scipy.optimize.lsq_linear':
+            elif fitmethod == "scipy.optimize.lsq_linear":
                 kwargs = kwargs if kwargs is not None else fitmethods_linear[fitmethod]
                 values = spopt.lsq_linear(x, y, **kwargs).x
-            elif fitmethod == 'numpy.linalg.lstsq':
+            elif fitmethod == "numpy.linalg.lstsq":
                 values = np.linalg.lstsq(x, y, **kwargs)[0]
-            elif fitmethod == 'fastnnls.fnnls':
+            elif fitmethod == "fastnnls.fnnls":
                 from fastnnls import fnnls
+
                 y = x.T.dot(y)
                 x = x.T.dot(x)
                 values = fnnls(x, y)
@@ -514,7 +545,7 @@ class Modeller:
         fitinputs: FitInputs | None = None,
         printout: bool = False,
         config: ModelFitConfig = None,
-        **kwargs
+        **kwargs,
     ) -> FitResult:
         """Fit a model with a nonlinear optimizer.
 
@@ -566,7 +597,7 @@ class Modeller:
             if (fit_linear_iter > 0) and ((result.n_eval_resid + 1) % fit_linear_iter == 0):
                 self.fit_model_linear(model, ratio_min=1e-6)
             time_init = time.process_time()
-            loglikes = model.evaluate()
+            model.evaluate()
             result.time_eval += time.process_time() - time_init
             result.n_eval_resid += 1
             return result.inputs.residual
@@ -586,32 +617,38 @@ class Modeller:
 
         params_free = tuple(get_params_uniq(model, fixed=False))
         n_params_free = len(params_free)
-        bounds = ([None]*n_params_free, [None]*n_params_free)
-        params_init = [None]*n_params_free
+        bounds = ([None] * n_params_free, [None] * n_params_free)
+        params_init = [None] * n_params_free
 
         for idx, param in enumerate(params_free):
             limits = param.limits
-            # If the transform has limits and is more restrictive, use those limits
-            if hasattr(param.transform, 'limits'):
+            # If the transform has more restrictive limits, use those
+            if hasattr(param.transform, "limits"):
                 limits_transform = param.transform.limits
                 n_within = limits.check(limits_transform.min) + limits.check(limits_transform.min)
                 if n_within == 2:
                     limits = limits_transform
                 elif n_within != 0:
-                    raise ValueError(f"{param=} {param.limits=} and {param.transform.limits=}"
-                                     f" intersect; one must be a subset of the other")
+                    raise ValueError(
+                        f"{param=} {param.limits=} and {param.transform.limits=}"
+                        f" intersect; one must be a subset of the other"
+                    )
             bounds[0][idx] = param.transform.forward(limits.min)
             bounds[1][idx] = param.transform.forward(limits.max)
             if not limits.check(param.value):
-                raise RuntimeError(f'{param=}.value_transformed={param.value} not within {limits=}')
+                raise RuntimeError(f"{param=}.value_transformed={param.value} not within {limits=}")
             params_init[idx] = param.value_transformed
 
         results = FitResult(inputs=fitinputs, config=config)
         time_init = time.process_time()
         result_opt = spopt.least_squares(
-            residual_func, params_init, jac=jacobian_func, bounds=bounds,
-            args=(model, params_free, results), x_scale='jac',
-            **kwargs
+            residual_func,
+            params_init,
+            jac=jacobian_func,
+            bounds=bounds,
+            args=(model, params_free, results),
+            x_scale="jac",
+            **kwargs,
         )
         results.time_run = time.process_time() - time_init
         results.result = result_opt
@@ -658,7 +695,7 @@ class Modeller:
                 values_init[parameter] = float(parameter.value)
                 if not (ratio >= ratio_min):
                     ratio = ratio_min
-                value_new = max(ratio*parameter.value, parameter.limits.min)
+                value_new = max(ratio * parameter.value, parameter.limits.min)
                 values_new[parameter] = value_new
 
         for parameter, value in values_new.items():
@@ -713,9 +750,11 @@ class Modeller:
                     g2f.CentroidXParameterD(gaussian.centroid.x, fixed=True),
                     g2f.CentroidYParameterD(gaussian.centroid.y, fixed=True),
                 ),
-                g2f.LinearIntegralModel([
-                    (g2f.Channel.NONE, g2f.IntegralParameterD(gaussian.integral.value)),
-                ]),
+                g2f.LinearIntegralModel(
+                    [
+                        (g2f.Channel.NONE, g2f.IntegralParameterD(gaussian.integral.value)),
+                    ]
+                ),
             )
             components_new[idx] = component_new
         return components_new

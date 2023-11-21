@@ -20,7 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
-from multiprofit.psfmodel_utils import make_psf_source
+from lsst.multiprofit.psfmodel_utils import make_psf_source
 
 
 def test_make_psf_source():

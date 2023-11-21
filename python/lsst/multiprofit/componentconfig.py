@@ -27,17 +27,31 @@ from .priors import ShapePriorConfig
 from .transforms import transforms_ref
 
 parameter_names = {
-    g2f.CentroidXParameterD: 'cen_x',
-    g2f.CentroidYParameterD: 'cen_y',
-    g2f.ReffXParameterD: 'reff_x',
-    g2f.ReffYParameterD: 'reff_y',
-    g2f.RhoParameterD: 'rho',
-    g2f.SigmaXParameterD: 'sigma_x',
-    g2f.SigmaYParameterD: 'sigma_y',
+    g2f.CentroidXParameterD: "cen_x",
+    g2f.CentroidYParameterD: "cen_y",
+    g2f.ReffXParameterD: "reff_x",
+    g2f.ReffYParameterD: "reff_y",
+    g2f.RhoParameterD: "rho",
+    g2f.SigmaXParameterD: "sigma_x",
+    g2f.SigmaYParameterD: "sigma_y",
 }
 
 
 def init_component(component: g2f.Component, **kwargs):
+    """Initialize a component with parameter name-value pairs.
+
+    Parameters
+    ----------
+    component
+        The component to initialize.
+    kwargs
+        Additional keyword arguments.
+
+    Notes
+    -----
+    kwargs keywords should be a value in parameter_names and values should be
+    valid for initializing the parameter of that type.
+    """
     for parameter in set(component.parameters()):
         if kwarg := parameter_names.get(parameter.__class__):
             if value := kwargs.get(kwarg):
@@ -46,18 +60,14 @@ def init_component(component: g2f.Component, **kwargs):
 
 class ParameterConfig(pexConfig.Config):
     """Basic configuration for all parameters."""
+
     fixed = pexConfig.Field[bool](default=False, doc="Whether parameter is fixed or not (free)")
     value_initial = pexConfig.Field[float](default=0, doc="Initial value")
 
 
-class SersicIndexConfig(ParameterConfig):
-    """Specific configuration for a Sersic index parameter."""
-    def setDefaults(self):
-        self.value_initial = 0.5
-
-
 class EllipticalComponentConfig(ShapePriorConfig):
     """Config for an elliptically-symmetric component"""
+
     rho = pexConfig.ConfigField[ParameterConfig](doc="Rho parameter config")
     size = pexConfig.ConfigField[ParameterConfig](doc="Size parameter config")
 
@@ -94,32 +104,37 @@ class EllipticalComponentConfig(ShapePriorConfig):
 
 class GaussianConfig(EllipticalComponentConfig):
     """Configuration for a gauss2d.fit Gaussian component"""
+
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
         channels: list[g2f.Channel],
     ) -> g2f.Component:
-        transform_flux = transforms_ref['log10']
-        transform_size = transforms_ref['log10']
-        transform_rho = transforms_ref['logit_rho']
+        transform_flux = transforms_ref["log10"]
+        transform_size = transforms_ref["log10"]
+        transform_rho = transforms_ref["logit_rho"]
         ellipse = g2f.GaussianParametricEllipse(
-            sigma_x=g2f.SigmaXParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
-            sigma_y=g2f.SigmaYParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
+            sigma_x=g2f.SigmaXParameterD(
+                self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+            ),
+            sigma_y=g2f.SigmaYParameterD(
+                self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+            ),
             rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
         )
         prior = self.get_shape_prior(ellipse)
         return g2f.GaussianComponent(
             centroid=centroid,
             ellipse=ellipse,
-            integral=g2f.LinearIntegralModel([
-                (channel, g2f.IntegralParameterD(1.0, transform=transform_flux))
-                for channel in channels
-            ]),
+            integral=g2f.LinearIntegralModel(
+                [(channel, g2f.IntegralParameterD(1.0, transform=transform_flux)) for channel in channels]
+            ),
         ), ([] if prior is None else [prior])
 
 
 class SersicIndexConfig(ParameterConfig):
     """Specific configuration for a Sersic index parameter."""
+
     def setDefaults(self):
         self.value_initial = 0.5
 
@@ -132,29 +147,37 @@ class SersicConfig(EllipticalComponentConfig):
     make_component will return a `gauss2d.fit.GaussianComponent` if the Sersic
     index is fixed at 0.5, or a `gauss2d.fit.SersicMixComponent` otherwise.
     """
+
     sersicindex = pexConfig.ConfigField[SersicIndexConfig](doc="Sersic index config")
 
     def make_component(
-        self,
-        centroid: g2f.CentroidParameters,
-        channels: list[g2f.Channel],
-        label_integral: str | None = None
+        self, centroid: g2f.CentroidParameters, channels: list[g2f.Channel], label_integral: str | None = None
     ) -> tuple[g2f.Component, list[g2f.Prior]]:
         is_gaussian = self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed
         if label_integral is None:
             label_integral = f"{'Gaussian' if is_gaussian else 'Sersic'} {{channel.name}}-band"
-        transform_flux = transforms_ref['log10']
-        transform_size = transforms_ref['log10']
-        transform_rho = transforms_ref['logit_rho']
+        transform_flux = transforms_ref["log10"]
+        transform_size = transforms_ref["log10"]
+        transform_rho = transforms_ref["logit_rho"]
         integral = g2f.LinearIntegralModel(
-            [(channel, g2f.IntegralParameterD(1.0, transform=transform_flux,
-                                              label=label_integral.format(channel=channel)))
-             for channel in channels]
+            [
+                (
+                    channel,
+                    g2f.IntegralParameterD(
+                        1.0, transform=transform_flux, label=label_integral.format(channel=channel)
+                    ),
+                )
+                for channel in channels
+            ]
         )
         if is_gaussian:
             ellipse = g2f.GaussianParametricEllipse(
-                sigma_x=g2f.SigmaXParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
-                sigma_y=g2f.SigmaYParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
+                sigma_x=g2f.SigmaXParameterD(
+                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                ),
+                sigma_y=g2f.SigmaYParameterD(
+                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                ),
                 rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
             )
             component = g2f.GaussianComponent(
@@ -164,8 +187,12 @@ class SersicConfig(EllipticalComponentConfig):
             )
         else:
             ellipse = g2f.SersicParametricEllipse(
-                size_x=g2f.ReffXParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
-                size_y=g2f.ReffYParameterD(self.size.value_initial, transform=transform_size, fixed=self.size.fixed),
+                size_x=g2f.ReffXParameterD(
+                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                ),
+                size_y=g2f.ReffYParameterD(
+                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                ),
                 rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
             )
             component = g2f.SersicMixComponent(
@@ -175,7 +202,7 @@ class SersicConfig(EllipticalComponentConfig):
                 sersicindex=g2f.SersicMixComponentIndexParameterD(
                     value=self.sersicindex.value_initial,
                     fixed=self.sersicindex.fixed,
-                    transform=transforms_ref['logit_sersic'] if not self.sersicindex.fixed else None,
+                    transform=transforms_ref["logit_sersic"] if not self.sersicindex.fixed else None,
                 ),
             )
         prior = self.get_shape_prior(ellipse)

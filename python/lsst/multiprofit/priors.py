@@ -27,6 +27,8 @@ from .transforms import transforms_ref
 
 
 class ShapePriorConfig(pexConfig.Config):
+    """Configuration for a shape prior."""
+
     prior_axrat_mean = pexConfig.Field[float](
         default=0.7,
         doc="Prior mean on axis ratio (prior ignored if not >0)",
@@ -49,24 +51,40 @@ class ShapePriorConfig(pexConfig.Config):
         use_prior_size = self.prior_size_stddev > 0 and np.isfinite(self.prior_size_stddev)
 
         if use_prior_axrat or use_prior_size:
-            prior_size = g2f.ParametricGaussian1D(
-                g2f.MeanParameterD(self.prior_size_mean, transform=transforms_ref["log10"]),
-                g2f.StdDevParameterD(self.prior_size_stddev)
-            ) if use_prior_size else None
-            prior_axrat = g2f.ParametricGaussian1D(
-                g2f.MeanParameterD(self.prior_axrat_mean, transform=transforms_ref["logit_axrat_prior"]),
-                g2f.StdDevParameterD(self.prior_axrat_stddev)
-            ) if use_prior_axrat else None
+            prior_size = (
+                g2f.ParametricGaussian1D(
+                    g2f.MeanParameterD(self.prior_size_mean, transform=transforms_ref["log10"]),
+                    g2f.StdDevParameterD(self.prior_size_stddev),
+                )
+                if use_prior_size
+                else None
+            )
+            prior_axrat = (
+                g2f.ParametricGaussian1D(
+                    g2f.MeanParameterD(self.prior_axrat_mean, transform=transforms_ref["logit_axrat_prior"]),
+                    g2f.StdDevParameterD(self.prior_axrat_stddev),
+                )
+                if use_prior_axrat
+                else None
+            )
             return g2f.ShapePrior(ellipse, prior_size, prior_axrat)
             return None
 
 
 def get_hst_size_prior(mag_psf_i):
-    """ Return the mean and stddev for a reasonable HST-based size (major axis half-light radius) prior.
+    """Return the mean and stddev for an HST-based size prior.
+
+    The size is major axis half-light radius.
+
+    Parameters
+    ----------
+    mag_psf_i
+        i-band PSF magnitudes of the source(s).
 
     Notes
     -----
-    Return values are log10 scaled in units of arcseconds. The input should be a PSF mag because other
-    magnitudes - even Gaussian - can be unreliable for low S/N (non-)detections.
+    Return values are log10 scaled in units of arcseconds.
+    The input should be a PSF mag because other magnitudes - even Gaussian -
+    can be unreliable for low S/N (non-)detections.
     """
-    return 0.75*(19 - np.clip(mag_psf_i, 10, 30))/6.5, 0.2
+    return 0.75 * (19 - np.clip(mag_psf_i, 10, 30)) / 6.5, 0.2

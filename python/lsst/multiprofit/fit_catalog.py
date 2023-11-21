@@ -27,29 +27,36 @@ import pydantic
 from pydantic.dataclasses import dataclass
 
 from .modeller import ModelFitConfig
+from .utils import ArbitraryAllowedConfig
 
 
 class CatalogExposureABC(ABC):
+    """Interface for catalog-exposure pairs."""
+
     @abstractmethod
     def get_catalog(self) -> Iterable:
         """Return a row-iterable catalog covering an exposure."""
 
 
-class ColumnInfoConfig:
-    arbitrary_types_allowed = True
+# class ColumnInfoConfig:
+#     """Pydantic config to allow arbitrary typed Fields."""
+#
+#     arbitrary_types_allowed = True
 
 
-@dataclass(frozen=True, kw_only=True, config=ColumnInfoConfig)
+@dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
 class ColumnInfo:
     """Metadata for a column in a catalog."""
+
     dtype: str = pydantic.Field(title="Column data type name (numpy or otherwise)")
     key: str = pydantic.Field(title="Column key (name)")
     description: str = pydantic.Field("", title="Column description")
-    unit: u.UnitBase = pydantic.Field(u.Unit(""), title="Column unit (astropy)")
+    unit: u.UnitBase | None = pydantic.Field(None, title="Column unit (astropy)")
 
 
 class CatalogFitterConfig(pexConfig.Config):
     """Configuration for generic MultiProFit fitting tasks."""
+
     column_id = pexConfig.Field[str](default="id", doc="Catalog index column key")
     compute_errors = pexConfig.ChoiceField[str](
         default="INV_HESSIAN_BESTFIT",
@@ -58,7 +65,7 @@ class CatalogFitterConfig(pexConfig.Config):
             "NONE": "no errors computed",
             "INV_HESSIAN": "inverse hessian using noisy image as data",
             "INV_HESSIAN_BESTFIT": "inverse hessian using best-fit model as data",
-        }
+        },
     )
     compute_errors_from_jacobian = pexConfig.Field[bool](
         default=True,
@@ -72,8 +79,12 @@ class CatalogFitterConfig(pexConfig.Config):
     fit_centroid = pexConfig.Field[bool](default=True, doc="Fit centroid parameters")
     fit_linear_init = pexConfig.Field[bool](default=True, doc="Fit linear parameters after initialization")
     fit_linear_final = pexConfig.Field[bool](default=True, doc="Fit linear parameters after optimization")
-    flag_errors = pexConfig.DictField(default={}, keytype=str, itemtype=str,
-                                      doc="Flag column names to set, keyed by name of exception to catch")
+    flag_errors = pexConfig.DictField(
+        default={},
+        keytype=str,
+        itemtype=str,
+        doc="Flag column names to set, keyed by name of exception to catch",
+    )
     prefix_column = pexConfig.Field[str](default="mpf_", doc="Column name prefix")
 
     def schema(
@@ -93,19 +104,21 @@ class CatalogFitterConfig(pexConfig.Config):
         An ordered list of ColumnInfo instances.
         """
         schema = [
-            ColumnInfo(key=self.column_id, dtype='i8'),
-            ColumnInfo(key='n_iter', dtype='i4'),
-            ColumnInfo(key='time_eval', dtype='f8', unit=u.s),
-            ColumnInfo(key='time_fit', dtype='f8', unit=u.s),
-            ColumnInfo(key='time_full', dtype='f8', unit=u.s),
-            ColumnInfo(key='chisq_red', dtype='f8'),
-            ColumnInfo(key='unknown_flag', dtype='bool'),
+            ColumnInfo(key=self.column_id, dtype="i8"),
+            ColumnInfo(key="n_iter", dtype="i4"),
+            ColumnInfo(key="time_eval", dtype="f8", unit=u.s),
+            ColumnInfo(key="time_fit", dtype="f8", unit=u.s),
+            ColumnInfo(key="time_full", dtype="f8", unit=u.s),
+            ColumnInfo(key="chisq_red", dtype="f8"),
+            ColumnInfo(key="unknown_flag", dtype="bool"),
         ]
-        schema.extend([ColumnInfo(key=key, dtype='bool') for key in self.flag_errors.keys()])
+        schema.extend([ColumnInfo(key=key, dtype="bool") for key in self.flag_errors.keys()])
         # Always have a centroid column, even if not fitting
         # It may still be useful for reconstruction
-        schema.extend([
-            ColumnInfo(key='cen_x', dtype='f8', unit=u.pix),
-            ColumnInfo(key='cen_y', dtype='f8', unit=u.pix),
-        ])
+        schema.extend(
+            [
+                ColumnInfo(key="cen_x", dtype="f8", unit=u.pix),
+                ColumnInfo(key="cen_y", dtype="f8", unit=u.pix),
+            ]
+        )
         return schema

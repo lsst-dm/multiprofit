@@ -19,24 +19,30 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import os
-import re
-import sys
-import platform
-import subprocess
+import gauss2d.fit as g2f
+import numpy
+import numpy as np
 
-from distutils.version import LooseVersion
-from setuptools import setup, Extension
-from setuptools.command.build_ext import build_ext
 
-setup(
-    name='multiprofit',
-    version='0.1',
-    author='Dan Taranu',
-    author_email='dan.s.taranu@gmail.com',
-    description='Multi-(Object/Band) Source Profile Fitting for Astronomy',
-    long_description='',
-    packages=['multiprofit'],
-    # ext_modules=[],
-    # zip_safe=False,
-)
+class ArbitraryAllowedConfig:
+    """Pydantic config to allow arbitrary typed Fields.
+
+    Also disallows unused init kwargs.
+    """
+
+    arbitrary_types_allowed = True
+    extra = "forbid"
+
+
+def get_params_uniq(parametric: g2f.Parametric, **kwargs):
+    """Get a sorted set of parameters matching a filter"""
+    return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()
+
+
+def normalize(ndarray: numpy.ndarray, return_sum: bool = False):
+    """Normalize a numpy array."""
+    total = np.sum(ndarray)
+    ndarray /= total
+    if return_sum:
+        return ndarray, total
+    return ndarray
