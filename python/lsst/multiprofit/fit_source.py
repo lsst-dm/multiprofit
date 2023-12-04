@@ -541,7 +541,8 @@ class CatalogSourceFitterABC(ABC):
                     logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with known exception={e}")
                 else:
                     row[f"{prefix}unknown_flag"] = True
-                    logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}")
+                    logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}",
+                                exc_info=1)
         return results
 
     def get_channels(
