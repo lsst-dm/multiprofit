@@ -239,11 +239,11 @@ def get_sources(channels, config, limits: Limits, transforms: Transforms):
                 (channel, g2f.IntegralParameterD(flux, label=channel.name)) for channel in channels.values()
             ]
             size = compconf.size_base + c*compconf.size_increment
-            # Needs to not be exactly 1.0 because of linear interpolation
-            # (this breaks finite differencing at any delta +/- a knot)
-            # ... and 1.0 and 4.0 are both knots
-            # TODO: Test more after DM-38616
-            sersicindex = g2f.SersicMixComponentIndexParameterD(1.01 + 3*c)
+            sersicindex = g2f.SersicMixComponentIndexParameterD(1.0 + 3*c)
+            # Add a small offset if using linear interpolation
+            # n=1.0 should always be a knot and finite differencing breaks
+            # for linear interpolators right at knots
+            sersicindex.value += 1e-3*(sersicindex.interptype == g2f.InterpType.linear)
             ellipse = g2f.SersicParametricEllipse(
                 g2f.ReffXParameterD(size, transform=transforms.x),
                 g2f.ReffYParameterD(size, transform=transforms.y),
