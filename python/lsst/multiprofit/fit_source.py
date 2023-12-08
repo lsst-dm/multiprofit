@@ -208,11 +208,11 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                 for band in bands:
                     columns.append(ColumnInfo(key=f"{prefix_comp}{band}_flux{suffix}", dtype="f8"))
 
-            for idx, name_comp in enumerate(self.sersics.keys()):
+            for idx, (name_comp, comp) in enumerate(self.sersics.items()):
                 prefix_comp = f"{name_comp}_"
                 columns_comp = [
-                    ColumnInfo(key=f"{prefix_comp}sigma_x{suffix}", dtype="f8", unit=u.pix),
-                    ColumnInfo(key=f"{prefix_comp}sigma_y{suffix}", dtype="f8", unit=u.pix),
+                    ColumnInfo(key=f"{prefix_comp}reff_x{suffix}", dtype="f8", unit=u.pix),
+                    ColumnInfo(key=f"{prefix_comp}reff_y{suffix}", dtype="f8", unit=u.pix),
                     ColumnInfo(key=f"{prefix_comp}rho{suffix}", dtype="f8", unit=u.pix),
                 ]
                 for band in bands:
@@ -222,6 +222,8 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                             unit=u.Unit(self.unit_flux) if self.unit_flux else None,
                         )
                     )
+                if not comp.sersicindex.fixed:
+                    columns_comp.append(ColumnInfo(key=f"{prefix_comp}nser{suffix}", dtype="f8"))
                 columns.extend(columns_comp)
             if self.convert_cen_xy_to_radec:
                 columns.append(ColumnInfo(key=f"cen_ra{suffix}", dtype="f8", unit=u.deg))
@@ -539,7 +541,8 @@ class CatalogSourceFitterABC(ABC):
                     logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with known exception={e}")
                 else:
                     row[f"{prefix}unknown_flag"] = True
-                    logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}")
+                    logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}",
+                                exc_info=1)
         return results
 
     def get_channels(

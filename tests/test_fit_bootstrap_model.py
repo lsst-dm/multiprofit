@@ -21,10 +21,16 @@
 
 import gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
-    GaussianConfig, init_component, ParameterConfig, SersicConfig, SersicIndexConfig,
+    GaussianConfig,
+    init_component,
+    ParameterConfig,
+    SersicConfig,
+    SersicIndexConfig,
 )
 from lsst.multiprofit.fit_bootstrap_model import (
-    CatalogExposurePsfBootstrap, CatalogExposureSourcesBootstrap, CatalogSourceFitterBootstrap,
+    CatalogExposurePsfBootstrap,
+    CatalogExposureSourcesBootstrap,
+    CatalogSourceFitterBootstrap,
 )
 from lsst.multiprofit.fit_psf import CatalogPsfFitter, CatalogPsfFitterConfig
 from lsst.multiprofit.fit_source import CatalogSourceFitterConfig
@@ -37,7 +43,7 @@ import pytest
 channels = (g2f.Channel.get("g"), g2f.Channel.get("r"), g2f.Channel.get("i"))
 shape_img = (23, 27)
 sigma_psf = 2.1
-sigma_x_src, sigma_y_src, rho_src = 2.5, 3.6, -0.25
+reff_x_src, reff_y_src, rho_src, nser_src = 2.5, 3.6, -0.25, 2.0
 
 # TODO: These can be parameterized; should they be?
 compute_errors_no_covar = True
@@ -46,14 +52,14 @@ n_sources = 5
 plot = False
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def config_psf():
     return CatalogPsfFitterConfig(
-        gaussians={'comp1': GaussianConfig(size=ParameterConfig(value_initial=sigma_psf))},
+        gaussians={"comp1": GaussianConfig(size=ParameterConfig(value_initial=sigma_psf))},
     )
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def config_source_fit():
     # TODO: Separately test n_pointsources=0 and sersics={}
     return CatalogSourceFitterConfig(
@@ -61,11 +67,11 @@ def config_source_fit():
         n_pointsources=1,
         sersics={
             "comp1": SersicConfig(
-                prior_size_mean=sigma_y_src,
+                prior_size_mean=reff_y_src,
                 prior_size_stddev=1.0,
-                prior_axrat_mean=sigma_x_src/sigma_y_src,
+                prior_axrat_mean=reff_x_src / reff_y_src,
                 prior_axrat_stddev=0.2,
-                sersicindex=SersicIndexConfig(fixed=True),
+                sersicindex=SersicIndexConfig(fixed=False, value_initial=1.0),
             )
         },
         convert_cen_xy_to_radec=False,
@@ -74,13 +80,17 @@ def config_source_fit():
     )
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def table_psf_fits(config_psf):
     fitter = CatalogPsfFitter()
     fits = {
         channel.name: fitter.fit(
             CatalogExposurePsfBootstrap(
-                sigma_x=sigma_x_src, sigma_y=sigma_y_src, rho=rho_src, n_sources=n_sources,
+                sigma_x=reff_x_src,
+                sigma_y=reff_y_src,
+                rho=rho_src,
+                nser=nser_src,
+                n_sources=n_sources,
             ),
             config_psf,
         )
@@ -92,7 +102,7 @@ def table_psf_fits(config_psf):
 def test_fit_psf(config_psf, table_psf_fits):
     for results in table_psf_fits.values():
         assert len(results) == n_sources
-        assert np.sum(results['mpf_psf_unknown_flag']) == 0
+        assert np.sum(results["mpf_psf_unknown_flag"]) == 0
         assert all(np.isfinite(list(results[0].values())))
         psfmodel = config_psf.rebuild_psfmodel(results[0])
         assert len(psfmodel.components) == len(config_psf.gaussians)
@@ -105,37 +115,43 @@ def test_fit_source(config_source_fit, table_psf_fits):
     init_component(model_source.components[1], sigma_x=sigma_psf, sigma_y=sigma_psf, rho=0)
     catexps = tuple(
         CatalogExposureSourcesBootstrap(
-            channel=channel, config_fit=config_source_fit,
-            model_source=model_source, table_psf_fits=table_psf_fits[channel.name],
+            channel=channel,
+            config_fit=config_source_fit,
+            model_source=model_source,
+            table_psf_fits=table_psf_fits[channel.name],
             n_sources=n_sources,
         )
         for channel in channels
     )
-    fitter = CatalogSourceFitterBootstrap(sigma_x=sigma_x_src, sigma_y=sigma_y_src, rho=rho_src)
+    fitter = CatalogSourceFitterBootstrap(reff_x=reff_x_src, reff_y=reff_y_src, rho=rho_src, nser=nser_src)
     catalog_multi = catexps[0].get_catalog()
     results = fitter.fit(catalog_multi=catalog_multi, catexps=catexps, config=config_source_fit)
     assert len(results) == n_sources
 
-    model = fitter.get_model(0, catalog_multi=catalog_multi, catexps=catexps, config=config_source_fit,
-                             results=results)
+    model = fitter.get_model(
+        0, catalog_multi=catalog_multi, catexps=catexps, config=config_source_fit, results=results
+    )
 
     model_true = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=[model_source])
     fitter.initialize_model(model_true, catalog_multi[0])
     params_true = tuple(param.value for param in get_params_uniq(model_true, fixed=False))
-    plot_catalog_bootstrap(results, histtype='step', paramvals_ref=params_true,
-                           plot_total_fluxes=True, plot_colors=True)
+    plot_catalog_bootstrap(
+        results, histtype="step", paramvals_ref=params_true, plot_total_fluxes=True, plot_colors=True
+    )
     if plot:
         import matplotlib.pyplot as plt
+
         plt.show()
 
-    assert np.sum(results['mpf_unknown_flag']) == 0
+    assert np.sum(results["mpf_unknown_flag"]) == 0
     assert all(np.isfinite(list(results[0].values())))
 
     variances = []
     for return_negative in (False, True):
         variances.append(
-            fitter.modeller.compute_variances(model, transformed=False,
-                                              options=g2f.HessianOptions(return_negative=return_negative))
+            fitter.modeller.compute_variances(
+                model, transformed=False, options=g2f.HessianOptions(return_negative=return_negative)
+            )
         )
         if return_negative:
             variances = np.array(variances)
@@ -153,28 +169,28 @@ def test_fit_source(config_source_fit, table_psf_fits):
         img = obs.image.data
         img.flat = output.data.flat
     options_hessian = g2f.HessianOptions(return_negative=return_negative)
-    variances_bootstrap = fitter.modeller.compute_variances(
-        model, transformed=False, options=options_hessian)
+    variances_bootstrap = fitter.modeller.compute_variances(model, transformed=False, options=options_hessian)
     variances_bootstrap_diag = fitter.modeller.compute_variances(
-        model, transformed=False, options=options_hessian, use_diag_only=True)
+        model, transformed=False, options=options_hessian, use_diag_only=True
+    )
     for obs, img_datum_old in zip(model.data, img_data_old):
         obs.image.data.flat = img_datum_old.flat
     variances_jac = fitter.modeller.compute_variances(model, transformed=False)
     variances_jac_diag = fitter.modeller.compute_variances(model, transformed=False, use_diag_only=True)
 
     errors_plot = {
-        'inv_hess': ErrorValues(values=np.sqrt(variances[0]),
-                                kwargs_plot={'linestyle': '-', 'color': 'r'}),
-        '-inv_hess': ErrorValues(values=np.sqrt(variances[1]),
-                                 kwargs_plot={'linestyle': '--', 'color': 'r'}),
-        'inv_jac': ErrorValues(values=np.sqrt(variances_jac),
-                               kwargs_plot={'linestyle': '-.', 'color': 'r'}),
-        'boot_hess': ErrorValues(values=np.sqrt(variances_bootstrap),
-                                 kwargs_plot={'linestyle': '-', 'color': 'b'}),
-        'boot_diag': ErrorValues(values=np.sqrt(variances_bootstrap_diag),
-                                 kwargs_plot={'linestyle': '--', 'color': 'b'}),
-        'boot_jac_diag': ErrorValues(values=np.sqrt(variances_jac_diag),
-                                     kwargs_plot={'linestyle': '-.', 'color': 'm'}),
+        "inv_hess": ErrorValues(values=np.sqrt(variances[0]), kwargs_plot={"linestyle": "-", "color": "r"}),
+        "-inv_hess": ErrorValues(values=np.sqrt(variances[1]), kwargs_plot={"linestyle": "--", "color": "r"}),
+        "inv_jac": ErrorValues(values=np.sqrt(variances_jac), kwargs_plot={"linestyle": "-.", "color": "r"}),
+        "boot_hess": ErrorValues(
+            values=np.sqrt(variances_bootstrap), kwargs_plot={"linestyle": "-", "color": "b"}
+        ),
+        "boot_diag": ErrorValues(
+            values=np.sqrt(variances_bootstrap_diag), kwargs_plot={"linestyle": "--", "color": "b"}
+        ),
+        "boot_jac_diag": ErrorValues(
+            values=np.sqrt(variances_jac_diag), kwargs_plot={"linestyle": "-.", "color": "m"}
+        ),
     }
     fig, ax = plot_loglike(model, errors=errors_plot, values_reference=fitter.params_values_init)
     if plot:

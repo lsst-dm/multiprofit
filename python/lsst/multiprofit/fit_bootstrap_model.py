@@ -61,6 +61,7 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap)
     sigma_x: float
     sigma_y: float
     rho: float
+    nser: float
 
     @cached_property
     def centroid(self) -> g2.Centroid:
@@ -142,9 +143,10 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
 
     background: float = 1e2
     flux: float = 1e4
-    sigma_x: float
-    sigma_y: float
+    reff_x: float
+    reff_y: float
     rho: float
+    nser: float
 
     def get_model_radec(self, source: Mapping[str, Any], cen_x: float, cen_y: float) -> tuple[float, float]:
         return float(cen_x), float(cen_y)
@@ -162,7 +164,13 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
             limits_y.max = float(observation.image.n_rows)
         init_component(comp1, cen_x=cenx, cen_y=ceny)
         init_component(
-            comp2, cen_x=cenx, cen_y=ceny, sigma_x=self.sigma_x, sigma_y=self.sigma_y, rho=self.rho
+            comp2,
+            cen_x=cenx,
+            cen_y=ceny,
+            reff_x=self.reff_x,
+            reff_y=self.reff_y,
+            rho=self.rho,
+            nser=self.nser,
         )
         params_free = get_params_uniq(model, fixed=False)
         for param in params_free:
