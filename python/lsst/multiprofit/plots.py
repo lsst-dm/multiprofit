@@ -1,4 +1,5 @@
 import astropy.table
+import astropy.visualization as apVis
 from collections import defaultdict
 from dataclasses import dataclass, field
 import gauss2d.fit as g2f
@@ -11,7 +12,10 @@ import typing
 
 from .utils import get_params_uniq
 
-__all__ = ["ErrorValues", "plot_catalog_bootstrap", "plot_loglike", "plot_sersicmix_interp"]
+__all__ = [
+    "ErrorValues", "plot_catalog_bootstrap", "plot_loglike", "plot_model_rgb", "Interpolator",
+    "plot_sersicmix_interp",
+]
 
 
 linestyles_default = ["--", "-.", ":"]
@@ -319,6 +323,131 @@ def plot_loglike(
         param.fixed = False
 
     return fig, ax
+
+
+def plot_model_rgb(
+    model: g2f.Model,
+    weights: dict[str, float] | None = None,
+    high_sn_threshold: float | None = None,
+) -> tuple[plt.Figure, plt.Axes, plt.Figure, plt.Axes, np.ndarray]:
+    """Plot RGB images of a model, its data and residuals thereof.
+
+    Parameters
+    ----------
+    model
+        The model to plot.
+    weights
+        Linear weights to multiply each band's image by.
+    high_sn_threshold
+        If non-None, will return an image with the pixels having a model S/N
+        above this threshold in every band.
+
+    Returns
+    -------
+    fig_rgb
+        The Figure for the RGB plots.
+    ax_rgb
+        The Axes for the RGB plots.
+    fig_gs
+        The Figure for the grayscale plots.
+    ax_gs
+        The Axes for the grayscale plots.
+    mask_inv_highsn
+        The inverse mask (1=selected) if high_sn_threshold was specified.
+    """
+    if weights is None:
+        bands_set = {}
+        bands = []
+        for obs in model.data:
+            band = obs.channel.name
+            if band not in bands_set:
+                bands_set.add(band)
+                bands.append(band)
+                weights[band] = 1.0
+    bands = tuple(weights.keys())
+    band_str = ",".join(bands)
+
+    if any([output is None for output in model.outputs]):
+        model.setup_evaluators(model.EvaluatorMode.image)
+        model.evaluate()
+
+    observations = {}
+    models = {}
+    for obs, output in zip(model.data, model.outputs):
+        band = obs.channel.name
+        if band in bands:
+            if band in observations:
+                raise ValueError(f"Cannot plot {model=} because {band=} has multiple observations")
+            observations[band] = obs
+            models[band] = output.data
+
+    img_rgb = apVis.make_lupton_rgb(
+        *[observation.image.data * weights[band] for band, observation in observations.items()]
+    )
+    img_model_rgb = apVis.make_lupton_rgb(
+        *[output.data*weight for output, weight in zip(model.outputs, weights.values())]
+    )
+    fig_rgb, ax_rgb = plt.subplots(2, 2)
+    fig_gs, ax_gs = plt.subplots(2, len(bands))
+    ax_rgb[0][0].imshow(img_model_rgb)
+    ax_rgb[0][0].set_title(f"Model ({band_str})")
+    ax_rgb[1][0].imshow(img_rgb)
+    ax_rgb[1][0].set_title("Data")
+
+    residuals = {}
+    imgs_sigma_inv = {}
+    masks_inv = {}
+    # Create a mask of high-sn pixels (based on the model)
+    mask_inv_highsn = np.ones(img_rgb.shape[:1], dtype='bool') if high_sn_threshold else None
+
+    for idx, band in enumerate(bands):
+        obs = observations[band]
+        mask_inv = obs.mask_inv.data
+        masks_inv[band] = mask_inv
+        img_data = obs.image.data
+        img_sigma_inv = obs.sigma_inv.data
+        imgs_sigma_inv[band] = img_sigma_inv
+        img_model = model.outputs[idx].data
+        if mask_inv_highsn:
+            mask_inv_highsn *= (img_model*np.nanmedian(img_sigma_inv)) > high_sn_threshold
+        residual = (img_data - img_model)*mask_inv
+        residuals[band] = residual
+        value_max = np.percentile(np.abs(residual), 98)
+        ax_gs[0][idx].imshow(residual, cmap='gray', vmin=-value_max, vmax=value_max)
+        ax_gs[0][idx].tick_params(labelleft=False)
+        ax_gs[1][idx].imshow(np.clip(residual*img_sigma_inv, -20, 20), cmap='gray')
+        ax_gs[1][idx].tick_params(labelleft=False)
+
+    mask_inv_all = np.prod(list(masks_inv.values()), axis=0)
+
+    resid_max = np.percentile(
+        np.abs(np.concatenate([(residual*mask_inv_all).flat for residual in residuals.values()])),
+        98)
+
+    # This may or may not be equivalent to make_lupton_rgb
+    # I just can't figure out how to get that scaled so zero = 50% gray
+    stretch = 3
+    residual_rgb = np.stack([
+        np.arcsinh(np.clip(residuals[band]*mask_inv_all*weight, -resid_max, resid_max)*stretch)
+        for band, weight in weights.items()
+    ], axis=-1)
+    residual_rgb /= 2*np.arcsinh(resid_max*stretch)
+    residual_rgb += 0.5
+
+    ax_rgb[0][1].imshow(residual_rgb)
+    ax_rgb[0][1].set_title("Residual (abs.)")
+    ax_rgb[0][1].tick_params(labelleft=False)
+
+    residual_rgb = np.stack([
+        (np.clip(residuals[band]*imgs_sigma_inv[band]*mask_inv_all*weight, -20, 20) + 20)/40
+        for band, weight in weights.items()
+    ], axis=-1)
+
+    ax_rgb[1][1].imshow(residual_rgb)
+    ax_rgb[1][1].set_title("Residual (chi)")
+    ax_rgb[1][1].tick_params(labelleft=False)
+
+    return fig_rgb, ax_rgb, fig_gs, ax_gs, mask_inv_highsn
 
 
 Interpolator: typing.TypeAlias = g2f.SersicMixInterpolator | tuple[typing.Type, dict[str, typing.Any]]

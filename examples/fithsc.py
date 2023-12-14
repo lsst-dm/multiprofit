@@ -3,7 +3,14 @@
 
 # # Fitting HSC data in multiband mode using MultiProFit
 
-# In[1]:
+# In[ ]:
+
+
+import os
+print(os.getcwd())
+
+
+# In[2]:
 
 
 # Import required packages
@@ -16,16 +23,18 @@ from astropy.wcs import WCS
 from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
 from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig, CatalogPsfFitter
 from lsst.multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
+from lsst.multiprofit.plots import plot_model_rgb
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 import numpy as np
+import time
 from typing import Any, Iterable, Mapping
 
 
-# In[2]:
+# In[3]:
 
 
 # Define settings
@@ -55,7 +64,7 @@ mpl.rcParams['image.origin'] = 'lower'
 mpl.rcParams['figure.dpi'] = 120
 
 
-# In[3]:
+# In[4]:
 
 
 # Define source to fit
@@ -97,17 +106,18 @@ wcs = WCS(images[band_ref][hdu_img])
 cat['x'], cat['y'] = wcs.world_to_pixel(SkyCoord(cat['ra'], cat['dec'], unit='deg'))
 
 
-# In[4]:
+# In[5]:
 
 
 # Plot image
 img_rgb = apVis.make_lupton_rgb(*[img[1].data*bands[band] for band, img in images.items()])
 plt.scatter(cat['x'], cat['y'], s=10, c='g', marker='x')
 plt.imshow(img_rgb)
+plt.title("gri image with detected objects")
 plt.show()
 
 
-# In[5]:
+# In[6]:
 
 
 # Generate a rough mask around other sources
@@ -138,8 +148,8 @@ for src in cat[bright]:
             if (radius_mask > 10) and (mag > 21):
                 radius_mask = 5
         mask_inverse[dists < radius_mask] = 0
-        print(f'Masking src=({id_src} at {x_src}, {y_src}) dist={dist}'
-              f', mag={mag}, radius_mask={radius_mask}')
+        print(f'Masking src=({id_src} at {x_src:.3f}, {y_src:.3f}) dist={dist:.3f}'
+              f', mag={mag:.3f}, radius_mask={radius_mask:.3f}')
     elif dist < 2:
         idx_src_main = id_src
         row_main = src
@@ -152,9 +162,11 @@ if read_mask_highsn:
     mask_inverse *= mask_highsn
 
 plt.imshow(mask_inverse)
+plt.title("Fitting mask")
+plt.show()
 
 
-# In[6]:
+# In[7]:
 
 
 # Fit PSF
@@ -176,12 +188,15 @@ results_psf = {}
 
 for band, psf_file in psfs.items():
     catexp = CatalogExposurePsf(catalog=catalog_psf, img=psf_file[0].data)
+    t_start = time.time()
     result = fitter_psf.fit(config=config_psf, catexp=catexp)
+    t_end = time.time()
     results_psf[band] = result
+    print(f"Fit {band}-band PSF in {t_end - t_start:.2f}s; result:")
     print(dict(result[0]))
 
 
-# In[7]:
+# In[8]:
 
 
 # Set fit configs
@@ -203,7 +218,7 @@ config_source = CatalogSourceFitterConfig(
 )
 
 
-# In[8]:
+# In[9]:
 
 
 # Setup exposure with band-specific image, mask and variance
@@ -277,7 +292,7 @@ class CatalogSourceFitter(CatalogSourceFitterABC):
                 prior.prior_size.mean_parameter.value = g2.EllipseMajor(ellipse).r_major
 
 
-# In[9]:
+# In[10]:
 
 
 # Set up Fitter, Observations and CatalogExposureSources
@@ -313,34 +328,40 @@ for band in bands:
     )
 
 
-# In[10]:
+# In[11]:
 
 
 # Now do the multi-band fit
+t_start = time.time()
 result_multi = fitter.fit(
     catalog_multi=tab_row_main,
     catexps=list(catexps.values()),
     config=config_source,
 )
+t_end = time.time()
+print(f"Fit {','.join(bands.keys())}-band bulge-disk model in {t_end - t_start:.2f}s; result:")
 print(dict(result_multi[0]))
 
 
-# In[11]:
+# In[12]:
 
 
 # Fit in each band separately
 results = {}
 for band, observation in bands.items():
+    t_start = time.time()
     result = fitter.fit(
         catalog_multi=tab_row_main,
         catexps=[catexps[band]],
         config=config_source,
     )
+    t_end = time.time()
     results[band] = result
+    print(f"Fit {band}-band bulge-disk model in {t_end - t_start:.2f}s; result:")
     print(dict(result[0]))
 
 
-# In[12]:
+# In[13]:
 
 
 # Make a model for the best-fit params
@@ -354,7 +375,8 @@ for param, (column, value) in zip(params, list(result_multi_row.items())[idx_las
     param.value = value
 model.setup_evaluators(model.EvaluatorMode.loglike_image)
 # Print the loglikelihoods, which are from the data and end with the (sum of all) priors
-model.evaluate()
+loglikes = model.evaluate()
+print(f"{loglikes=}")
 
 
 # ### Multiband Residuals
@@ -370,69 +392,14 @@ model.evaluate()
 # Note that the two scalings of the residual plots (98%ile and +/- 20 sigma) end up looking very similar.
 # 
 
-# In[13]:
+# In[14]:
 
 
 # Make some basic plots
-img_model_rgb = apVis.make_lupton_rgb(
-    *[output.data*weight for output, weight in zip(model.outputs, bands.values())]
+_, _, _, _, mask_inv_highsn = plot_model_rgb(
+    model, weights=bands, high_sn_threshold=0.2 if write_mask_highsn else None,
 )
-fig_rgb, ax_rgb = plt.subplots(2, 2)
-fig_bw, ax_bw = plt.subplots(2, len(bands))
-ax_rgb[0][0].imshow(img_model_rgb)
-ax_rgb[1][0].imshow(img_rgb)
-
-residuals = {}
-imgs_sigma_inv = {}
-masks_inv = {}
-if write_mask_highsn:
-    # Create a mask of high-sn pixels (based on the model)
-    mask_inv_highsn = np.ones(img_ref.shape, dtype='bool')
-
-for idx, band in enumerate(bands):
-    obs = catexps[band].observation
-    mask_inv = obs.mask_inv.data
-    masks_inv[band] = mask
-    img_data = obs.image.data
-    img_sigma_inv = obs.sigma_inv.data
-    imgs_sigma_inv[band] = img_sigma_inv
-    img_model = model.outputs[idx].data
-    if write_mask_highsn:
-        mask_highsn *= (img_model*np.nanmedian(img_sigma_inv)) > 0.2
-    residual = (img_data - img_model)*mask_inv
-    residuals[band] = residual
-    value_max = np.percentile(np.abs(residual), 98)
-    ax_bw[0][idx].imshow(residual, cmap='gray', vmin=-value_max, vmax=value_max)
-    ax_bw[0][idx].tick_params(labelleft=False)
-    ax_bw[1][idx].imshow(np.clip(residual*img_sigma_inv, -20, 20), cmap='gray')
-    ax_bw[1][idx].tick_params(labelleft=False)
-
-mask_inv_all = np.prod(list(masks_inv.values()), axis=0)
-
-resid_max = np.percentile(
-    np.abs(np.concatenate([(residual*mask_inv_all).flat for residual in residuals.values()])),
-    98)
-
-# This may or may not be equivalent to make_lupton_rgb
-# I just can't figure out how to get that scaled so zero = 50% gray
-stretch = 3
-residual_rgb = np.stack([
-    np.arcsinh(np.clip(residuals[band]*mask_inv_all*weight, -resid_max, resid_max)*stretch)
-    for band, weight in bands.items()
-], axis=-1)
-residual_rgb /= 2*np.arcsinh(resid_max*stretch)
-residual_rgb += 0.5
-
-ax_rgb[0][1].imshow(residual_rgb)
-ax_rgb[0][1].tick_params(labelleft=False)
-
-residual_rgb = np.stack([
-    (np.clip(residuals[band]*imgs_sigma_inv[band]*mask_inv_all*weight, -20, 20) + 20)/40
-    for band, weight in bands.items()
-], axis=-1)
-
-ax_rgb[1][1].imshow(residual_rgb)
-ax_rgb[1][1].tick_params(labelleft=False)
+plt.show()
 
 # Write the high SN bitmask to a compressed, bitpacked file
 if write_mask_highsn:
@@ -441,7 +408,7 @@ if write_mask_highsn:
     plt.show()
     packed = np.packbits(mask_inv_highsn, bitorder='little')
     np.savez_compressed(f'{prefix_img}mask_inv_highsn.npz', mask_inv=mask_highsn)
-    
+
 # TODO: Plotting functions will be refactored from old MPF
 # Missing features include colour residual images
 # Also complete labels, etc.
@@ -450,6 +417,9 @@ if write_mask_highsn:
 # ### More exercises for the reader
 # 
 # These are of the sort that the author hasn't gotten around to yet because they're far from trivial. Try:
+# 
+# 0. Use the WCS to compute ra, dec and errors thereof.
+# Hint: override CatalogSourceFitter.get_model_radec
 # 
 # 1. Replace the real data with simulated data.
 # Make new observations using model.evaluate and add noise based on the variance maps.
