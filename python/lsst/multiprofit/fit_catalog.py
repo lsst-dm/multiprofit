@@ -40,12 +40,6 @@ class CatalogExposureABC(ABC):
         """Return a row-iterable catalog covering an exposure."""
 
 
-# class ColumnInfoConfig:
-#     """Pydantic config to allow arbitrary typed Fields."""
-#
-#     arbitrary_types_allowed = True
-
-
 @dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
 class ColumnInfo:
     """Metadata for a column in a catalog."""
