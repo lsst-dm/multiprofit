@@ -24,7 +24,8 @@ from dataclasses import dataclass
 from functools import cached_property
 import gauss2d as g2
 import gauss2d.fit as g2f
-import numpy
+import numpy as np
+from typing import Any, Mapping
 
 from .config import set_config_from_dict
 from .componentconfig import init_component
@@ -76,7 +77,7 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap)
         return ellipse
 
     @cached_property
-    def image(self) -> numpy.ndarray:
+    def image(self) -> np.ndarray:
         image = g2.make_gaussians_pixel_D(
             g2.ConvolvedGaussians(
                 [
@@ -94,7 +95,7 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap)
     def get_catalog(self) -> astropy.table.Table:
         return self.catalog
 
-    def get_psf_image(self, source) -> numpy.ndarray:
+    def get_psf_image(self, source) -> np.ndarray:
         rng = np.random.default_rng(source["id"])
         return self.image + 1e-4 * rng.standard_normal(self.image.shape)
 

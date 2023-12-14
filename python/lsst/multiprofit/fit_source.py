@@ -25,12 +25,11 @@ from astropy.table import Table
 import astropy.units as u
 from dataclasses import dataclass, field
 import logging
+import lsst.pex.config as pexConfig
 import gauss2d.fit as g2f
 import numpy as np
 import time
 from typing import Any, Mapping, Sequence, Type
-
-import lsst.pex.config as pexConfig
 
 from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
