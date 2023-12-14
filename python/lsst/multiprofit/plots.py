@@ -11,6 +11,9 @@ import typing
 
 from .utils import get_params_uniq
 
+__all__ = ["ErrorValues", "plot_catalog_bootstrap", "plot_loglike", "plot_sersicmix_interp"]
+
+
 linestyles_default = ["--", "-.", ":"]
 ln10 = np.log(10)
 

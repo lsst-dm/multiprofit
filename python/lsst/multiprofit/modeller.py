@@ -42,6 +42,12 @@ except ImportError:
     has_fastnnls = False
 
 
+__all__ = [
+    "InvalidProposalError", "fitmethods_linear", "LinearGaussians", "make_image_gaussians",
+    "make_psfmodel_null", "FitInputsBase", "FitInputsDummy", "ModelFitConfig", "FitResult", "Modeller"
+]
+
+
 class InvalidProposalError(ValueError):
     """Error for an invalid parameter proposal."""
 

@@ -38,6 +38,8 @@ from .modeller import FitInputsDummy, Modeller
 from .transforms import transforms_ref
 from .utils import get_params_uniq
 
+__all__ = ["CatalogExposureSourcesABC", "CatalogSourceFitterConfig", "CatalogSourceFitterABC"]
+
 
 class CatalogExposureSourcesABC(CatalogExposureABC):
     """Interface for a CatalogExposure for source modelling."""

@@ -25,6 +25,8 @@ import lsst.pex.config as pexConfig
 
 from .transforms import transforms_ref
 
+__all__ = ["ShapePriorConfig", "get_hst_size_prior"]
+
 
 class ShapePriorConfig(pexConfig.Config):
     """Configuration for a shape prior."""

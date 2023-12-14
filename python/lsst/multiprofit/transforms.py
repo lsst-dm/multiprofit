@@ -24,6 +24,8 @@ import numpy as np
 
 from .limits import limits_ref
 
+__all__ = ["get_logit_limited", "verify_transform_derivative", "transforms_ref"]
+
 
 def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str | None = None):
     """Get a logit transform stretched to span a different range than [0,1].

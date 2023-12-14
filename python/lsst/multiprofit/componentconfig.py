@@ -36,6 +36,11 @@ parameter_names = {
     g2f.SigmaYParameterD: "sigma_y",
 }
 
+__all__ = [
+    "init_component", "ParameterConfig", "EllipticalComponentConfig", "GaussianConfig", "SersicIndexConfig",
+    "SersicConfig",
+]
+
 
 def init_component(component: g2f.Component, **kwargs):
     """Initialize a component with parameter name-value pairs.

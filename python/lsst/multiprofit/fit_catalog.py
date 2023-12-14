@@ -29,6 +29,8 @@ from pydantic.dataclasses import dataclass
 from .modeller import ModelFitConfig
 from .utils import ArbitraryAllowedConfig
 
+__all__ = ["CatalogExposureABC", "ColumnInfo", "CatalogFitterConfig"]
+
 
 class CatalogExposureABC(ABC):
     """Interface for catalog-exposure pairs."""

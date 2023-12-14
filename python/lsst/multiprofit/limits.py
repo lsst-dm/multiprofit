@@ -21,6 +21,9 @@
 
 from gauss2d.fit import LimitsD as Limits
 
+__all__ = ["limits_ref"]
+
+
 # TODO: Replace with a parameter factory and/or profile factory
 limits_ref = {
     "none": Limits(),

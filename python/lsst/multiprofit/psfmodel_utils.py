@@ -25,6 +25,8 @@ import numpy as np
 
 from .limits import limits_ref
 
+__all__ = ["make_psf_source"]
+
 
 def make_psf_source(
     sigma_xs: list[float] | None = None,

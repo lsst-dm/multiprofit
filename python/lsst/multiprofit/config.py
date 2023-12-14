@@ -22,6 +22,8 @@
 import lsst.pex.config as pexConfig
 from typing import Any
 
+__all__ = ["set_config_from_dict"]
+
 
 def set_config_from_dict(
     config: pexConfig.Config | pexConfig.dictField.Dict | pexConfig.configDictField.ConfigDict | dict,

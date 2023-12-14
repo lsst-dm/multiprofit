@@ -35,8 +35,9 @@ from .fit_source import (
     CatalogSourceFitterConfig,
 )
 from .utils import get_params_uniq
-import numpy as np
-from typing import Any, Mapping
+
+__all__ = ["SourceCatalogBootstrap", "CatalogExposurePsfBootstrap", "CatalogExposureSourcesBootstrap",
+           "CatalogSourceFitterBootstrap"]
 
 
 @dataclass(kw_only=True, frozen=True)

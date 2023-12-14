@@ -25,6 +25,8 @@ import numpy as np
 
 # This is all hacked from astropy's AsinhStretch
 
+__all__ = ["AsinhStretchSigned", "SinhStretchSigned"]
+
 
 def _prepare(values, clip=True, out=None):
     """
