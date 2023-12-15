@@ -81,6 +81,7 @@ class EllipticalComponentConfig(ShapePriorConfig):
         self,
         centroid: g2f.CentroidParameters,
         channels: list[g2f.Channel],
+        label_integral: str | None = None,
     ) -> tuple[g2f.Component, list[g2f.Prior]]:
         """Make a Component reflecting the current configuration.
 
@@ -91,6 +92,9 @@ class EllipticalComponentConfig(ShapePriorConfig):
         channels : list[`gauss2d.fit.Channel`]
             A list of gauss2d.fit.Channel to populate a
             `gauss2d.fit.LinearIntegralModel` with.
+        label_integral
+            A label to apply to integral parameters. Can reference the
+            relevant channel with e.g. {{channel.name}}.
 
         Returns
         -------
@@ -114,7 +118,10 @@ class GaussianConfig(EllipticalComponentConfig):
         self,
         centroid: g2f.CentroidParameters,
         channels: list[g2f.Channel],
+        label_integral: str | None = None,
     ) -> g2f.Component:
+        if label_integral is None:
+            label_integral = f"Gaussian {{channel.name}}-band"
         transform_flux = transforms_ref["log10"]
         transform_size = transforms_ref["log10"]
         transform_rho = transforms_ref["logit_rho"]
