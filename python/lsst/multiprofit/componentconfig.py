@@ -160,7 +160,20 @@ class SersicConfig(EllipticalComponentConfig):
     index is fixed at 0.5, or a `gauss2d.fit.SersicMixComponent` otherwise.
     """
 
+    _interpolators: dict[int, g2f.SersicMixInterpolator] = {}
+
+    order = pexConfig.ChoiceField[int](doc="Sersic mix order", allowed={4: "Four", 8: "Eight"}, default=4)
     sersicindex = pexConfig.ConfigField[SersicIndexConfig](doc="Sersic index config")
+
+    def get_interpolator(self, order: int):
+        return self._interpolators.get(
+            order,
+            (
+                g2f.GSLSersicMixInterpolator
+                if hasattr(g2f, "GSLSersicMixInterpolator")
+                else g2f.LinearSersicMixInterpolator
+            )(order=order),
+        )
 
     def make_component(
         self, centroid: g2f.CentroidParameters, channels: list[g2f.Channel], label_integral: str | None = None
@@ -215,6 +228,7 @@ class SersicConfig(EllipticalComponentConfig):
                     value=self.sersicindex.value_initial,
                     fixed=self.sersicindex.fixed,
                     transform=transforms_ref["logit_sersic"] if not self.sersicindex.fixed else None,
+                    interpolator=self.get_interpolator(order=self.order),
                 ),
             )
         prior = self.get_shape_prior(ellipse)
