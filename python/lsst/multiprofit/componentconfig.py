@@ -74,7 +74,8 @@ class EllipticalComponentConfig(ShapePriorConfig):
     """Config for an elliptically-symmetric component"""
 
     rho = pexConfig.ConfigField[ParameterConfig](doc="Rho parameter config")
-    size = pexConfig.ConfigField[ParameterConfig](doc="Size parameter config")
+    size_x = pexConfig.ConfigField[ParameterConfig](doc="x-axis size parameter config")
+    size_y = pexConfig.ConfigField[ParameterConfig](doc="y-axis size parameter config")
 
     @abstractmethod
     def make_component(
@@ -127,10 +128,10 @@ class GaussianConfig(EllipticalComponentConfig):
         transform_rho = transforms_ref["logit_rho"]
         ellipse = g2f.GaussianParametricEllipse(
             sigma_x=g2f.SigmaXParameterD(
-                self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                self.size_x.value_initial, transform=transform_size, fixed=self.size_x.fixed
             ),
             sigma_y=g2f.SigmaYParameterD(
-                self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                self.size_y.value_initial, transform=transform_size, fixed=self.size_y.fixed
             ),
             rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
         )
@@ -198,10 +199,10 @@ class SersicConfig(EllipticalComponentConfig):
         if is_gaussian:
             ellipse = g2f.GaussianParametricEllipse(
                 sigma_x=g2f.SigmaXParameterD(
-                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                    self.size_x.value_initial, transform=transform_size, fixed=self.size_x.fixed
                 ),
                 sigma_y=g2f.SigmaYParameterD(
-                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                    self.size_y.value_initial, transform=transform_size, fixed=self.size_y.fixed
                 ),
                 rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
             )
@@ -213,10 +214,10 @@ class SersicConfig(EllipticalComponentConfig):
         else:
             ellipse = g2f.SersicParametricEllipse(
                 size_x=g2f.ReffXParameterD(
-                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                    self.size_x.value_initial, transform=transform_size, fixed=self.size_y.fixed
                 ),
                 size_y=g2f.ReffYParameterD(
-                    self.size.value_initial, transform=transform_size, fixed=self.size.fixed
+                    self.size_y.value_initial, transform=transform_size, fixed=self.size_y.fixed
                 ),
                 rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
             )

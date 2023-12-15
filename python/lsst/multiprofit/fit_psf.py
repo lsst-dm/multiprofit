@@ -72,8 +72,12 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
 
     gaussians = pexConfig.ConfigDictField(
         default={
-            "comp1": GaussianConfig(size=ParameterConfig(value_initial=1.5)),
-            "comp2": GaussianConfig(size=ParameterConfig(value_initial=3.0)),
+            "comp1": GaussianConfig(
+                size_x=ParameterConfig(value_initial=1.5), size_y=ParameterConfig(value_initial=1.5)
+            ),
+            "comp2": GaussianConfig(
+                size_x=ParameterConfig(value_initial=3.0), size_y=ParameterConfig(value_initial=3.0)
+            ),
         },
         doc="Gaussian components",
         itemtype=GaussianConfig,
@@ -273,7 +277,10 @@ class CatalogPsfFitter:
 
         n_gaussians = len(config.gaussians)
         priors = []
-        sigmas = [comp.size.value_initial for comp in config.gaussians.values()]
+        sigmas = [
+            np.linalg.norm((comp.size_x.value_initial, comp.size_y.value_initial))
+            for comp in config.gaussians.values()
+        ]
 
         model_source = make_psf_source(sigma_xs=sigmas)
         for idx, (comp, config_comp) in enumerate(zip(model_source.components, config.gaussians.values())):
@@ -432,7 +439,7 @@ class CatalogPsfFitter:
                 centroid.y_param.limits = limits_y
             ellipse = component.ellipse
             ellipse.sigma_x_param.limits = limits_x
-            ellipse.sigma_x_param.value = size_init
+            ellipse.sigma_x_param.value = config_gauss.size_x.value_initial
             ellipse.sigma_y_param.limits = limits_y
-            ellipse.sigma_y_param.value = size_init
-            ellipse.rho_param.value = 0
+            ellipse.sigma_y_param.value = config_gauss.size_y.value_initial
+            ellipse.rho_param.value = config_gauss.rho.value_initial
