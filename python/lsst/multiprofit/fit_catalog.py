@@ -20,8 +20,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
-import astropy.units as u
 from collections.abc import Iterable
+
+import astropy.units as u
 import lsst.pex.config as pexConfig
 import pydantic
 from pydantic.dataclasses import dataclass

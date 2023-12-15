@@ -7,40 +7,46 @@
 
 
 import os
+
 print(os.getcwd())
 
 
 # In[2]:
 
 
-# Import required packages
-from astropy.io.ascii import Csv
+import time
+from dataclasses import dataclass
+from typing import Any, Iterable, Mapping
+
 import astropy.io.fits as fits
-from astropy.coordinates import SkyCoord
 import astropy.table as apTab
 import astropy.visualization as apVis
-from astropy.wcs import WCS
-from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
-from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
-from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig, CatalogPsfFitter
-from lsst.multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
-from lsst.multiprofit.plots import plot_model_rgb
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import time
-from typing import Any, Iterable, Mapping
+from astropy.coordinates import SkyCoord
 
+# Import required packages
+from astropy.io.ascii import Csv
+from astropy.wcs import WCS
+from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
+from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
+from lsst.multiprofit.fit_source import (
+    CatalogExposureSourcesABC,
+    CatalogSourceFitterABC,
+    CatalogSourceFitterConfig,
+)
+from lsst.multiprofit.plots import plot_model_rgb
 
 # In[3]:
 
 
 # Define settings
-band_ref = 'i'
-bands = {'i': 0.87108833, 'r': 0.97288654, 'g': 1.44564678}
-band_multi = ''.join(bands)
+band_ref = "i"
+bands = {"i": 0.87108833, "r": 0.97288654, "g": 1.44564678}
+band_multi = "".join(bands)
 
 # This is in the WCS, but may as well keep full precision
 scale_pixel_hsc = 0.168
@@ -50,18 +56,29 @@ hdu_img, hdu_mask, hdu_var = 1, 2, 3
 
 # Masks
 bad_masks = (
-    'BAD', 'SAT', 'INTRP', 'CR', 'EDGE', 'CLIPPED', 'NO_DATA', 'CROSSTALK',
-    'NO_DATA', 'UNMASKEDNAN', 'SUSPECT', 'REJECTED', 'SENSOR_EDGE',
+    "BAD",
+    "SAT",
+    "INTRP",
+    "CR",
+    "EDGE",
+    "CLIPPED",
+    "NO_DATA",
+    "CROSSTALK",
+    "NO_DATA",
+    "UNMASKEDNAN",
+    "SUSPECT",
+    "REJECTED",
+    "SENSOR_EDGE",
 )
-maskbits = tuple(f'MP_{b}' for b in bad_masks)
+maskbits = tuple(f"MP_{b}" for b in bad_masks)
 
 # A pre-defined bitmask to exclude regions with low SN
 read_mask_highsn = True
 write_mask_highsn = False
 
 # matplotlib settings
-mpl.rcParams['image.origin'] = 'lower'
-mpl.rcParams['figure.dpi'] = 120
+mpl.rcParams["image.origin"] = "lower"
+mpl.rcParams["figure.dpi"] = 120
 
 
 # In[4]:
@@ -88,30 +105,30 @@ WHERE isprimary AND conesearch(coord, 222.51551376, 0.09749601, 35.64)
 AND (r_kronflux_mag < 26 OR i_kronflux_mag < 26) AND NOT i_kronflux_flag AND NOT r_kronflux_flag;
 """
 cat = Csv()
-cat.header.splitter.escapechar = '#'
-cat = cat.read('fithsc_src.csv')
+cat.header.splitter.escapechar = "#"
+cat = cat.read("fithsc_src.csv")
 
-prefix = '222.51551376,0.09749601_'
-prefix_img = f'{prefix}300x300_'
+prefix = "222.51551376,0.09749601_"
+prefix_img = f"{prefix}300x300_"
 
 # Read data, acquired with:
 # https://github.com/taranu/astro_imaging/blob/4d5a8e095e6a3944f1fbc19318b1dbc22b22d9ca/examples/HSC.ipynb
 # (with get_mask=True, get_variance=True,)
 images, psfs = {}, {}
 for band in bands:
-    images[band] = fits.open(f'{prefix_img}{band}.fits')
-    psfs[band] = fits.open(f'{prefix}{band}_psf.fits')
+    images[band] = fits.open(f"{prefix_img}{band}.fits")
+    psfs[band] = fits.open(f"{prefix}{band}_psf.fits")
 
 wcs = WCS(images[band_ref][hdu_img])
-cat['x'], cat['y'] = wcs.world_to_pixel(SkyCoord(cat['ra'], cat['dec'], unit='deg'))
+cat["x"], cat["y"] = wcs.world_to_pixel(SkyCoord(cat["ra"], cat["dec"], unit="deg"))
 
 
 # In[5]:
 
 
 # Plot image
-img_rgb = apVis.make_lupton_rgb(*[img[1].data*bands[band] for band, img in images.items()])
-plt.scatter(cat['x'], cat['y'], s=10, c='g', marker='x')
+img_rgb = apVis.make_lupton_rgb(*[img[1].data * bands[band] for band, img in images.items()])
+plt.scatter(cat["x"], cat["y"], s=10, c="g", marker="x")
 plt.imshow(img_rgb)
 plt.title("gri image with detected objects")
 plt.show()
@@ -121,35 +138,41 @@ plt.show()
 
 
 # Generate a rough mask around other sources
-bright = (cat['i_cmodel_mag'] < 23) | (cat['i_psfflux_mag'] < 23)
+bright = (cat["i_cmodel_mag"] < 23) | (cat["i_psfflux_mag"] < 23)
 
 img_ref = images[band_ref][hdu_img].data
 
 mask_inverse = np.ones(img_ref.shape, dtype=bool)
-y_cen, x_cen = (x/2. for x in img_ref.shape)
+y_cen, x_cen = (x / 2.0 for x in img_ref.shape)
 y, x = np.indices(img_ref.shape)
 
 idx_src_main, row_main = None, None
 
 sizes_override = {
-    42305088563206480: 8.,
+    42305088563206480: 8.0,
 }
 
 for src in cat[bright]:
-    id_src, x_src, y_src = (src[col] for col in ['object_id', 'x', 'y'])
+    id_src, x_src, y_src = (src[col] for col in ["object_id", "x", "y"])
     dist = np.hypot(x_src - x_cen, y_src - y_cen)
     if dist > 20:
         dists = np.hypot(y - y_src, x - x_src)
-        mag = np.nanmin([src['i_cmodel_mag'], src['r_cmodel_mag'], src['i_psfflux_mag'], src['r_psfflux_mag']])
+        mag = np.nanmin(
+            [src["i_cmodel_mag"], src["r_cmodel_mag"], src["i_psfflux_mag"], src["r_psfflux_mag"]]
+        )
         if (radius_mask := sizes_override.get(id_src)) is None:
-            radius_mask = 2*np.sqrt(
-                src[f'{band_ref}_sdssshape_shape11'] + src[f'{band_ref}_sdssshape_shape22']
-            )/scale_pixel_hsc
+            radius_mask = (
+                2
+                * np.sqrt(src[f"{band_ref}_sdssshape_shape11"] + src[f"{band_ref}_sdssshape_shape22"])
+                / scale_pixel_hsc
+            )
             if (radius_mask > 10) and (mag > 21):
                 radius_mask = 5
         mask_inverse[dists < radius_mask] = 0
-        print(f'Masking src=({id_src} at {x_src:.3f}, {y_src:.3f}) dist={dist:.3f}'
-              f', mag={mag:.3f}, radius_mask={radius_mask:.3f}')
+        print(
+            f"Masking src=({id_src} at {x_src:.3f}, {y_src:.3f}) dist={dist:.3f}"
+            f", mag={mag:.3f}, radius_mask={radius_mask:.3f}"
+        )
     elif dist < 2:
         idx_src_main = id_src
         row_main = src
@@ -158,7 +181,7 @@ for src in cat[bright]:
 tab_row_main = apTab.Table(row_main)
 
 if read_mask_highsn:
-    mask_highsn = np.load(f'{prefix_img}mask_inv_highsn.npz')['mask_inv']
+    mask_highsn = np.load(f"{prefix_img}mask_inv_highsn.npz")["mask_inv"]
     mask_inverse *= mask_highsn
 
 plt.imshow(mask_inverse)
@@ -181,9 +204,10 @@ class CatalogExposurePsf(CatalogExposurePsfABC):
     def get_psf_image(self, source: apTab.Row | Mapping[str, Any]) -> np.array:
         return self.img
 
-config_psf = CatalogPsfFitterConfig(column_id='object_id')
+
+config_psf = CatalogPsfFitterConfig(column_id="object_id")
 fitter_psf = CatalogPsfFitter()
-catalog_psf = apTab.Table({'object_id': [tab_row_main['object_id']]})
+catalog_psf = apTab.Table({"object_id": [tab_row_main["object_id"]]})
 results_psf = {}
 
 for band, psf_file in psfs.items():
@@ -201,20 +225,20 @@ for band, psf_file in psfs.items():
 
 # Set fit configs
 config_source = CatalogSourceFitterConfig(
-    column_id = 'object_id',
+    column_id="object_id",
     n_pointsources=1,
     sersics={
-        'disk': SersicConfig(
-            sersicindex=SersicIndexConfig(value_initial=1., fixed=True),
+        "disk": SersicConfig(
+            sersicindex=SersicIndexConfig(value_initial=1.0, fixed=True),
             prior_size_stddev=0.3,
             prior_axrat_stddev=0.2,
         ),
-        'bulge': SersicConfig(
-            sersicindex=SersicIndexConfig(value_initial=4., fixed=True),
+        "bulge": SersicConfig(
+            sersicindex=SersicIndexConfig(value_initial=4.0, fixed=True),
             prior_size_stddev=0.3,
             prior_axrat_stddev=0.2,
         ),
-    }
+    },
 )
 
 
@@ -234,7 +258,7 @@ class CatalogExposureSources(CatalogExposureSourcesABC):
 
     def get_catalog(self) -> Iterable:
         return self.table_psf_fits
-    
+
     def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
         return self.config_psf.rebuild_psfmodel(params)
 
@@ -247,7 +271,7 @@ class CatalogSourceFitter(CatalogSourceFitterABC):
     band: str
     scale_pixel: float
     wcs_ref: WCS
-    
+
     def initialize_model(
         self,
         model: g2f.Model,
@@ -255,13 +279,15 @@ class CatalogSourceFitter(CatalogSourceFitterABC):
         limits_x: g2f.LimitsD = None,
         limits_y: g2f.LimitsD = None,
     ) -> None:
-        x, y = source['x'], source['y']
-        scale_sq = self.scale_pixel**(-2)
-        ellipse = g2.Ellipse(g2.Covariance(
-            sigma_x_sq=source[f'{band}_sdssshape_shape11']*scale_sq,
-            sigma_y_sq=source[f'{band}_sdssshape_shape22']*scale_sq,
-            cov_xy=source[f'{band}_sdssshape_shape12']*scale_sq,
-        ))
+        x, y = source["x"], source["y"]
+        scale_sq = self.scale_pixel ** (-2)
+        ellipse = g2.Ellipse(
+            g2.Covariance(
+                sigma_x_sq=source[f"{band}_sdssshape_shape11"] * scale_sq,
+                sigma_y_sq=source[f"{band}_sdssshape_shape22"] * scale_sq,
+                cov_xy=source[f"{band}_sdssshape_shape12"] * scale_sq,
+            )
+        )
         values_init = {
             g2f.CentroidXParameterD: x,
             g2f.CentroidYParameterD: y,
@@ -306,12 +332,12 @@ for band in bands:
     # There are better ways to use bitmasks, but this will do
     header = data[hdu_mask].header
     bitmask = data[hdu_mask].data
-    mask = np.zeros_like(bitmask, dtype='bool')
+    mask = np.zeros_like(bitmask, dtype="bool")
     for bit in maskbits:
-        mask |= ((bitmask & 2**header[bit]) != 0)
+        mask |= (bitmask & 2 ** header[bit]) != 0
 
     mask = (mask == 0) & mask_inverse
-    sigma_inv = 1.0/np.sqrt(data[hdu_var].data)
+    sigma_inv = 1.0 / np.sqrt(data[hdu_var].data)
     sigma_inv[mask != 1] = 0
 
     observation = g2f.Observation(
@@ -369,9 +395,9 @@ model, data, *_ = config_source.make_model_data(idx_source=0, catexps=list(catex
 params = list({p: None for p in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))}.keys())
 result_multi_row = dict(result_multi[0])
 # This is the last column before fit params
-idx_last = next(idx for idx, column in enumerate(result_multi_row.keys()) if column == 'mpf_unknown_flag')
+idx_last = next(idx for idx, column in enumerate(result_multi_row.keys()) if column == "mpf_unknown_flag")
 # Set params to best fit values
-for param, (column, value) in zip(params, list(result_multi_row.items())[idx_last+1:]):
+for param, (column, value) in zip(params, list(result_multi_row.items())[idx_last + 1 :]):
     param.value = value
 model.setup_evaluators(model.EvaluatorMode.loglike_image)
 # Print the loglikelihoods, which are from the data and end with the (sum of all) priors
@@ -380,34 +406,36 @@ print(f"{loglikes=}")
 
 
 # ### Multiband Residuals
-# 
+#
 # What's with the structure in the residuals? Most broadly, a point source + exponential disk + deVauc bulge model is totally inadequate for this galaxy for several possible reasons:
-# 
+#
 # 1. The disk isn't exactly exponential (n=1)
 # 2. The disk has colour gradients not accounted for in this model*
 # 3. If the galaxy even has a bulge, it's very weak and def. not a deVaucouleurs (n=4) profile; it may be an exponential "pseudobulge"
-# 
+#
 # \*MultiProFit can do more general Gaussian mixture models (linear or non-linear), which may be explored in a future iteration of this notebook, but these are generally do not improve the accuracy of photometry for smaller/fainter galaxies.
-# 
+#
 # Note that the two scalings of the residual plots (98%ile and +/- 20 sigma) end up looking very similar.
-# 
+#
 
 # In[14]:
 
 
 # Make some basic plots
 _, _, _, _, mask_inv_highsn = plot_model_rgb(
-    model, weights=bands, high_sn_threshold=0.2 if write_mask_highsn else None,
+    model,
+    weights=bands,
+    high_sn_threshold=0.2 if write_mask_highsn else None,
 )
 plt.show()
 
 # Write the high SN bitmask to a compressed, bitpacked file
 if write_mask_highsn:
     plt.figure()
-    plt.imshow(mask_highsn, cmap='gray')
+    plt.imshow(mask_highsn, cmap="gray")
     plt.show()
-    packed = np.packbits(mask_inv_highsn, bitorder='little')
-    np.savez_compressed(f'{prefix_img}mask_inv_highsn.npz', mask_inv=mask_highsn)
+    packed = np.packbits(mask_inv_highsn, bitorder="little")
+    np.savez_compressed(f"{prefix_img}mask_inv_highsn.npz", mask_inv=mask_highsn)
 
 # TODO: Plotting functions will be refactored from old MPF
 # Missing features include colour residual images
@@ -415,21 +443,21 @@ if write_mask_highsn:
 
 
 # ### More exercises for the reader
-# 
+#
 # These are of the sort that the author hasn't gotten around to yet because they're far from trivial. Try:
-# 
+#
 # 0. Use the WCS to compute ra, dec and errors thereof.
 # Hint: override CatalogSourceFitter.get_model_radec
-# 
+#
 # 1. Replace the real data with simulated data.
 # Make new observations using model.evaluate and add noise based on the variance maps.
 # Try fitting again and see how well results converge depending on the initialization scheme.
-# 
+#
 # 2. Fit every other source individually.
 # Try subtracting the best-fit galaxy model from above first.
 # Hint: get_source_observation should be redefined to return a smaller postage stamp around the nominal centroid.
 # Pass the full catalog (excluding the central galaxy) to catalog_multi.
-# 
+#
 # 3. Fit all sources simultaneously.
 # Redefine CatalogFitterConfig.make_model_data to make a model with multiple sources, using the catexp catalogs
 # initialize_model will no longer need to do anything

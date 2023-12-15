@@ -20,12 +20,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
+import numpy as np
+import pytest
 from lsst.multiprofit.componentconfig import (
     GaussianConfig,
-    init_component,
     ParameterConfig,
     SersicConfig,
     SersicIndexConfig,
+    init_component,
 )
 from lsst.multiprofit.fit_bootstrap_model import (
     CatalogExposurePsfBootstrap,
@@ -37,8 +39,6 @@ from lsst.multiprofit.fit_source import CatalogSourceFitterConfig
 from lsst.multiprofit.modeller import ModelFitConfig
 from lsst.multiprofit.plots import ErrorValues, plot_catalog_bootstrap, plot_loglike
 from lsst.multiprofit.utils import get_params_uniq
-import numpy as np
-import pytest
 
 channels = (g2f.Channel.get("g"), g2f.Channel.get("r"), g2f.Channel.get("i"))
 shape_img = (23, 27)
@@ -55,7 +55,12 @@ plot = False
 @pytest.fixture(scope="module")
 def config_psf():
     return CatalogPsfFitterConfig(
-        gaussians={"comp1": GaussianConfig(size=ParameterConfig(value_initial=sigma_psf))},
+        gaussians={
+            "comp1": GaussianConfig(
+                size_x=ParameterConfig(value_initial=sigma_psf),
+                size_y=ParameterConfig(value_initial=sigma_psf),
+            )
+        },
     )
 
 

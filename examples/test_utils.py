@@ -19,17 +19,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import math
+import timeit
+from importlib.util import find_spec
+from typing import Iterable
+
 import galsim as gs
 import gauss2d as g2
 import gauss2d.fit as g2f
-from importlib.util import find_spec
-from lsst.multiprofit.componentconfig import GaussianConfig, ParameterConfig, SersicConfig, SersicIndexConfig
-from lsst.multiprofit.utils import get_params_uniq
-import math
 import matplotlib.pyplot as plt
 import numpy as np
-import timeit
-from typing import Iterable
+from lsst.multiprofit.componentconfig import GaussianConfig, ParameterConfig, SersicConfig, SersicIndexConfig
+from lsst.multiprofit.utils import get_params_uniq
 
 names_params_ellipse = ["sigma_x", "sigma_y", "rho"]
 names_params_ellipse_psf = ["psf_" + x for x in names_params_ellipse]
@@ -547,9 +548,9 @@ def mgsersic_test(
         is_exp = nser == 1
         model = "lux" if is_exp else ("luv" if nser == 4 else None)
         if model:
-            from lsst.shapelet import RadialProfile
-            from lsst.afw.geom.ellipses import Ellipse, Axes
+            from lsst.afw.geom.ellipses import Axes, Ellipse
             from lsst.geom import Point2D
+            from lsst.shapelet import RadialProfile
 
             basis = RadialProfile.get(model).getBasis(6 if is_exp else 8, 4 if is_exp else 8)
             xc, yc = xdim / 2.0 - 0.5, ydim / 2.0 - 0.5

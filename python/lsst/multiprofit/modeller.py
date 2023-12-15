@@ -19,23 +19,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import logging
+import time
 from abc import ABC, abstractmethod
+from typing import Any
+
 import gauss2d as g2
 import gauss2d.fit as g2f
-import logging
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
-from pydantic.dataclasses import dataclass
 import scipy.optimize as spopt
-import time
-from typing import Any
+from pydantic.dataclasses import dataclass
 
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
     # TODO: try importlib.util.find_spec
-    import fastnnls # noqa
+    import fastnnls  # noqa
 
     has_fastnnls = True
 except ImportError:
@@ -43,8 +44,16 @@ except ImportError:
 
 
 __all__ = [
-    "InvalidProposalError", "fitmethods_linear", "LinearGaussians", "make_image_gaussians",
-    "make_psfmodel_null", "FitInputsBase", "FitInputsDummy", "ModelFitConfig", "FitResult", "Modeller"
+    "InvalidProposalError",
+    "fitmethods_linear",
+    "LinearGaussians",
+    "make_image_gaussians",
+    "make_psfmodel_null",
+    "FitInputsBase",
+    "FitInputsDummy",
+    "ModelFitConfig",
+    "FitResult",
+    "Modeller",
 ]
 
 

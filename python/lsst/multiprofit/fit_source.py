@@ -19,17 +19,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from abc import ABC, abstractmethod
-import astropy
-from astropy.table import Table
-import astropy.units as u
-from dataclasses import dataclass, field
 import logging
-import lsst.pex.config as pexConfig
-import gauss2d.fit as g2f
-import numpy as np
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence, Type
+
+import astropy
+import astropy.units as u
+import gauss2d.fit as g2f
+import lsst.pex.config as pexConfig
+import numpy as np
+from astropy.table import Table
 
 from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
@@ -219,7 +220,8 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                 for band in bands:
                     columns_comp.append(
                         ColumnInfo(
-                            key=f"{prefix_comp}{band}_flux{suffix}", dtype="f8",
+                            key=f"{prefix_comp}{band}_flux{suffix}",
+                            dtype="f8",
                             unit=u.Unit(self.unit_flux) if self.unit_flux else None,
                         )
                     )
@@ -501,10 +503,10 @@ class CatalogSourceFitterABC(ABC):
                         if plot:
                             errors_plot = np.clip(errors, 0, 1000)
                             errors_plot[~np.isfinite(errors_plot)] = 0
-                            from .plots import plot_loglike, ErrorValues
+                            from .plots import ErrorValues, plot_loglike
 
                             try:
-                                plot_loglike(model, errors={'err': ErrorValues(values=errors_plot)})
+                                plot_loglike(model, errors={"err": ErrorValues(values=errors_plot)})
                             except Exception:
                                 for param in params:
                                     param.fixed = False
@@ -542,8 +544,9 @@ class CatalogSourceFitterABC(ABC):
                     logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with known exception={e}")
                 else:
                     row[f"{prefix}unknown_flag"] = True
-                    logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}",
-                                exc_info=1)
+                    logger.info(
+                        f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}", exc_info=1
+                    )
         return results
 
     def get_channels(

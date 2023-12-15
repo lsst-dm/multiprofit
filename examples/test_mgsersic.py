@@ -1,6 +1,7 @@
+from timeit import default_timer as timer
+
 import numpy as np
 from test_utils import mgsersic_test
-from timeit import default_timer as timer
 
 start = timer()
 reffs = [2.0, 5.0]

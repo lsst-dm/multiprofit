@@ -19,26 +19,27 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import astropy
 from dataclasses import dataclass
 from functools import cached_property
+from typing import Any, Mapping
+
+import astropy
 import gauss2d as g2
 import gauss2d.fit as g2f
 import numpy as np
-from typing import Any, Mapping
 
-from .config import set_config_from_dict
 from .componentconfig import init_component
+from .config import set_config_from_dict
 from .fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig
-from .fit_source import (
-    CatalogExposureSourcesABC,
-    CatalogSourceFitterABC,
-    CatalogSourceFitterConfig,
-)
+from .fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
 from .utils import get_params_uniq
 
-__all__ = ["SourceCatalogBootstrap", "CatalogExposurePsfBootstrap", "CatalogExposureSourcesBootstrap",
-           "CatalogSourceFitterBootstrap"]
+__all__ = [
+    "SourceCatalogBootstrap",
+    "CatalogExposurePsfBootstrap",
+    "CatalogExposureSourcesBootstrap",
+    "CatalogSourceFitterBootstrap",
+]
 
 
 @dataclass(kw_only=True, frozen=True)

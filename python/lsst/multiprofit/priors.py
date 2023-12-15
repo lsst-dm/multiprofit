@@ -20,8 +20,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
-import numpy as np
 import lsst.pex.config as pexConfig
+import numpy as np
 
 from .transforms import transforms_ref
 

@@ -1,7 +1,7 @@
 import gauss2d.fit as g2f
-from lsst.multiprofit.plots import plot_sersicmix_interp
 import matplotlib.pyplot as plt
 import numpy as np
+from lsst.multiprofit.plots import plot_sersicmix_interp
 from scipy.interpolate import CubicSpline
 
 interps = {

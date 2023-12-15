@@ -20,9 +20,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import abstractmethod
+from typing import Iterable
+
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
-from typing import Iterable
 
 from .priors import ShapePriorConfig
 from .transforms import transforms_ref
@@ -127,7 +128,7 @@ class GaussianConfig(EllipticalComponentConfig):
         label_integral: str | None = None,
     ) -> g2f.Component:
         if label_integral is None:
-            label_integral = f"Gaussian {{channel.name}}-band"
+            label_integral = "Gaussian {{channel.name}}-band"
         transform_flux = transforms_ref["log10"]
         transform_size = transforms_ref["log10"]
         transform_rho = transforms_ref["logit_rho"]

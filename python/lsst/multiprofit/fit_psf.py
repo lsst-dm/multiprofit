@@ -19,21 +19,22 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from abc import abstractmethod
-import astropy
-from astropy.table import Table
-import astropy.units as u
 import logging
-import lsst.pex.config as pexConfig
+import time
+from abc import abstractmethod
+from typing import Any, Mapping, Type
+
+import astropy
+import astropy.units as u
 import gauss2d as g2
 import gauss2d.fit as g2f
+import lsst.pex.config as pexConfig
 import numpy as np
-import time
-from typing import Any, Mapping, Type
+from astropy.table import Table
 
 from .componentconfig import GaussianConfig, ParameterConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
-from .modeller import FitInputsDummy, LinearGaussians, make_psfmodel_null, Modeller
+from .modeller import FitInputsDummy, LinearGaussians, Modeller, make_psfmodel_null
 from .psfmodel_utils import make_psf_source
 from .utils import get_params_uniq
 
@@ -299,9 +300,9 @@ class CatalogPsfFitter:
         flux_total = flux_total[0]
         # TODO: Remove isinstance when channel filtering is fixed
         fluxfracs = tuple(
-            x
-            for x in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
-            if isinstance(x, g2f.ProperFractionParameterD)
+            param
+            for param in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
+            if isinstance(param, g2f.ProperFractionParameterD)
         )
         if len(fluxfracs) != (n_gaussians - 1):
             raise RuntimeError(f"len({fluxfracs=}) != {(n_gaussians - 1)=}; PSF model is badly-formed")
@@ -430,7 +431,6 @@ class CatalogPsfFitter:
             limits_y = g2f.LimitsD(0, n_rows)
 
         for component, config_gauss in zip(model.sources[0].components, config.gaussians.values()):
-            size_init = config_gauss.size.value_initial
             centroid = component.centroid
             if centroid not in centroids:
                 centroid.x_param.value = cen_x
