@@ -104,3 +104,18 @@ max-doc-length = 79
 
 [tool.ruff.pydocstyle]
 convention = "numpy"
+
+[tool.numpydoc_validation]
+checks = [
+    "all",  # All except the rules listed below.
+    "ES01",  # No extended summary required.
+    "EX01",  # Example section.
+    "GL01",  # Summary text can start on same line as """
+    "GL08",  # Do not require docstring.
+    "PR04",  # numpydoc parameter types are redundant with type hints
+    "RT01",  # Unfortunately our @property trigger this.
+    "RT02",  # Does not want named return value. DM style says we do.
+    "SA01",  # See Also section.
+    "SS05",  # pydocstyle is better at finding infinitive verb.
+    "SS06",  # Summary can go into second line.
+]
