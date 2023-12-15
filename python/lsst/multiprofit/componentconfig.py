@@ -22,6 +22,7 @@
 from abc import abstractmethod
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
+from typing import Iterable
 
 from .priors import ShapePriorConfig
 from .transforms import transforms_ref
@@ -37,7 +38,11 @@ parameter_names = {
 }
 
 __all__ = [
-    "init_component", "ParameterConfig", "EllipticalComponentConfig", "GaussianConfig", "SersicIndexConfig",
+    "init_component",
+    "ParameterConfig",
+    "EllipticalComponentConfig",
+    "GaussianConfig",
+    "SersicIndexConfig",
     "SersicConfig",
 ]
 
@@ -140,7 +145,15 @@ class GaussianConfig(EllipticalComponentConfig):
             centroid=centroid,
             ellipse=ellipse,
             integral=g2f.LinearIntegralModel(
-                [(channel, g2f.IntegralParameterD(1.0, transform=transform_flux)) for channel in channels]
+                [
+                    (
+                        channel,
+                        g2f.IntegralParameterD(
+                            1.0, transform=transform_flux, label=label_integral.format(channel=channel)
+                        ),
+                    )
+                    for channel in channels
+                ]
             ),
         ), ([] if prior is None else [prior])
 
@@ -177,7 +190,10 @@ class SersicConfig(EllipticalComponentConfig):
         )
 
     def make_component(
-        self, centroid: g2f.CentroidParameters, channels: list[g2f.Channel], label_integral: str | None = None
+        self,
+        centroid: g2f.CentroidParameters,
+        channels: Iterable[g2f.Channel],
+        label_integral: str | None = None,
     ) -> tuple[g2f.Component, list[g2f.Prior]]:
         is_gaussian = self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed
         if label_integral is None:
