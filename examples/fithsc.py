@@ -3,34 +3,21 @@
 
 # # Fitting HSC data in multiband mode using MultiProFit
 
-# In[ ]:
+# In[1]:
 
 
-import os
-
-print(os.getcwd())
-
-
-# In[2]:
-
-
+# Import required packages
 import time
-from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from astropy.coordinates import SkyCoord
+from astropy.io.ascii import Csv
 import astropy.io.fits as fits
 import astropy.table as apTab
 import astropy.visualization as apVis
+from astropy.wcs import WCS
 import gauss2d as g2
 import gauss2d.fit as g2f
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import numpy as np
-from astropy.coordinates import SkyCoord
-
-# Import required packages
-from astropy.io.ascii import Csv
-from astropy.wcs import WCS
 from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
 from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
 from lsst.multiprofit.fit_source import (
@@ -39,14 +26,20 @@ from lsst.multiprofit.fit_source import (
     CatalogSourceFitterConfig,
 )
 from lsst.multiprofit.plots import plot_model_rgb
+from lsst.multiprofit.utils import ArbitraryAllowedConfig
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+import pydantic
+from pydantic.dataclasses import dataclass
 
-# In[3]:
+# In[2]:
 
 
 # Define settings
-band_ref = "i"
-bands = {"i": 0.87108833, "r": 0.97288654, "g": 1.44564678}
-band_multi = "".join(bands)
+band_ref = 'i'
+bands = {'i': 0.87108833, 'r': 0.97288654, 'g': 1.44564678}
+band_multi = ''.join(bands)
 
 # This is in the WCS, but may as well keep full precision
 scale_pixel_hsc = 0.168
@@ -56,32 +49,21 @@ hdu_img, hdu_mask, hdu_var = 1, 2, 3
 
 # Masks
 bad_masks = (
-    "BAD",
-    "SAT",
-    "INTRP",
-    "CR",
-    "EDGE",
-    "CLIPPED",
-    "NO_DATA",
-    "CROSSTALK",
-    "NO_DATA",
-    "UNMASKEDNAN",
-    "SUSPECT",
-    "REJECTED",
-    "SENSOR_EDGE",
+    'BAD', 'SAT', 'INTRP', 'CR', 'EDGE', 'CLIPPED', 'NO_DATA', 'CROSSTALK',
+    'NO_DATA', 'UNMASKEDNAN', 'SUSPECT', 'REJECTED', 'SENSOR_EDGE',
 )
-maskbits = tuple(f"MP_{b}" for b in bad_masks)
+maskbits = tuple(f'MP_{b}' for b in bad_masks)
 
 # A pre-defined bitmask to exclude regions with low SN
 read_mask_highsn = True
 write_mask_highsn = False
 
 # matplotlib settings
-mpl.rcParams["image.origin"] = "lower"
-mpl.rcParams["figure.dpi"] = 120
+mpl.rcParams['image.origin'] = 'lower'
+mpl.rcParams['figure.dpi'] = 120
 
 
-# In[4]:
+# In[3]:
 
 
 # Define source to fit
@@ -105,74 +87,68 @@ WHERE isprimary AND conesearch(coord, 222.51551376, 0.09749601, 35.64)
 AND (r_kronflux_mag < 26 OR i_kronflux_mag < 26) AND NOT i_kronflux_flag AND NOT r_kronflux_flag;
 """
 cat = Csv()
-cat.header.splitter.escapechar = "#"
-cat = cat.read("fithsc_src.csv")
+cat.header.splitter.escapechar = '#'
+cat = cat.read('fithsc_src.csv')
 
-prefix = "222.51551376,0.09749601_"
-prefix_img = f"{prefix}300x300_"
+prefix = '222.51551376,0.09749601_'
+prefix_img = f'{prefix}300x300_'
 
 # Read data, acquired with:
 # https://github.com/taranu/astro_imaging/blob/4d5a8e095e6a3944f1fbc19318b1dbc22b22d9ca/examples/HSC.ipynb
 # (with get_mask=True, get_variance=True,)
 images, psfs = {}, {}
 for band in bands:
-    images[band] = fits.open(f"{prefix_img}{band}.fits")
-    psfs[band] = fits.open(f"{prefix}{band}_psf.fits")
+    images[band] = fits.open(f'{prefix_img}{band}.fits')
+    psfs[band] = fits.open(f'{prefix}{band}_psf.fits')
 
 wcs = WCS(images[band_ref][hdu_img])
-cat["x"], cat["y"] = wcs.world_to_pixel(SkyCoord(cat["ra"], cat["dec"], unit="deg"))
+cat['x'], cat['y'] = wcs.world_to_pixel(SkyCoord(cat['ra'], cat['dec'], unit='deg'))
 
 
-# In[5]:
+# In[4]:
 
 
 # Plot image
-img_rgb = apVis.make_lupton_rgb(*[img[1].data * bands[band] for band, img in images.items()])
-plt.scatter(cat["x"], cat["y"], s=10, c="g", marker="x")
+img_rgb = apVis.make_lupton_rgb(*[img[1].data*bands[band] for band, img in images.items()])
+plt.scatter(cat['x'], cat['y'], s=10, c='g', marker='x')
 plt.imshow(img_rgb)
 plt.title("gri image with detected objects")
 plt.show()
 
 
-# In[6]:
+# In[5]:
 
 
 # Generate a rough mask around other sources
-bright = (cat["i_cmodel_mag"] < 23) | (cat["i_psfflux_mag"] < 23)
+bright = (cat['i_cmodel_mag'] < 23) | (cat['i_psfflux_mag'] < 23)
 
 img_ref = images[band_ref][hdu_img].data
 
 mask_inverse = np.ones(img_ref.shape, dtype=bool)
-y_cen, x_cen = (x / 2.0 for x in img_ref.shape)
+y_cen, x_cen = (x/2. for x in img_ref.shape)
 y, x = np.indices(img_ref.shape)
 
 idx_src_main, row_main = None, None
 
 sizes_override = {
-    42305088563206480: 8.0,
+    42305088563206480: 8.,
 }
 
 for src in cat[bright]:
-    id_src, x_src, y_src = (src[col] for col in ["object_id", "x", "y"])
+    id_src, x_src, y_src = (src[col] for col in ['object_id', 'x', 'y'])
     dist = np.hypot(x_src - x_cen, y_src - y_cen)
     if dist > 20:
         dists = np.hypot(y - y_src, x - x_src)
-        mag = np.nanmin(
-            [src["i_cmodel_mag"], src["r_cmodel_mag"], src["i_psfflux_mag"], src["r_psfflux_mag"]]
-        )
+        mag = np.nanmin([src['i_cmodel_mag'], src['r_cmodel_mag'], src['i_psfflux_mag'], src['r_psfflux_mag']])
         if (radius_mask := sizes_override.get(id_src)) is None:
-            radius_mask = (
-                2
-                * np.sqrt(src[f"{band_ref}_sdssshape_shape11"] + src[f"{band_ref}_sdssshape_shape22"])
-                / scale_pixel_hsc
-            )
+            radius_mask = 2*np.sqrt(
+                src[f'{band_ref}_sdssshape_shape11'] + src[f'{band_ref}_sdssshape_shape22']
+            )/scale_pixel_hsc
             if (radius_mask > 10) and (mag > 21):
                 radius_mask = 5
         mask_inverse[dists < radius_mask] = 0
-        print(
-            f"Masking src=({id_src} at {x_src:.3f}, {y_src:.3f}) dist={dist:.3f}"
-            f", mag={mag:.3f}, radius_mask={radius_mask:.3f}"
-        )
+        print(f'Masking src=({id_src} at {x_src:.3f}, {y_src:.3f}) dist={dist:.3f}'
+              f', mag={mag:.3f}, radius_mask={radius_mask:.3f}')
     elif dist < 2:
         idx_src_main = id_src
         row_main = src
@@ -181,7 +157,7 @@ for src in cat[bright]:
 tab_row_main = apTab.Table(row_main)
 
 if read_mask_highsn:
-    mask_highsn = np.load(f"{prefix_img}mask_inv_highsn.npz")["mask_inv"]
+    mask_highsn = np.load(f'{prefix_img}mask_inv_highsn.npz')['mask_inv']
     mask_inverse *= mask_highsn
 
 plt.imshow(mask_inverse)
@@ -189,14 +165,14 @@ plt.title("Fitting mask")
 plt.show()
 
 
-# In[7]:
+# In[6]:
 
 
 # Fit PSF
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogExposurePsf(CatalogExposurePsfABC):
-    catalog: apTab.Table
-    img: np.ndarray
+    catalog: apTab.Table = pydantic.Field(title="The detected object catalog")
+    img: np.ndarray = pydantic.Field(title="The PSF image")
 
     def get_catalog(self) -> Iterable:
         return self.catalog
@@ -204,10 +180,9 @@ class CatalogExposurePsf(CatalogExposurePsfABC):
     def get_psf_image(self, source: apTab.Row | Mapping[str, Any]) -> np.array:
         return self.img
 
-
-config_psf = CatalogPsfFitterConfig(column_id="object_id")
+config_psf = CatalogPsfFitterConfig(column_id='object_id')
 fitter_psf = CatalogPsfFitter()
-catalog_psf = apTab.Table({"object_id": [tab_row_main["object_id"]]})
+catalog_psf = apTab.Table({'object_id': [tab_row_main['object_id']]})
 results_psf = {}
 
 for band, psf_file in psfs.items():
@@ -220,37 +195,37 @@ for band, psf_file in psfs.items():
     print(dict(result[0]))
 
 
-# In[8]:
+# In[7]:
 
 
 # Set fit configs
 config_source = CatalogSourceFitterConfig(
-    column_id="object_id",
+    column_id = 'object_id',
     n_pointsources=1,
     sersics={
-        "disk": SersicConfig(
-            sersicindex=SersicIndexConfig(value_initial=1.0, fixed=True),
+        'disk': SersicConfig(
+            sersicindex=SersicIndexConfig(value_initial=1., fixed=True),
             prior_size_stddev=0.3,
             prior_axrat_stddev=0.2,
         ),
-        "bulge": SersicConfig(
-            sersicindex=SersicIndexConfig(value_initial=4.0, fixed=True),
+        'bulge': SersicConfig(
+            sersicindex=SersicIndexConfig(value_initial=4., fixed=True),
             prior_size_stddev=0.3,
             prior_axrat_stddev=0.2,
         ),
-    },
+    }
 )
 
 
-# In[9]:
+# In[8]:
 
 
 # Setup exposure with band-specific image, mask and variance
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogExposureSources(CatalogExposureSourcesABC):
-    config_psf: CatalogPsfFitterConfig
-    observation: g2f.Observation
-    table_psf_fits: apTab.Table
+    config_psf: CatalogPsfFitterConfig = pydantic.Field(title="The PSF fit config")
+    observation: g2f.Observation = pydantic.Field(title="The observation to fit")
+    table_psf_fits: apTab.Table = pydantic.Field(title="The table of PSF fit parameters")
 
     @property
     def channel(self) -> g2f.Channel:
@@ -266,11 +241,11 @@ class CatalogExposureSources(CatalogExposureSourcesABC):
         return self.observation
 
 
-@dataclass(kw_only=True)
+@dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogSourceFitter(CatalogSourceFitterABC):
-    band: str
-    scale_pixel: float
-    wcs_ref: WCS
+    band: str = pydantic.Field(title="The reference band for initialization and priors")
+    scale_pixel: float = pydantic.Field(title="The pixel scale in arcsec")
+    wcs_ref: WCS = pydantic.Field(title="The WCS for the coadded image")
 
     def initialize_model(
         self,
@@ -279,15 +254,13 @@ class CatalogSourceFitter(CatalogSourceFitterABC):
         limits_x: g2f.LimitsD = None,
         limits_y: g2f.LimitsD = None,
     ) -> None:
-        x, y = source["x"], source["y"]
-        scale_sq = self.scale_pixel ** (-2)
-        ellipse = g2.Ellipse(
-            g2.Covariance(
-                sigma_x_sq=source[f"{band}_sdssshape_shape11"] * scale_sq,
-                sigma_y_sq=source[f"{band}_sdssshape_shape22"] * scale_sq,
-                cov_xy=source[f"{band}_sdssshape_shape12"] * scale_sq,
-            )
-        )
+        x, y = source['x'], source['y']
+        scale_sq = self.scale_pixel**(-2)
+        ellipse = g2.Ellipse(g2.Covariance(
+            sigma_x_sq=source[f'{band}_sdssshape_shape11']*scale_sq,
+            sigma_y_sq=source[f'{band}_sdssshape_shape22']*scale_sq,
+            cov_xy=source[f'{band}_sdssshape_shape12']*scale_sq,
+        ))
         values_init = {
             g2f.CentroidXParameterD: x,
             g2f.CentroidYParameterD: y,
@@ -318,7 +291,7 @@ class CatalogSourceFitter(CatalogSourceFitterABC):
                 prior.prior_size.mean_parameter.value = g2.EllipseMajor(ellipse).r_major
 
 
-# In[10]:
+# In[9]:
 
 
 # Set up Fitter, Observations and CatalogExposureSources
@@ -332,12 +305,12 @@ for band in bands:
     # There are better ways to use bitmasks, but this will do
     header = data[hdu_mask].header
     bitmask = data[hdu_mask].data
-    mask = np.zeros_like(bitmask, dtype="bool")
+    mask = np.zeros_like(bitmask, dtype='bool')
     for bit in maskbits:
-        mask |= (bitmask & 2 ** header[bit]) != 0
+        mask |= ((bitmask & 2**header[bit]) != 0)
 
     mask = (mask == 0) & mask_inverse
-    sigma_inv = 1.0 / np.sqrt(data[hdu_var].data)
+    sigma_inv = 1.0/np.sqrt(data[hdu_var].data)
     sigma_inv[mask != 1] = 0
 
     observation = g2f.Observation(
@@ -354,7 +327,7 @@ for band in bands:
     )
 
 
-# In[11]:
+# In[10]:
 
 
 # Now do the multi-band fit
@@ -369,7 +342,7 @@ print(f"Fit {','.join(bands.keys())}-band bulge-disk model in {t_end - t_start:.
 print(dict(result_multi[0]))
 
 
-# In[12]:
+# In[11]:
 
 
 # Fit in each band separately
@@ -387,7 +360,7 @@ for band, observation in bands.items():
     print(dict(result[0]))
 
 
-# In[13]:
+# In[12]:
 
 
 # Make a model for the best-fit params
@@ -395,9 +368,9 @@ model, data, *_ = config_source.make_model_data(idx_source=0, catexps=list(catex
 params = list({p: None for p in model.parameters(paramfilter=g2f.ParamFilter(fixed=False))}.keys())
 result_multi_row = dict(result_multi[0])
 # This is the last column before fit params
-idx_last = next(idx for idx, column in enumerate(result_multi_row.keys()) if column == "mpf_unknown_flag")
+idx_last = next(idx for idx, column in enumerate(result_multi_row.keys()) if column == 'mpf_unknown_flag')
 # Set params to best fit values
-for param, (column, value) in zip(params, list(result_multi_row.items())[idx_last + 1 :]):
+for param, (column, value) in zip(params, list(result_multi_row.items())[idx_last+1:]):
     param.value = value
 model.setup_evaluators(model.EvaluatorMode.loglike_image)
 # Print the loglikelihoods, which are from the data and end with the (sum of all) priors
@@ -418,24 +391,22 @@ print(f"{loglikes=}")
 # Note that the two scalings of the residual plots (98%ile and +/- 20 sigma) end up looking very similar.
 #
 
-# In[14]:
+# In[13]:
 
 
 # Make some basic plots
 _, _, _, _, mask_inv_highsn = plot_model_rgb(
-    model,
-    weights=bands,
-    high_sn_threshold=0.2 if write_mask_highsn else None,
+    model, weights=bands, high_sn_threshold=0.2 if write_mask_highsn else None,
 )
 plt.show()
 
 # Write the high SN bitmask to a compressed, bitpacked file
 if write_mask_highsn:
     plt.figure()
-    plt.imshow(mask_highsn, cmap="gray")
+    plt.imshow(mask_highsn, cmap='gray')
     plt.show()
-    packed = np.packbits(mask_inv_highsn, bitorder="little")
-    np.savez_compressed(f"{prefix_img}mask_inv_highsn.npz", mask_inv=mask_highsn)
+    packed = np.packbits(mask_inv_highsn, bitorder='little')
+    np.savez_compressed(f'{prefix_img}mask_inv_highsn.npz', mask_inv=mask_highsn)
 
 # TODO: Plotting functions will be refactored from old MPF
 # Missing features include colour residual images
