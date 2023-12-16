@@ -37,7 +37,7 @@ from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, Modeller
 from .transforms import transforms_ref
-from .utils import get_params_uniq
+from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 __all__ = ["CatalogExposureSourcesABC", "CatalogSourceFitterConfig", "CatalogSourceFitterABC"]
 
@@ -235,7 +235,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         return columns
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, frozen=True, config=ArbitraryAllowedConfig)
 class CatalogSourceFitterABC(ABC):
     """Fit a Gaussian mixture source model to an image with a PSF model.
 
@@ -245,11 +245,11 @@ class CatalogSourceFitterABC(ABC):
     generic unknown_flag failure column.
     """
 
-    errors_expected: dict[Type[Exception], str] = pydantic.field(
+    errors_expected: dict[Type[Exception], str] = pydantic.Field(
         default_factory=dict,
         title="A dictionary of Exceptions with the name of the flag column key to fill if raised.",
     )
-    modeller: Modeller = pydantic.field(
+    modeller: Modeller = pydantic.Field(
         default_factory=Modeller,
         title="A Modeller instance to use for fitting.",
     )

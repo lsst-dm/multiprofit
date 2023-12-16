@@ -29,13 +29,18 @@ __all__ = ["ArbitraryAllowedConfig", "get_params_uniq", "normalize"]
 
 
 class ArbitraryAllowedConfig:
-    """Pydantic config to allow arbitrary typed Fields.
-
-    Also disallows unused init kwargs.
-    """
+    """Pydantic config to allow arbitrary typed Fields."""
 
     arbitrary_types_allowed = True
+    # Disallow any extra kwargs
     extra = "forbid"
+
+
+class FrozenArbitraryAllowedConfig(ArbitraryAllowedConfig):
+    """Pydantic config to allow arbitrary typed Fields for frozen classes."""
+
+    # Needed to allow __post_init__ to add attrs to a frozen class
+    post_init_call = "after_validation"
 
 
 def get_params_uniq(parametric: g2f.Parametric, **kwargs: Any):

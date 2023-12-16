@@ -118,9 +118,16 @@ def test_fit_source(config_source_fit, table_psf_fits):
     # Have to do this here so that the model initializes its observation with
     # the extended component having the right size
     init_component(model_source.components[1], sigma_x=sigma_psf, sigma_y=sigma_psf, rho=0)
+    CatalogExposureSourcesBootstrap(
+        channel_name=channels[0].name,
+        config_fit=config_source_fit,
+        model_source=model_source,
+        table_psf_fits=table_psf_fits[channels[0].name],
+        n_sources=n_sources,
+    )
     catexps = tuple(
         CatalogExposureSourcesBootstrap(
-            channel=channel,
+            channel_name=channel.name,
             config_fit=config_source_fit,
             model_source=model_source,
             table_psf_fits=table_psf_fits[channel.name],
