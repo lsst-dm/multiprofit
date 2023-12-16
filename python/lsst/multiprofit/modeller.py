@@ -19,9 +19,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from abc import ABC, abstractmethod
 import logging
 import time
-from abc import ABC, abstractmethod
 from typing import Any
 
 import gauss2d as g2
@@ -29,8 +29,8 @@ import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
-import scipy.optimize as spopt
 from pydantic.dataclasses import dataclass
+import scipy.optimize as spopt
 
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 

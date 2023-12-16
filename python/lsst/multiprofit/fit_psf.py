@@ -19,18 +19,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from abc import abstractmethod
 import logging
 import time
-from abc import abstractmethod
 from typing import Any, Mapping, Type
 
 import astropy
+from astropy.table import Table
 import astropy.units as u
 import gauss2d as g2
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
-from astropy.table import Table
 
 from .componentconfig import GaussianConfig, ParameterConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo

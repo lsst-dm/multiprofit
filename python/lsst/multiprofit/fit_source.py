@@ -19,18 +19,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from abc import ABC, abstractmethod
 import logging
 import time
-from abc import ABC, abstractmethod
 from typing import Any, Mapping, Sequence, Type
 
 import astropy
+from astropy.table import Table
 import astropy.units as u
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
-from astropy.table import Table
 from pydantic.dataclasses import dataclass
 
 from .componentconfig import SersicConfig
