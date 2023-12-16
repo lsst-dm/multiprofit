@@ -42,7 +42,7 @@ __all__ = ["PsfRebuildFitFlagError", "CatalogExposurePsfABC", "CatalogPsfFitterC
 
 
 class PsfRebuildFitFlagError(RuntimeError):
-    """RuntimeError for when a PSF can't be rebuilt because the fit failed"""
+    """RuntimeError for when a PSF can't be rebuilt because the fit failed."""
 
 
 class CatalogExposurePsfABC(CatalogExposureABC):
@@ -59,6 +59,7 @@ class CatalogExposurePsfABC(CatalogExposureABC):
 
         Returns
         -------
+        psf
            The image of the PSF.
 
         Notes
@@ -130,7 +131,13 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         self,
         bands: list[str] = None,
     ) -> list[ColumnInfo]:
-        """Return the schema as an ordered list of columns."""
+        """Return the schema as an ordered list of columns.
+
+        Parameters
+        ----------
+        bands
+            The bands to add band-dependent columns for.
+        """
         prefix_band = ""
         if bands is not None:
             if len(bands) != 1:
@@ -246,19 +253,19 @@ class CatalogPsfFitter:
 
         Parameters
         ----------
-        catexp : `CatalogExposurePsfABC`
+        catexp
             An exposure to fit a model PSF at the position of all
             sources in the corresponding catalog.
-        config: `CatalogPsfFitterConfig`
+        config
             Configuration settings for fitting and output.
-        logger : `logging.Logger`
+        logger
             The logger. Defaults to calling `_getlogger`.
         **kwargs
             Additional keyword arguments to pass to self.modeller.
 
         Returns
         -------
-        catalog : `astropy.Table`
+        catalog
             A table with fit parameters for the PSF model at the location
             of each source.
         """
@@ -412,14 +419,16 @@ class CatalogPsfFitter:
 
         Parameters
         ----------
-        model : `gauss2d.fit.Model`
+        model
             The model object to initialize.
-        source : typing.Mapping[str, typing.Any]
+        config
+            The fitter config specifying the PSF order.
+        source
             A mapping with fields expected to be populated in the
             corresponding source catalog for initialization.
-        limits_x : `gauss2d.fit.LimitsD`
+        limits_x
             Hard limits for the source's x centroid.
-        limits_y : `gauss2d.fit.LimitsD`
+        limits_y
             Hard limits for the source's y centroid.
         """
         n_rows, n_cols = model.data[0].image.data.shape

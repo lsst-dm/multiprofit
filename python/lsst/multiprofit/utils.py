@@ -19,6 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from typing import Any
+
 import gauss2d.fit as g2f
 import numpy
 import numpy as np
@@ -36,13 +38,41 @@ class ArbitraryAllowedConfig:
     extra = "forbid"
 
 
-def get_params_uniq(parametric: g2f.Parametric, **kwargs):
-    """Get a sorted set of parameters matching a filter"""
+def get_params_uniq(parametric: g2f.Parametric, **kwargs: Any):
+    """Get a sorted set of parameters matching a filter.
+
+    Parameters
+    ----------
+    parametric
+        The parametric object to get parameters from.
+    **kwargs
+        Keyword arguments to pass to g2f.ParamFilter.
+
+    Returns
+    -------
+    params
+        The unique parameters from the parametric object matching the filter.
+    """
     return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()
 
 
 def normalize(ndarray: numpy.ndarray, return_sum: bool = False):
-    """Normalize a numpy array."""
+    """Normalize a numpy array.
+
+    Parameters
+    ----------
+    ndarray
+        The array to normalize.
+    return_sum
+        Whether to return the sum.
+
+    Returns
+    -------
+    ndarray
+        The input ndarray.
+    total
+        The sum of the array.
+    """
     total = np.sum(ndarray)
     ndarray /= total
     if return_sum:

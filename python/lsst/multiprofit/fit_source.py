@@ -22,7 +22,6 @@
 import logging
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence, Type
 
 import astropy
@@ -30,7 +29,9 @@ import astropy.units as u
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
+import pydantic
 from astropy.table import Table
+from pydantic.dataclasses import dataclass
 
 from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
@@ -238,22 +239,20 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
 class CatalogSourceFitterABC(ABC):
     """Fit a Gaussian mixture source model to an image with a PSF model.
 
-    Parameters
-    ----------
-    modeller : `multiprofit.Modeller`
-        A Modeller instance to use for fitting.
-    errors_expected : dict[Type[Exception], str]
-        A dictionary keyed by an Exception type, with a string value of the
-        flag column key to assign if this Exception is raised.
-
     Notes
     -----
     Any exceptions raised and not in errors_expected will be logged in a
     generic unknown_flag failure column.
     """
 
-    modeller: Modeller = field(default_factory=Modeller)
-    errors_expected: dict[Type[Exception], str] = field(default_factory=dict)
+    errors_expected: dict[Type[Exception], str] = pydantic.field(
+        default_factory=dict,
+        title="A dictionary of Exceptions with the name of the flag column key to fill if raised.",
+    )
+    modeller: Modeller = pydantic.field(
+        default_factory=Modeller,
+        title="A Modeller instance to use for fitting.",
+    )
 
     @staticmethod
     def _get_logger():
@@ -270,7 +269,7 @@ class CatalogSourceFitterABC(ABC):
         catexps: list[CatalogExposureSourcesABC],
         config: CatalogSourceFitterConfig = None,
         logger: logging.Logger = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> astropy.table.Table:
         """Fit PSF-convolved source models with MultiProFit.
 
@@ -281,13 +280,13 @@ class CatalogSourceFitterABC(ABC):
 
         Parameters
         ----------
-        catalog_multi : typing.Sequence
+        catalog_multi
             A multi-band source catalog to fit a model to.
-        catexps : list[`CatalogExposureSourcesABC`]
-            A list of (source and psf) catalog-exposure pairs
-        config: `CatalogSourceFitterConfig`
+        catexps
+            A list of (source and psf) catalog-exposure pairs.
+        config
             Configuration settings for fitting and output.
-        logger : `logging.Logger`
+        logger
             The logger. Defaults to calling `_getlogger`.
         **kwargs
             Additional keyword arguments to pass to self.modeller.

@@ -81,7 +81,7 @@ def get_hst_size_prior(mag_psf_i):
     Parameters
     ----------
     mag_psf_i
-        i-band PSF magnitudes of the source(s).
+        The i-band PSF magnitudes of the source(s).
 
     Notes
     -----

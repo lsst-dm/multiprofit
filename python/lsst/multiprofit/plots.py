@@ -1,7 +1,7 @@
-import typing
 from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import cycle
+from typing import Any, Iterable, Type, TypeAlias
 
 import astropy.table
 import astropy.visualization as apVis
@@ -38,10 +38,10 @@ class ErrorValues:
 def plot_catalog_bootstrap(
     catalog_bootstrap: astropy.table.Table,
     n_bins: int = None,
-    paramvals_ref=None,
+    paramvals_ref: Iterable[np.ndarray] = None,
     plot_total_fluxes: bool = False,
     plot_colors: bool = False,
-    **kwargs,
+    **kwargs: Any,
 ):
     """Plot a bootstrap catalog for a single source model.
 
@@ -59,7 +59,7 @@ def plot_catalog_bootstrap(
         Whether to plot total fluxes, not just component.
     plot_colors
         Whether to plot colors in addition to fluxes.
-    kwargs
+    **kwargs
         Keyword arguments to pass to matplotlib hist calls.
 
     Returns
@@ -461,11 +461,11 @@ def plot_model_rgb(
     return fig_rgb, ax_rgb, fig_gs, ax_gs, mask_inv_highsn
 
 
-Interpolator: typing.TypeAlias = g2f.SersicMixInterpolator | tuple[typing.Type, dict[str, typing.Any]]
+Interpolator: TypeAlias = g2f.SersicMixInterpolator | tuple[Type, dict[str, Any]]
 
 
 def plot_sersicmix_interp(
-    interps: dict[str, tuple[Interpolator, str | tuple]], n_ser: np.ndarray, **kwargs
+    interps: dict[str, tuple[Interpolator, str | tuple]], n_ser: np.ndarray, **kwargs: Any
 ) -> matplotlib.figure.Figure:
     """Plot Gaussian mixture Sersic profile interpolated values.
 
@@ -475,11 +475,12 @@ def plot_sersicmix_interp(
         Dict of interpolators by name.
     n_ser
         Array of Sersic index values to plot interpolated quantities for.
-    kwargs
+    **kwargs
         Keyword arguments to pass to matplotlib.pyplot.subplots.
 
     Returns
     -------
+    figure
         The resulting figure.
     """
     orders = {

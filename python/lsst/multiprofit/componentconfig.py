@@ -20,7 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import abstractmethod
-from typing import Iterable
+from typing import Any, Iterable
 
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
@@ -48,14 +48,14 @@ __all__ = [
 ]
 
 
-def init_component(component: g2f.Component, **kwargs):
+def init_component(component: g2f.Component, **kwargs: Any):
     """Initialize a component with parameter name-value pairs.
 
     Parameters
     ----------
     component
         The component to initialize.
-    kwargs
+    **kwargs
         Additional keyword arguments.
 
     Notes
@@ -77,7 +77,7 @@ class ParameterConfig(pexConfig.Config):
 
 
 class EllipticalComponentConfig(ShapePriorConfig):
-    """Config for an elliptically-symmetric component"""
+    """Config for an elliptically-symmetric component."""
 
     rho = pexConfig.ConfigField[ParameterConfig](doc="Rho parameter config")
     size_x = pexConfig.ConfigField[ParameterConfig](doc="x-axis size parameter config")
@@ -119,7 +119,7 @@ class EllipticalComponentConfig(ShapePriorConfig):
 
 
 class GaussianConfig(EllipticalComponentConfig):
-    """Configuration for a gauss2d.fit Gaussian component"""
+    """Configuration for a gauss2d.fit Gaussian component."""
 
     def make_component(
         self,

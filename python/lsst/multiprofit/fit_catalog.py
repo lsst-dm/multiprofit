@@ -98,7 +98,8 @@ class CatalogFitterConfig(pexConfig.Config):
 
         Returns
         -------
-        An ordered list of ColumnInfo instances.
+        schema
+            An ordered list of ColumnInfo instances.
         """
         schema = [
             ColumnInfo(key=self.column_id, dtype="i8"),
