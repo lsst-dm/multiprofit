@@ -97,7 +97,9 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap)
     def get_catalog(self) -> astropy.table.Table:
         return self.catalog
 
-    def get_psf_image(self, source) -> np.ndarray:
+    def get_psf_image(
+        self, source: astropy.table.Row | Mapping[str, Any], config: CatalogPsfFitterConfig | None = None
+    ) -> np.ndarray:
         rng = np.random.default_rng(source["id"])
         return self.image + 1e-4 * rng.standard_normal(self.image.shape)
 

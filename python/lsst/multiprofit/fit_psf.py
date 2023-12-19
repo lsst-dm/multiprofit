@@ -45,30 +45,6 @@ class PsfRebuildFitFlagError(RuntimeError):
     """RuntimeError for when a PSF can't be rebuilt because the fit failed."""
 
 
-class CatalogExposurePsfABC(CatalogExposureABC):
-    """A CatalogExposure for PSF fitting."""
-
-    @abstractmethod
-    def get_psf_image(self, source: astropy.table.Row | Mapping[str, Any]) -> np.array:
-        """Get a PSF image for a specific source.
-
-        Parameters
-        ----------
-        source
-            The source row/dict.
-
-        Returns
-        -------
-        psf
-           The image of the PSF.
-
-        Notes
-        -----
-        The PSF image should be normalized, and centered in a 2D array of odd
-        dimensions on both sides.
-        """
-
-
 class CatalogPsfFitterConfig(CatalogFitterConfig):
     """Configuration for MultiProFit PSF image fitter."""
 
@@ -165,6 +141,35 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         self.compute_errors = "NONE"
 
 
+class CatalogExposurePsfABC(CatalogExposureABC):
+    """A CatalogExposure for PSF fitting."""
+
+    @abstractmethod
+    def get_psf_image(
+        self, source: astropy.table.Row | Mapping[str, Any], config: CatalogPsfFitterConfig | None = None,
+    ) -> np.array:
+        """Get a PSF image for a specific source.
+
+        Parameters
+        ----------
+        source
+            The source row/dict.
+        config
+            The configuration for the fitter using this CatalogExposure,
+            if any.
+
+        Returns
+        -------
+        psf
+           The image of the PSF.
+
+        Notes
+        -----
+        The PSF image should be normalized, and centered in a 2D array of odd
+        dimensions on both sides.
+        """
+
+
 class CatalogPsfFitter:
     """Fit a Gaussian mixture model to a pixelated PSF image.
 
@@ -195,22 +200,7 @@ class CatalogPsfFitter:
         self.modeller = modeller
 
     @staticmethod
-    def _get_data(img_psf: np.array, gain: float = 1e5) -> g2f.Data:
-        """Build fittable Data from a normalized PSF image.
-
-        Parameters
-        ----------
-        img_psf : `numpy.array`
-            A normalized PSF image array.
-        gain : float
-            The number of counts in the image, used as a multiplicative
-            factor for the inverse variance.
-
-        Returns
-        -------
-        data : gauss2d.fit.Data
-            A Data object that can be passed to a Model(ler).
-        """
+    def _get_data_default(img_psf: np.array, gain: float = 1e5) -> g2f.Data:
         # TODO: Improve these arbitrary definitions
         # Look at S/N of PSF stars?
         background = np.std(img_psf[img_psf < 2 * np.abs(np.min(img_psf))])
@@ -230,6 +220,24 @@ class CatalogPsfFitter:
             ]
         )
 
+    def _get_data(self, img_psf: np.array, gain: float = 1e5) -> g2f.Data:
+        """Build a fittable Data from a normalized PSF image.
+
+        Parameters
+        ----------
+        img_psf
+            A normalized PSF image array.
+        gain
+            The number of counts in the image, used as a multiplicative
+            factor for the inverse variance.
+
+        Returns
+        -------
+        data
+            A Data object that can be passed to a Model(ler).
+        """
+        return self._get_data_default(img_psf=img_psf, gain=gain)
+
     @staticmethod
     def _get_logger() -> logging.Logger:
         """Return a suitably-named and configured logger."""
@@ -238,6 +246,10 @@ class CatalogPsfFitter:
         logger.level = logging.INFO
 
         return logger
+
+    @abstractmethod
+    def check_source(self, source, config):
+        pass
 
     def fit(
         self,
@@ -350,9 +362,10 @@ class CatalogPsfFitter:
             row[config.column_id] = id_source
 
             try:
-                img_psf = catexp.get_psf_image(source)
+                self.check_source(source, config=config)
+                img_psf = catexp.get_psf_image(source, config=config)
                 cenx.value, ceny.value = (x / 2.0 for x in img_psf.shape[::-1])
-                data = CatalogPsfFitter._get_data(img_psf)
+                data = self._get_data(img_psf)
                 model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
                 self.initialize_model(model=model, config=config, source=source)
 
