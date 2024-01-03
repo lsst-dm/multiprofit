@@ -20,10 +20,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
-import numpy as np
 import lsst.pex.config as pexConfig
+import numpy as np
 
 from .transforms import transforms_ref
+
+__all__ = ["ShapePriorConfig", "get_hst_size_prior"]
 
 
 class ShapePriorConfig(pexConfig.Config):
@@ -79,7 +81,7 @@ def get_hst_size_prior(mag_psf_i):
     Parameters
     ----------
     mag_psf_i
-        i-band PSF magnitudes of the source(s).
+        The i-band PSF magnitudes of the source(s).
 
     Notes
     -----

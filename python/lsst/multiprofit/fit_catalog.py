@@ -20,14 +20,17 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
-import astropy.units as u
 from collections.abc import Iterable
+
+import astropy.units as u
 import lsst.pex.config as pexConfig
 import pydantic
 from pydantic.dataclasses import dataclass
 
 from .modeller import ModelFitConfig
 from .utils import ArbitraryAllowedConfig
+
+__all__ = ["CatalogExposureABC", "ColumnInfo", "CatalogFitterConfig"]
 
 
 class CatalogExposureABC(ABC):
@@ -36,12 +39,6 @@ class CatalogExposureABC(ABC):
     @abstractmethod
     def get_catalog(self) -> Iterable:
         """Return a row-iterable catalog covering an exposure."""
-
-
-# class ColumnInfoConfig:
-#     """Pydantic config to allow arbitrary typed Fields."""
-#
-#     arbitrary_types_allowed = True
 
 
 @dataclass(frozen=True, kw_only=True, config=ArbitraryAllowedConfig)
@@ -101,7 +98,8 @@ class CatalogFitterConfig(pexConfig.Config):
 
         Returns
         -------
-        An ordered list of ColumnInfo instances.
+        schema
+            An ordered list of ColumnInfo instances.
         """
         schema = [
             ColumnInfo(key=self.column_id, dtype="i8"),

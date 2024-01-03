@@ -25,11 +25,25 @@ import numpy as np
 
 # This is all hacked from astropy's AsinhStretch
 
+__all__ = ["AsinhStretchSigned", "SinhStretchSigned"]
 
-def _prepare(values, clip=True, out=None):
-    """
-    Prepare the data by optionally clipping and copying, and return the
-    array that should be subsequently used for in-place calculations.
+
+def _prepare(values: np.ndarray, clip: bool = True, out: np.ndarray | None = None):
+    """Return clipped and/or copied values from input.
+
+    Parameters
+    ----------
+    values
+        The values to copy/clip from.
+    clip
+        Whether to clip values to between 0 and 1 (inclusive).
+    out
+        An existing array to assign to.
+
+    Returns
+    -------
+    prepared
+        The prepared values.
     """
     if clip:
         return np.clip(values, 0.0, 1.0, out=out)
@@ -57,7 +71,7 @@ class AsinhStretchSigned(apvis.BaseStretch):
         this parameter is where the asinh curve transitions from linear
         to logarithmic behavior, expressed as a fraction of the
         normalized image.  Must be in the range between 0 and 1.
-        Default is 0.1
+        Default is 0.1.
     """  # noqa: W505
 
     def __init__(self, a=0.1):
@@ -79,7 +93,13 @@ class AsinhStretchSigned(apvis.BaseStretch):
 
     @property
     def inverse(self):
-        """A stretch object that performs the inverse operation."""
+        """A stretch object that performs the inverse operation.
+
+        Returns
+        -------
+        inverse
+            The inverse stretch.
+        """
         return SinhStretchSigned(a=1.0 / np.arcsinh(1.0 / self.a))
 
 
@@ -117,5 +137,11 @@ class SinhStretchSigned(apvis.BaseStretch):
 
     @property
     def inverse(self):
-        """A stretch object that performs the inverse operation."""
+        """A stretch object that performs the inverse operation.
+
+        Returns
+        -------
+        inverse
+            The inverse stretch.
+        """
         return AsinhStretchSigned(a=1.0 / np.sinh(1.0 / self.a))

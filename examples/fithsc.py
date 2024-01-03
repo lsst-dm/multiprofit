@@ -7,23 +7,31 @@
 
 
 # Import required packages
+import time
+from typing import Any, Iterable, Mapping
+
+from astropy.coordinates import SkyCoord
 from astropy.io.ascii import Csv
 import astropy.io.fits as fits
-from astropy.coordinates import SkyCoord
 import astropy.table as apTab
 import astropy.visualization as apVis
 from astropy.wcs import WCS
-from dataclasses import dataclass
 import gauss2d as g2
 import gauss2d.fit as g2f
+from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
+from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
+from lsst.multiprofit.fit_source import (
+    CatalogExposureSourcesABC,
+    CatalogSourceFitterABC,
+    CatalogSourceFitterConfig,
+)
+from lsst.multiprofit.plots import plot_model_rgb
+from lsst.multiprofit.utils import ArbitraryAllowedConfig
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
-from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig, CatalogPsfFitter
-from lsst.multiprofit.fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
 import numpy as np
-from typing import Any, Iterable, Mapping
-
+import pydantic
+from pydantic.dataclasses import dataclass
 
 # In[2]:
 
@@ -104,6 +112,7 @@ cat['x'], cat['y'] = wcs.world_to_pixel(SkyCoord(cat['ra'], cat['dec'], unit='de
 img_rgb = apVis.make_lupton_rgb(*[img[1].data*bands[band] for band, img in images.items()])
 plt.scatter(cat['x'], cat['y'], s=10, c='g', marker='x')
 plt.imshow(img_rgb)
+plt.title("gri image with detected objects")
 plt.show()
 
 
@@ -138,8 +147,8 @@ for src in cat[bright]:
             if (radius_mask > 10) and (mag > 21):
                 radius_mask = 5
         mask_inverse[dists < radius_mask] = 0
-        print(f'Masking src=({id_src} at {x_src}, {y_src}) dist={dist}'
-              f', mag={mag}, radius_mask={radius_mask}')
+        print(f'Masking src=({id_src} at {x_src:.3f}, {y_src:.3f}) dist={dist:.3f}'
+              f', mag={mag:.3f}, radius_mask={radius_mask:.3f}')
     elif dist < 2:
         idx_src_main = id_src
         row_main = src
@@ -152,16 +161,18 @@ if read_mask_highsn:
     mask_inverse *= mask_highsn
 
 plt.imshow(mask_inverse)
+plt.title("Fitting mask")
+plt.show()
 
 
 # In[6]:
 
 
 # Fit PSF
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogExposurePsf(CatalogExposurePsfABC):
-    catalog: apTab.Table
-    img: np.ndarray
+    catalog: apTab.Table = pydantic.Field(title="The detected object catalog")
+    img: np.ndarray = pydantic.Field(title="The PSF image")
 
     def get_catalog(self) -> Iterable:
         return self.catalog
@@ -176,8 +187,11 @@ results_psf = {}
 
 for band, psf_file in psfs.items():
     catexp = CatalogExposurePsf(catalog=catalog_psf, img=psf_file[0].data)
+    t_start = time.time()
     result = fitter_psf.fit(config=config_psf, catexp=catexp)
+    t_end = time.time()
     results_psf[band] = result
+    print(f"Fit {band}-band PSF in {t_end - t_start:.2f}s; result:")
     print(dict(result[0]))
 
 
@@ -207,11 +221,11 @@ config_source = CatalogSourceFitterConfig(
 
 
 # Setup exposure with band-specific image, mask and variance
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogExposureSources(CatalogExposureSourcesABC):
-    config_psf: CatalogPsfFitterConfig
-    observation: g2f.Observation
-    table_psf_fits: apTab.Table
+    config_psf: CatalogPsfFitterConfig = pydantic.Field(title="The PSF fit config")
+    observation: g2f.Observation = pydantic.Field(title="The observation to fit")
+    table_psf_fits: apTab.Table = pydantic.Field(title="The table of PSF fit parameters")
 
     @property
     def channel(self) -> g2f.Channel:
@@ -219,7 +233,7 @@ class CatalogExposureSources(CatalogExposureSourcesABC):
 
     def get_catalog(self) -> Iterable:
         return self.table_psf_fits
-    
+
     def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
         return self.config_psf.rebuild_psfmodel(params)
 
@@ -227,12 +241,12 @@ class CatalogExposureSources(CatalogExposureSourcesABC):
         return self.observation
 
 
-@dataclass(kw_only=True)
+@dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogSourceFitter(CatalogSourceFitterABC):
-    band: str
-    scale_pixel: float
-    wcs_ref: WCS
-    
+    band: str = pydantic.Field(title="The reference band for initialization and priors")
+    scale_pixel: float = pydantic.Field(title="The pixel scale in arcsec")
+    wcs_ref: WCS = pydantic.Field(title="The WCS for the coadded image")
+
     def initialize_model(
         self,
         model: g2f.Model,
@@ -317,11 +331,14 @@ for band in bands:
 
 
 # Now do the multi-band fit
+t_start = time.time()
 result_multi = fitter.fit(
     catalog_multi=tab_row_main,
     catexps=list(catexps.values()),
     config=config_source,
 )
+t_end = time.time()
+print(f"Fit {','.join(bands.keys())}-band bulge-disk model in {t_end - t_start:.2f}s; result:")
 print(dict(result_multi[0]))
 
 
@@ -331,12 +348,15 @@ print(dict(result_multi[0]))
 # Fit in each band separately
 results = {}
 for band, observation in bands.items():
+    t_start = time.time()
     result = fitter.fit(
         catalog_multi=tab_row_main,
         catexps=[catexps[band]],
         config=config_source,
     )
+    t_end = time.time()
     results[band] = result
+    print(f"Fit {band}-band bulge-disk model in {t_end - t_start:.2f}s; result:")
     print(dict(result[0]))
 
 
@@ -354,85 +374,31 @@ for param, (column, value) in zip(params, list(result_multi_row.items())[idx_las
     param.value = value
 model.setup_evaluators(model.EvaluatorMode.loglike_image)
 # Print the loglikelihoods, which are from the data and end with the (sum of all) priors
-model.evaluate()
+loglikes = model.evaluate()
+print(f"{loglikes=}")
 
 
 # ### Multiband Residuals
-# 
+#
 # What's with the structure in the residuals? Most broadly, a point source + exponential disk + deVauc bulge model is totally inadequate for this galaxy for several possible reasons:
-# 
+#
 # 1. The disk isn't exactly exponential (n=1)
 # 2. The disk has colour gradients not accounted for in this model*
 # 3. If the galaxy even has a bulge, it's very weak and def. not a deVaucouleurs (n=4) profile; it may be an exponential "pseudobulge"
-# 
+#
 # \*MultiProFit can do more general Gaussian mixture models (linear or non-linear), which may be explored in a future iteration of this notebook, but these are generally do not improve the accuracy of photometry for smaller/fainter galaxies.
-# 
+#
 # Note that the two scalings of the residual plots (98%ile and +/- 20 sigma) end up looking very similar.
-# 
+#
 
 # In[13]:
 
 
 # Make some basic plots
-img_model_rgb = apVis.make_lupton_rgb(
-    *[output.data*weight for output, weight in zip(model.outputs, bands.values())]
+_, _, _, _, mask_inv_highsn = plot_model_rgb(
+    model, weights=bands, high_sn_threshold=0.2 if write_mask_highsn else None,
 )
-fig_rgb, ax_rgb = plt.subplots(2, 2)
-fig_bw, ax_bw = plt.subplots(2, len(bands))
-ax_rgb[0][0].imshow(img_model_rgb)
-ax_rgb[1][0].imshow(img_rgb)
-
-residuals = {}
-imgs_sigma_inv = {}
-masks_inv = {}
-if write_mask_highsn:
-    # Create a mask of high-sn pixels (based on the model)
-    mask_inv_highsn = np.ones(img_ref.shape, dtype='bool')
-
-for idx, band in enumerate(bands):
-    obs = catexps[band].observation
-    mask_inv = obs.mask_inv.data
-    masks_inv[band] = mask
-    img_data = obs.image.data
-    img_sigma_inv = obs.sigma_inv.data
-    imgs_sigma_inv[band] = img_sigma_inv
-    img_model = model.outputs[idx].data
-    if write_mask_highsn:
-        mask_highsn *= (img_model*np.nanmedian(img_sigma_inv)) > 0.2
-    residual = (img_data - img_model)*mask_inv
-    residuals[band] = residual
-    value_max = np.percentile(np.abs(residual), 98)
-    ax_bw[0][idx].imshow(residual, cmap='gray', vmin=-value_max, vmax=value_max)
-    ax_bw[0][idx].tick_params(labelleft=False)
-    ax_bw[1][idx].imshow(np.clip(residual*img_sigma_inv, -20, 20), cmap='gray')
-    ax_bw[1][idx].tick_params(labelleft=False)
-
-mask_inv_all = np.prod(list(masks_inv.values()), axis=0)
-
-resid_max = np.percentile(
-    np.abs(np.concatenate([(residual*mask_inv_all).flat for residual in residuals.values()])),
-    98)
-
-# This may or may not be equivalent to make_lupton_rgb
-# I just can't figure out how to get that scaled so zero = 50% gray
-stretch = 3
-residual_rgb = np.stack([
-    np.arcsinh(np.clip(residuals[band]*mask_inv_all*weight, -resid_max, resid_max)*stretch)
-    for band, weight in bands.items()
-], axis=-1)
-residual_rgb /= 2*np.arcsinh(resid_max*stretch)
-residual_rgb += 0.5
-
-ax_rgb[0][1].imshow(residual_rgb)
-ax_rgb[0][1].tick_params(labelleft=False)
-
-residual_rgb = np.stack([
-    (np.clip(residuals[band]*imgs_sigma_inv[band]*mask_inv_all*weight, -20, 20) + 20)/40
-    for band, weight in bands.items()
-], axis=-1)
-
-ax_rgb[1][1].imshow(residual_rgb)
-ax_rgb[1][1].tick_params(labelleft=False)
+plt.show()
 
 # Write the high SN bitmask to a compressed, bitpacked file
 if write_mask_highsn:
@@ -441,25 +407,28 @@ if write_mask_highsn:
     plt.show()
     packed = np.packbits(mask_inv_highsn, bitorder='little')
     np.savez_compressed(f'{prefix_img}mask_inv_highsn.npz', mask_inv=mask_highsn)
-    
+
 # TODO: Plotting functions will be refactored from old MPF
 # Missing features include colour residual images
 # Also complete labels, etc.
 
 
 # ### More exercises for the reader
-# 
+#
 # These are of the sort that the author hasn't gotten around to yet because they're far from trivial. Try:
-# 
+#
+# 0. Use the WCS to compute ra, dec and errors thereof.
+# Hint: override CatalogSourceFitter.get_model_radec
+#
 # 1. Replace the real data with simulated data.
 # Make new observations using model.evaluate and add noise based on the variance maps.
 # Try fitting again and see how well results converge depending on the initialization scheme.
-# 
+#
 # 2. Fit every other source individually.
 # Try subtracting the best-fit galaxy model from above first.
 # Hint: get_source_observation should be redefined to return a smaller postage stamp around the nominal centroid.
 # Pass the full catalog (excluding the central galaxy) to catalog_multi.
-# 
+#
 # 3. Fit all sources simultaneously.
 # Redefine CatalogFitterConfig.make_model_data to make a model with multiple sources, using the catexp catalogs
 # initialize_model will no longer need to do anything

@@ -9,10 +9,18 @@ for reff, axrat, ang in [(4.457911011776755, 0.6437167462922668, 44.55485360075)
         (3.7442185156735914, 0.8695066738347554, -39.40729158864958),
     ]:
         grads, dlls, diffabs = gradient_test(
-            dimx=23, dimy=19, reff=5, ang=20, reff_psf=reff_psf, axrat_psf=axrat_psf, ang_psf=ang_psf,
-            printout=False, plot=False)
-        print('Gradient     ', grads)
-        print('Finite Diff. ', dlls)
-        print('FinD. - Grad.', dlls - grads)
-        print('FinD. / Grad.', dlls / grads)
-        print('Jacobian sum abs. diff.', diffabs)
+            xdim=23,
+            ydim=19,
+            reff=5,
+            angle=20,
+            reff_psf=reff_psf,
+            axrat_psf=axrat_psf,
+            angle_psf=ang_psf,
+            printout=False,
+            plot=False,
+        )
+        print("Gradient     ", grads)
+        print("Finite Diff. ", dlls)
+        print("FinD. - Grad.", dlls - grads)
+        print("FinD. / Grad.", dlls / grads)
+        print("Jacobian sum abs. diff.", diffabs)

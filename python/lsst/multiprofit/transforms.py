@@ -19,10 +19,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from typing import Any
+
 import gauss2d.fit as g2f
 import numpy as np
 
 from .limits import limits_ref
+
+__all__ = ["get_logit_limited", "verify_transform_derivative", "transforms_ref"]
 
 
 def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str | None = None):
@@ -41,6 +45,7 @@ def get_logit_limited(lower: float, upper: float, factor: float = 1.0, name: str
 
     Returns
     -------
+    transform
         A modified logit transform as specified.
     """
     return g2f.LogitLimitedTransformD(
@@ -61,7 +66,7 @@ def verify_transform_derivative(
     derivative: float | None = None,
     abs_max: float = 1e6,
     dx_ratios=None,
-    **kwargs,
+    **kwargs: Any,
 ):
     """Verify that the derivative of a transform class is correct.
 
@@ -75,11 +80,11 @@ def verify_transform_derivative(
         The nominal derivative at value_transformed.
         Must equal transform.derivative(value_transformed).
     abs_max
-        x value where verification is skipped if np.abs(derivative) > x.
+        The x value to skip verification if np.abs(derivative) > x.
     dx_ratios
         Iterable of signed ratios to set dx for finite differencing.
         dx = value*ratio (untransformed). Only used if dx is None.
-    kwargs
+    **kwargs
         Keyword arguments to pass to np.isclose when comparing derivatives to
         finite differences.
 

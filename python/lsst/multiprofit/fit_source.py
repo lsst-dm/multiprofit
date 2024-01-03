@@ -20,23 +20,26 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
-import astropy
-from astropy.table import Table
-import astropy.units as u
-from dataclasses import dataclass, field
 import logging
-import gauss2d.fit as g2f
-import numpy as np
 import time
 from typing import Any, Mapping, Sequence, Type
 
+import astropy
+from astropy.table import Table
+import astropy.units as u
+import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
+import numpy as np
+import pydantic
+from pydantic.dataclasses import dataclass
 
 from .componentconfig import SersicConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, Modeller
 from .transforms import transforms_ref
-from .utils import get_params_uniq
+from .utils import ArbitraryAllowedConfig, get_params_uniq
+
+__all__ = ["CatalogExposureSourcesABC", "CatalogSourceFitterConfig", "CatalogSourceFitterABC"]
 
 
 class CatalogExposureSourcesABC(CatalogExposureABC):
@@ -218,7 +221,8 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                 for band in bands:
                     columns_comp.append(
                         ColumnInfo(
-                            key=f"{prefix_comp}{band}_flux{suffix}", dtype="f8",
+                            key=f"{prefix_comp}{band}_flux{suffix}",
+                            dtype="f8",
                             unit=u.Unit(self.unit_flux) if self.unit_flux else None,
                         )
                     )
@@ -231,17 +235,9 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         return columns
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, frozen=True, config=ArbitraryAllowedConfig)
 class CatalogSourceFitterABC(ABC):
     """Fit a Gaussian mixture source model to an image with a PSF model.
-
-    Parameters
-    ----------
-    modeller : `multiprofit.Modeller`
-        A Modeller instance to use for fitting.
-    errors_expected : dict[Type[Exception], str]
-        A dictionary keyed by an Exception type, with a string value of the
-        flag column key to assign if this Exception is raised.
 
     Notes
     -----
@@ -249,8 +245,14 @@ class CatalogSourceFitterABC(ABC):
     generic unknown_flag failure column.
     """
 
-    modeller: Modeller = field(default_factory=Modeller)
-    errors_expected: dict[Type[Exception], str] = field(default_factory=dict)
+    errors_expected: dict[Type[Exception], str] = pydantic.Field(
+        default_factory=dict,
+        title="A dictionary of Exceptions with the name of the flag column key to fill if raised.",
+    )
+    modeller: Modeller = pydantic.Field(
+        default_factory=Modeller,
+        title="A Modeller instance to use for fitting.",
+    )
 
     @staticmethod
     def _get_logger():
@@ -267,7 +269,7 @@ class CatalogSourceFitterABC(ABC):
         catexps: list[CatalogExposureSourcesABC],
         config: CatalogSourceFitterConfig = None,
         logger: logging.Logger = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> astropy.table.Table:
         """Fit PSF-convolved source models with MultiProFit.
 
@@ -278,13 +280,13 @@ class CatalogSourceFitterABC(ABC):
 
         Parameters
         ----------
-        catalog_multi : typing.Sequence
+        catalog_multi
             A multi-band source catalog to fit a model to.
-        catexps : list[`CatalogExposureSourcesABC`]
-            A list of (source and psf) catalog-exposure pairs
-        config: `CatalogSourceFitterConfig`
+        catexps
+            A list of (source and psf) catalog-exposure pairs.
+        config
             Configuration settings for fitting and output.
-        logger : `logging.Logger`
+        logger
             The logger. Defaults to calling `_getlogger`.
         **kwargs
             Additional keyword arguments to pass to self.modeller.
@@ -500,10 +502,10 @@ class CatalogSourceFitterABC(ABC):
                         if plot:
                             errors_plot = np.clip(errors, 0, 1000)
                             errors_plot[~np.isfinite(errors_plot)] = 0
-                            from .plots import plot_loglike, ErrorValues
+                            from .plots import ErrorValues, plot_loglike
 
                             try:
-                                plot_loglike(model, errors={'err': ErrorValues(values=errors_plot)})
+                                plot_loglike(model, errors={"err": ErrorValues(values=errors_plot)})
                             except Exception:
                                 for param in params:
                                     param.fixed = False
@@ -541,8 +543,9 @@ class CatalogSourceFitterABC(ABC):
                     logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with known exception={e}")
                 else:
                     row[f"{prefix}unknown_flag"] = True
-                    logger.info(f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}",
-                                exc_info=1)
+                    logger.info(
+                        f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}", exc_info=1
+                    )
         return results
 
     def get_channels(

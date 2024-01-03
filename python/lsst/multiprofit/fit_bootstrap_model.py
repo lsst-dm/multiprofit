@@ -19,33 +19,37 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import astropy
-from dataclasses import dataclass
 from functools import cached_property
+from typing import Any, Mapping
+
+import astropy
 import gauss2d as g2
 import gauss2d.fit as g2f
-import numpy
-
-from .config import set_config_from_dict
-from .componentconfig import init_component
-from .fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig
-from .fit_source import (
-    CatalogExposureSourcesABC,
-    CatalogSourceFitterABC,
-    CatalogSourceFitterConfig,
-)
-from .utils import get_params_uniq
 import numpy as np
-from typing import Any, Mapping
+import pydantic
+from pydantic.dataclasses import dataclass
+
+from .componentconfig import init_component
+from .config import set_config_from_dict
+from .fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig
+from .fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
+from .utils import FrozenArbitraryAllowedConfig, get_params_uniq
+
+__all__ = [
+    "SourceCatalogBootstrap",
+    "CatalogExposurePsfBootstrap",
+    "CatalogExposureSourcesBootstrap",
+    "CatalogSourceFitterBootstrap",
+]
 
 
 @dataclass(kw_only=True, frozen=True)
 class SourceCatalogBootstrap:
     """Config class for a bootstrap source catalog fitter."""
 
-    n_cols_img: int = 25
-    n_rows_img: int = 25
-    n_sources: int = 1
+    n_cols_img: int = pydantic.Field(default=25, title="Number of columns in the image")
+    n_rows_img: int = pydantic.Field(default=25, title="Number of rows in the image")
+    n_sources: int = pydantic.Field(default=1, title="Number of sources")
 
     @cached_property
     def catalog(self):
@@ -57,11 +61,11 @@ class SourceCatalogBootstrap:
 class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap):
     """Dataclass for a PSF-convolved bootstrap fitter."""
 
-    noise: float = 1e-4
-    sigma_x: float
-    sigma_y: float
-    rho: float
-    nser: float
+    noise: float = pydantic.Field(default=1e-4, title="Background noise per pixel")
+    # TODO: Replace these with componentconfigs
+    sigma_x: float = pydantic.Field(title="sigma_x for the PSF Gaussian")
+    sigma_y: float = pydantic.Field(title="sigma_y for the PSF Gaussian")
+    rho: float = pydantic.Field(title="rho for the PSF Gaussian")
 
     @cached_property
     def centroid(self) -> g2.Centroid:
@@ -75,7 +79,7 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap)
         return ellipse
 
     @cached_property
-    def image(self) -> numpy.ndarray:
+    def image(self) -> np.ndarray:
         image = g2.make_gaussians_pixel_D(
             g2.ConvolvedGaussians(
                 [
@@ -93,20 +97,25 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap)
     def get_catalog(self) -> astropy.table.Table:
         return self.catalog
 
-    def get_psf_image(self, source) -> numpy.ndarray:
+    def get_psf_image(self, source) -> np.ndarray:
         rng = np.random.default_rng(source["id"])
         return self.image + 1e-4 * rng.standard_normal(self.image.shape)
 
 
-@dataclass(kw_only=True, frozen=True)
+@dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
 class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC, SourceCatalogBootstrap):
     """A CatalogExposure for bootstrap fitting of source catalogs."""
 
-    channel: g2f.Channel = g2f.Channel.NONE
+    channel_name: str | None = None
     config_fit: CatalogSourceFitterConfig
     model_source: g2f.Source
     n_buffer_img: int = 10
     table_psf_fits: astropy.table.Table
+
+    # TODO: Consider making cached property
+    @property
+    def channel(self):
+        return g2f.Channel.get(self.channel_name) if self.channel_name else g2f.Channel.NONE
 
     def get_catalog(self) -> astropy.table.Table:
         return self.catalog
@@ -126,13 +135,17 @@ class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC, SourceCatalogBo
         return obs
 
     def __post_init__(self):
+        # TODO: This seems like a pydantic bug, shouldn't all dataclasses
+        # have this attr by default?
+        if hasattr(SourceCatalogBootstrap, "__post_init__"):
+            SourceCatalogBootstrap.__post_init__()
         config_dict = self.table_psf_fits.meta["config"]
         config = CatalogPsfFitterConfig()
         set_config_from_dict(config, config_dict)
         object.__setattr__(self, "config_fit_psf", config)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
 class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
     """A catalog fitter that bootstraps a single model.
 
@@ -141,6 +154,7 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
     statistics of the best-fit parameters.
     """
 
+    # TODO: These should be componentconfigs
     background: float = 1e2
     flux: float = 1e4
     reff_x: float
@@ -154,6 +168,7 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
     def initialize_model(
         self, model: g2f.Model, source: g2f.Source, limits_x: g2f.LimitsD = None, limits_y: g2f.LimitsD = None
     ):
+        # TODO: Should not assume only two components
         comp1, comp2 = model.sources[0].components
         observation = model.data[0]
         cenx = observation.image.n_cols / 2.0
@@ -195,4 +210,10 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
             # TODO: Do some timings to see which is more efficient
             observation.mask_inv.data.flat = 1
 
-        self.params_values_init = tuple(param.value for param in params_free)
+        del self.params_values_init[0:]
+        self.params_values_init.extend([param.value for param in params_free])
+
+    def __post_init__(self):
+        if hasattr(CatalogSourceFitterABC, "__post_init__"):
+            CatalogSourceFitterABC.__post_init__()
+        object.__setattr__(self, "params_values_init", [])

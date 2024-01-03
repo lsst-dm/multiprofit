@@ -20,26 +20,41 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
+import logging
+import time
+from typing import Any
+
 import gauss2d as g2
 import gauss2d.fit as g2f
-import logging
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
 import scipy.optimize as spopt
-import time
-from typing import Any
 
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
     # TODO: try importlib.util.find_spec
-    import fastnnls # noqa
+    import fastnnls  # noqa
 
     has_fastnnls = True
 except ImportError:
     has_fastnnls = False
+
+
+__all__ = [
+    "InvalidProposalError",
+    "fitmethods_linear",
+    "LinearGaussians",
+    "make_image_gaussians",
+    "make_psfmodel_null",
+    "FitInputsBase",
+    "FitInputsDummy",
+    "ModelFitConfig",
+    "FitResult",
+    "Modeller",
+]
 
 
 class InvalidProposalError(ValueError):
@@ -70,20 +85,20 @@ class LinearGaussians:
         channel: g2f.Channel = None,
         is_psf: bool = False,
     ):
-        """Make
+        """Make a LinearGaussians from a ComponentMixture.
 
         Parameters
         ----------
-        componentmixture : gauss2d.fit.ComponentMixture
+        componentmixture
             A component mixture to initialize Gaussians from.
-        channel : gauss2d.fit.Channel
+        channel
             The channel all Gaussians are applicable for.
-        is_psf : bool
+        is_psf
             Whether the components are a smoothing kernel.
 
         Returns
         -------
-        lineargaussians : `multiprofit.LinearGaussians`
+        lineargaussians
             A LinearGaussians instance initialized with the appropriate
             fixed/free gaussians.
         """
@@ -122,23 +137,23 @@ class LinearGaussians:
 def make_image_gaussians(
     gaussians_source: g2.Gaussians,
     gaussians_kernel: g2.Gaussians | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> g2.ImageD:
     """Make an image array from a set of Gaussians.
 
     Parameters
     ----------
-    gaussians_source : gauss2d.Gaussians
+    gaussians_source
         Gaussians representing components of sources.
-    gaussians_kernel : gauss2d.Gaussians
+    gaussians_kernel
         Gaussians representing the smoothing kernel.
-    kwargs
+    **kwargs
         Additional keyword arguments to pass to gauss2d.make_gaussians_pixel_D
-        (i.e. image size, etc)
+        (i.e. image size, etc).
 
     Returns
     -------
-    image : gauss2d.ImageD
+    image
         The rendered image of the given Gaussians.
     """
     if gaussians_kernel is None:
@@ -160,7 +175,7 @@ def make_psfmodel_null() -> g2f.PsfModel:
 
     Returns
     -------
-    model : gauss2d.fit.PsfModel
+    model
         A null PSF model consisting of a single, normalized, zero-size
         Gaussian.
     """
@@ -559,7 +574,7 @@ class Modeller:
             Whether to print diagnostic information.
         config : ModelFitConfig
             Configuration settings for model fitting.
-        kwargs
+        **kwargs
             Keyword arguments to pass to the optimizer.
 
         Returns

@@ -19,8 +19,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import lsst.pex.config as pexConfig
 from typing import Any
+
+import lsst.pex.config as pexConfig
+
+__all__ = ["set_config_from_dict"]
 
 
 def set_config_from_dict(

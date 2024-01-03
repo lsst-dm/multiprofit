@@ -20,12 +20,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
+import numpy as np
+import pytest
 from lsst.multiprofit.componentconfig import (
     GaussianConfig,
-    init_component,
     ParameterConfig,
     SersicConfig,
     SersicIndexConfig,
+    init_component,
 )
 from lsst.multiprofit.fit_bootstrap_model import (
     CatalogExposurePsfBootstrap,
@@ -37,8 +39,6 @@ from lsst.multiprofit.fit_source import CatalogSourceFitterConfig
 from lsst.multiprofit.modeller import ModelFitConfig
 from lsst.multiprofit.plots import ErrorValues, plot_catalog_bootstrap, plot_loglike
 from lsst.multiprofit.utils import get_params_uniq
-import numpy as np
-import pytest
 
 channels = (g2f.Channel.get("g"), g2f.Channel.get("r"), g2f.Channel.get("i"))
 shape_img = (23, 27)
@@ -55,7 +55,12 @@ plot = False
 @pytest.fixture(scope="module")
 def config_psf():
     return CatalogPsfFitterConfig(
-        gaussians={"comp1": GaussianConfig(size=ParameterConfig(value_initial=sigma_psf))},
+        gaussians={
+            "comp1": GaussianConfig(
+                size_x=ParameterConfig(value_initial=sigma_psf),
+                size_y=ParameterConfig(value_initial=sigma_psf),
+            )
+        },
     )
 
 
@@ -113,9 +118,16 @@ def test_fit_source(config_source_fit, table_psf_fits):
     # Have to do this here so that the model initializes its observation with
     # the extended component having the right size
     init_component(model_source.components[1], sigma_x=sigma_psf, sigma_y=sigma_psf, rho=0)
+    CatalogExposureSourcesBootstrap(
+        channel_name=channels[0].name,
+        config_fit=config_source_fit,
+        model_source=model_source,
+        table_psf_fits=table_psf_fits[channels[0].name],
+        n_sources=n_sources,
+    )
     catexps = tuple(
         CatalogExposureSourcesBootstrap(
-            channel=channel,
+            channel_name=channel.name,
             config_fit=config_source_fit,
             model_source=model_source,
             table_psf_fits=table_psf_fits[channel.name],

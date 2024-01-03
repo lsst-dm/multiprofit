@@ -20,27 +20,29 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import abstractmethod
-import astropy
-from astropy.table import Table
-import astropy.units as u
 import logging
-import gauss2d as g2
-import gauss2d.fit as g2f
-import numpy as np
 import time
 from typing import Any, Mapping, Type
 
+import astropy
+from astropy.table import Table
+import astropy.units as u
+import gauss2d as g2
+import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
+import numpy as np
 
 from .componentconfig import GaussianConfig, ParameterConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
-from .modeller import FitInputsDummy, LinearGaussians, make_psfmodel_null, Modeller
+from .modeller import FitInputsDummy, LinearGaussians, Modeller, make_psfmodel_null
 from .psfmodel_utils import make_psf_source
 from .utils import get_params_uniq
 
+__all__ = ["PsfRebuildFitFlagError", "CatalogExposurePsfABC", "CatalogPsfFitterConfig", "CatalogPsfFitter"]
+
 
 class PsfRebuildFitFlagError(RuntimeError):
-    """RuntimeError for when a PSF can't be rebuilt because the fit failed"""
+    """RuntimeError for when a PSF can't be rebuilt because the fit failed."""
 
 
 class CatalogExposurePsfABC(CatalogExposureABC):
@@ -57,6 +59,7 @@ class CatalogExposurePsfABC(CatalogExposureABC):
 
         Returns
         -------
+        psf
            The image of the PSF.
 
         Notes
@@ -71,8 +74,12 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
 
     gaussians = pexConfig.ConfigDictField(
         default={
-            "comp1": GaussianConfig(size=ParameterConfig(value_initial=1.5)),
-            "comp2": GaussianConfig(size=ParameterConfig(value_initial=3.0)),
+            "comp1": GaussianConfig(
+                size_x=ParameterConfig(value_initial=1.5), size_y=ParameterConfig(value_initial=1.5)
+            ),
+            "comp2": GaussianConfig(
+                size_x=ParameterConfig(value_initial=3.0), size_y=ParameterConfig(value_initial=3.0)
+            ),
         },
         doc="Gaussian components",
         itemtype=GaussianConfig,
@@ -124,7 +131,13 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         self,
         bands: list[str] = None,
     ) -> list[ColumnInfo]:
-        """Return the schema as an ordered list of columns."""
+        """Return the schema as an ordered list of columns.
+
+        Parameters
+        ----------
+        bands
+            The bands to add band-dependent columns for.
+        """
         prefix_band = ""
         if bands is not None:
             if len(bands) != 1:
@@ -240,19 +253,19 @@ class CatalogPsfFitter:
 
         Parameters
         ----------
-        catexp : `CatalogExposurePsfABC`
+        catexp
             An exposure to fit a model PSF at the position of all
             sources in the corresponding catalog.
-        config: `CatalogPsfFitterConfig`
+        config
             Configuration settings for fitting and output.
-        logger : `logging.Logger`
+        logger
             The logger. Defaults to calling `_getlogger`.
         **kwargs
             Additional keyword arguments to pass to self.modeller.
 
         Returns
         -------
-        catalog : `astropy.Table`
+        catalog
             A table with fit parameters for the PSF model at the location
             of each source.
         """
@@ -272,7 +285,10 @@ class CatalogPsfFitter:
 
         n_gaussians = len(config.gaussians)
         priors = []
-        sigmas = [comp.size.value_initial for comp in config.gaussians.values()]
+        sigmas = [
+            np.linalg.norm((comp.size_x.value_initial, comp.size_y.value_initial))
+            for comp in config.gaussians.values()
+        ]
 
         model_source = make_psf_source(sigma_xs=sigmas)
         for idx, (comp, config_comp) in enumerate(zip(model_source.components, config.gaussians.values())):
@@ -291,9 +307,9 @@ class CatalogPsfFitter:
         flux_total = flux_total[0]
         # TODO: Remove isinstance when channel filtering is fixed
         fluxfracs = tuple(
-            x
-            for x in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
-            if isinstance(x, g2f.ProperFractionParameterD)
+            param
+            for param in get_params_uniq(model_source, linear=False, channel=g2f.Channel.NONE, fixed=False)
+            if isinstance(param, g2f.ProperFractionParameterD)
         )
         if len(fluxfracs) != (n_gaussians - 1):
             raise RuntimeError(f"len({fluxfracs=}) != {(n_gaussians - 1)=}; PSF model is badly-formed")
@@ -403,14 +419,16 @@ class CatalogPsfFitter:
 
         Parameters
         ----------
-        model : `gauss2d.fit.Model`
+        model
             The model object to initialize.
-        source : typing.Mapping[str, typing.Any]
+        config
+            The fitter config specifying the PSF order.
+        source
             A mapping with fields expected to be populated in the
             corresponding source catalog for initialization.
-        limits_x : `gauss2d.fit.LimitsD`
+        limits_x
             Hard limits for the source's x centroid.
-        limits_y : `gauss2d.fit.LimitsD`
+        limits_y
             Hard limits for the source's y centroid.
         """
         n_rows, n_cols = model.data[0].image.data.shape
@@ -422,7 +440,6 @@ class CatalogPsfFitter:
             limits_y = g2f.LimitsD(0, n_rows)
 
         for component, config_gauss in zip(model.sources[0].components, config.gaussians.values()):
-            size_init = config_gauss.size.value_initial
             centroid = component.centroid
             if centroid not in centroids:
                 centroid.x_param.value = cen_x
@@ -431,7 +448,7 @@ class CatalogPsfFitter:
                 centroid.y_param.limits = limits_y
             ellipse = component.ellipse
             ellipse.sigma_x_param.limits = limits_x
-            ellipse.sigma_x_param.value = size_init
+            ellipse.sigma_x_param.value = config_gauss.size_x.value_initial
             ellipse.sigma_y_param.limits = limits_y
-            ellipse.sigma_y_param.value = size_init
-            ellipse.rho_param.value = 0
+            ellipse.sigma_y_param.value = config_gauss.size_y.value_initial
+            ellipse.rho_param.value = config_gauss.rho.value_initial
