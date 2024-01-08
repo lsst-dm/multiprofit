@@ -630,7 +630,13 @@ class Modeller:
             force=True,
         )
 
-        params_free = tuple(get_params_uniq(model, fixed=False))
+        params_free_sorted = tuple(get_params_uniq(model, fixed=False))
+        offsets_params = dict(model.offsets_parameters())
+        params_offsets = {v: k for (k, v) in offsets_params.items()}
+        params_free = tuple(params_offsets[idx] for idx in range(1, len(offsets_params) + 1))
+        jac = fitinputs.jacobian[:, 1:]
+        # Assert that this is a view, otherwise this won't work
+        assert id(jac.base) == id(fitinputs.jacobian)
         n_params_free = len(params_free)
         bounds = ([None] * n_params_free, [None] * n_params_free)
         params_init = [None] * n_params_free
@@ -667,7 +673,7 @@ class Modeller:
         )
         results.time_run = time.process_time() - time_init
         results.result = result_opt
-        results.params_best = result_opt.x
+        results.params_best = tuple(result_opt.x[offsets_params[param] - 1] for param in params_free_sorted)
         results.n_eval_func = result_opt.nfev
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
         return results
