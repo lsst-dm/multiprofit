@@ -372,7 +372,7 @@ def plot_model_rgb(
     bands = tuple(weights.keys())
     band_str = ",".join(bands)
 
-    if any([output is None for output in model.outputs]):
+    if not model.outputs or any([output is None for output in model.outputs]):
         model.setup_evaluators(model.EvaluatorMode.image)
         model.evaluate()
 
