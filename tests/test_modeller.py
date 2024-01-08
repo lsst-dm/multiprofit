@@ -19,17 +19,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from dataclasses import dataclass
 import math
 import time
 import timeit
-from dataclasses import dataclass
 from typing import Tuple
 
 import gauss2d as g2
 import gauss2d.fit as g2f
-import numpy as np
-import pytest
-import scipy.optimize as spopt
 from lsst.multiprofit.modeller import (
     LinearGaussians,
     Modeller,
@@ -39,6 +36,9 @@ from lsst.multiprofit.modeller import (
 )
 from lsst.multiprofit.transforms import transforms_ref
 from lsst.multiprofit.utils import get_params_uniq
+import numpy as np
+import pytest
+import scipy.optimize as spopt
 
 
 @dataclass
@@ -533,7 +533,7 @@ def test_modeller(config, model):
         model.setup_evaluators(evaluatormode=model.EvaluatorMode.loglike)
         loglike_init = np.array(model.evaluate())
         results = modeller.fit_model(model, **kwargs_fit)
-        params_best = results.result.x
+        params_best = results.params_best
 
         for param, value in zip(params_free, params_best):
             param.value_transformed = value
@@ -579,7 +579,7 @@ def test_modeller(config, model):
             results = modeller.fit_model(model, **kwargs_fit)
             time_init = time.process_time() - time_init
             loglike_new = -results.result.cost
-            for param, value in zip(params_free, results.result.x):
+            for param, value in zip(params_free, results.params_best):
                 param.value_transformed = value
 
             model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
@@ -591,7 +591,8 @@ def test_modeller(config, model):
             if printout:
                 print(
                     f"got loglike={loglike_new} (first={loglike_noprior})"
-                    f" from modeller.fit_model in t={time_init:.3e}, x={results.result.x}, results: \n{results}"
+                    f" from modeller.fit_model in t={time_init:.3e}, x={results.params_best},"
+                    f" results: \n{results}"
                 )
             # Adding a suitably-scaled prior far from the truth should always worsen the log likelihood, but doesn't...
             # noise bias? bad convergence? unclear
