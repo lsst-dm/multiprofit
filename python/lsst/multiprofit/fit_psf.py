@@ -103,6 +103,12 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
             make_psf_source(sigma_xs=sigma_xs, sigma_ys=sigma_ys, rhos=rhos, fracs=fracs).components
         )
 
+    def schema_configurable(self) -> list[ColumnInfo]:
+        columns = []
+        if self.config_fit.eval_residual:
+            columns.append(ColumnInfo(key="n_eval_jac", dtype="i4"))
+        return columns
+
     def schema(
         self,
         bands: list[str] = None,
@@ -133,6 +139,8 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
             if idx_gauss != idx_gauss_max:
                 columns_comp.append(ColumnInfo(key=f"{prefix_comp}fluxfrac", dtype="f8"))
             schema.extend(columns_comp)
+
+        schema.extend(self.schema_configurable())
 
         return schema
 
@@ -336,11 +344,12 @@ class CatalogPsfFitter:
         range_idx = range(n_rows)
 
         columns = config.schema()
+        n_columns_std = len(columns) - len(config.schema_configurable())
         keys = [column.key for column in columns]
         prefix = config.prefix_column
         idx_flag_first = keys.index("unknown_flag")
         idx_var_first = keys.index("cen_x")
-        columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:]]
+        columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:n_columns_std]]
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {"config": config.toDict()}
         results = Table(
@@ -400,6 +409,8 @@ class CatalogPsfFitter:
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
                 results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2) / size
+                if config.config_fit.eval_residual:
+                    results[f"{prefix}n_eval_jac"][idx] = result_full.n_eval_jac
 
                 for param, value, column in zip(params, result_full.params_best, columns_write):
                     param.value_transformed = value

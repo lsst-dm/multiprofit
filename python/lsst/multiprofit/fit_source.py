@@ -194,6 +194,8 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
 
     def schema_configurable(self) -> list[ColumnInfo]:
         columns = []
+        if self.config_fit.eval_residual:
+            columns.append(ColumnInfo(key="n_eval_jac", dtype="i4"))
         if self.fit_linear_final:
             columns.append(ColumnInfo(key="delta_ll_fit_linear", dtype="f8"))
         return columns
@@ -417,6 +419,8 @@ class CatalogSourceFitterABC(ABC):
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
+                if config.config_fit.eval_residual:
+                    results[f"{prefix}n_eval_jac"][idx] = result_full.n_eval_jac
 
                 # Set all params to best fit values
                 # In case the optimizer doesn't

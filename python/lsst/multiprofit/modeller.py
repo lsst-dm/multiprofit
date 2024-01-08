@@ -354,7 +354,7 @@ class FitInputs(FitInputsBase):
                 if not all(self.residuals[idx_obs].shape == shape_obs):
                     errors.append(f"{self.residuals[idx_obs].shape=} != {shape_obs=}")
 
-        shape_residual_prior = (n_prior_residuals, n_params_jac)
+        shape_residual_prior = [1, n_prior_residuals]
         if len(self.outputs_prior) != n_params_jac:
             errors.append(f"{len(self.outputs_prior)=} != {n_params_jac=}")
         elif n_prior_residuals > 0:
@@ -363,7 +363,6 @@ class FitInputs(FitInputsBase):
                     errors.append(f"{self.outputs_prior[idx].shape=} != {shape_residual_prior=}")
 
         if n_prior_residuals > 0:
-            shape_residual_prior = (1, n_prior_residuals)
             if self.residuals_prior.shape != shape_residual_prior:
                 errors.append(f"{self.residuals_prior.shape=} != {shape_residual_prior=}")
 
@@ -373,6 +372,11 @@ class FitInputs(FitInputsBase):
 class ModelFitConfig(pexConfig.Config):
     """Configuration for model fitting."""
 
+    eval_residual = pexConfig.Field[bool](
+        doc="Whether to evaluate the residual every iteration before the Jacobian, which can improve "
+            "performance if most steps do not call the Jacobian function",
+        default=True,
+    )
     fit_linear_iter = pexConfig.Field[int](
         doc="The number of iterations to wait before performing a linear fit during optimization."
         " Default 0 disables the feature.",
@@ -597,28 +601,45 @@ class Modeller:
                 newline = "\n"
                 raise ValueError(f"fitinputs validation got errors:\n{newline.join(errors)}")
 
-        def residual_func(params_new, model, params, result):
+        def residual_func(params_new, model_jac, model_ll, params, result, jac):
             if not all(~np.isnan(params_new)):
-                raise InvalidProposalError(f"optimizer for {model=} proposed non-finite {params_new=}")
+                raise InvalidProposalError(f"optimizer for {model_ll=} proposed non-finite {params_new=}")
             try:
                 for param, value in zip(params, params_new):
                     param.value_transformed = value
                     if not np.isfinite(param.value):
                         raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
-                raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
+                raise InvalidProposalError(f"optimizer for {model_ll=} proposal generated error={e}")
             config_fit = result.config
             fit_linear_iter = config_fit.fit_linear_iter
             if (fit_linear_iter > 0) and ((result.n_eval_resid + 1) % fit_linear_iter == 0):
-                self.fit_model_linear(model, ratio_min=1e-6)
+                self.fit_model_linear(model_ll, ratio_min=1e-6)
             time_init = time.process_time()
-            model.evaluate()
+            if config_fit.eval_residual:
+                model_ll.evaluate()
+            else:
+                model_jac.evaluate()
             result.time_eval += time.process_time() - time_init
             result.n_eval_resid += 1
-            return result.inputs.residual
+            return -result.inputs.residual
 
-        def jacobian_func(params_new, model, params, result):
-            return -result.inputs.jacobian[:, 1:]
+        def jacobian_func(params_new, model_jac, model_ll, params, result, jac):
+            if result.config.eval_residual:
+                model_jac.evaluate()
+            return jac
+
+        if config.eval_residual:
+            model_ll = g2f.Model(
+                data=model.data, psfmodels=model.psfmodels, sources=model.sources, priors=model.priors,
+            )
+            model_ll.setup_evaluators(
+                evaluatormode=g2f.Model.EvaluatorMode.loglike,
+                residuals=fitinputs.residuals,
+                residuals_prior=fitinputs.residuals_prior,
+            )
+        else:
+            model_ll = None
 
         model.setup_evaluators(
             evaluatormode=g2f.Model.EvaluatorMode.jacobian,
@@ -667,7 +688,7 @@ class Modeller:
             params_init,
             jac=jacobian_func,
             bounds=bounds,
-            args=(model, params_free, results),
+            args=(model, model_ll, params_free, results, jac),
             x_scale="jac",
             **kwargs,
         )
