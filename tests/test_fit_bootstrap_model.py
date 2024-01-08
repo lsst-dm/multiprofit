@@ -20,8 +20,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
-import numpy as np
-import pytest
 from lsst.multiprofit.componentconfig import (
     GaussianConfig,
     ParameterConfig,
@@ -39,6 +37,8 @@ from lsst.multiprofit.fit_source import CatalogSourceFitterConfig
 from lsst.multiprofit.modeller import ModelFitConfig
 from lsst.multiprofit.plots import ErrorValues, plot_catalog_bootstrap, plot_loglike
 from lsst.multiprofit.utils import get_params_uniq
+import numpy as np
+import pytest
 
 channels = (g2f.Channel.get("g"), g2f.Channel.get("r"), g2f.Channel.get("i"))
 shape_img = (23, 27)
@@ -166,11 +166,10 @@ def test_fit_source(config_source_fit, table_psf_fits):
             )
         )
         if return_negative:
+            assert np.all(variances[-1] > 0)
             variances = np.array(variances)
             variances[variances <= 0] = 0
             variances = list(variances)
-        else:
-            assert np.all(variances[-1] > 0)
 
     # Bootstrap errors
     model.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
