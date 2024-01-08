@@ -192,6 +192,12 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
             priors.append(g2f.GaussianPrior(centroid.y_param_ptr, 0, self.prior_cen_y_stddev))
         return g2f.Source(components), priors, limits_x, limits_y, cen_x, cen_y
 
+    def schema_configurable(self) -> list[ColumnInfo]:
+        columns = []
+        if self.fit_linear_final:
+            columns.append(ColumnInfo(key="delta_ll_fit_linear", dtype="f8"))
+        return columns
+
     def schema(
         self,
         bands: list[str] = None,
@@ -232,6 +238,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
             if self.convert_cen_xy_to_radec:
                 columns.append(ColumnInfo(key=f"cen_ra{suffix}", dtype="f8", unit=u.deg))
                 columns.append(ColumnInfo(key=f"cen_dec{suffix}", dtype="f8", unit=u.deg))
+        columns.extend(self.schema_configurable())
         return columns
 
 
@@ -324,6 +331,7 @@ class CatalogSourceFitterABC(ABC):
         range_idx = range(n_rows)
 
         columns = config.schema([channel.name for channel in channels.values()])
+        n_columns_std = len(columns) - len(config.schema_configurable())
         keys = [column.key for column in columns]
         prefix = config.prefix_column
         idx_flag_first = keys.index("unknown_flag")
@@ -336,16 +344,18 @@ class CatalogSourceFitterABC(ABC):
         n_radec = 2 * config.convert_cen_xy_to_radec
         columns_radec = [f"{prefix}{col.key}" for col in columns[idx_var_last : idx_var_last + n_radec]]
         idx_var_last += n_radec
-        columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last : len(columns) - n_radec]]
+        columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last : n_columns_std - n_radec]]
         assert len(columns_write_err) == len(params)
-        columns_radec_err = [f"{prefix}{col.key}" for col in columns[len(columns) - n_radec : len(columns)]]
+        columns_radec_err = [f"{prefix}{col.key}" for col in columns[n_columns_std - n_radec : n_columns_std]]
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {"config": config.toDict()}
-        results = Table(data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns], meta=meta)
+        results = Table(
+            data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns], meta=meta,
+        )
 
         # Validate that the columns are in the right order
         # assert because this is a logic error if it fails
-        for idx in range(idx_flag_first, len(columns)):
+        for idx in range(idx_flag_first, n_columns_std):
             column = columns[idx]
             dtype = results.columns[idx].dtype
             if idx < idx_flag_last:
@@ -418,7 +428,7 @@ class CatalogSourceFitterABC(ABC):
                     loglike_init, loglike_new = self.modeller.fit_model_linear(
                         model=model, ratio_min=0.01, validate=True
                     )
-                    np.sum(loglike_new) - np.sum(loglike_init)
+                    results[f"{prefix}delta_ll_fit_linear"][idx] = np.sum(loglike_new) - np.sum(loglike_init)
                     # TODO: See if it makes sense to set only flux params
                     for param, column in zip(params, columns_write):
                         results[column][idx] = param.value
