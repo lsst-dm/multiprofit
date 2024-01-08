@@ -361,7 +361,7 @@ def plot_model_rgb(
         The inverse mask (1=selected) if high_sn_threshold was specified.
     """
     if weights is None:
-        bands_set = {}
+        bands_set = set()
         bands = []
         for obs in model.data:
             band = obs.channel.name
