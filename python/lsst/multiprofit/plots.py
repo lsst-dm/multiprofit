@@ -363,6 +363,7 @@ def plot_model_rgb(
     if weights is None:
         bands_set = set()
         bands = []
+        weights = {}
         for obs in model.data:
             band = obs.channel.name
             if band not in bands_set:
