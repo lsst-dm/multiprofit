@@ -32,6 +32,7 @@ import pydantic
 from pydantic.dataclasses import dataclass
 import scipy.optimize as spopt
 
+from .model_utils import make_image_gaussians, make_psfmodel_null
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
@@ -132,54 +133,6 @@ class LinearGaussians:
         return LinearGaussians(
             gaussians_fixed=g2.Gaussians(gaussians_fixed), gaussians_free=tuple(gaussians_free)
         )
-
-
-def make_image_gaussians(
-    gaussians_source: g2.Gaussians,
-    gaussians_kernel: g2.Gaussians | None = None,
-    **kwargs: Any,
-) -> g2.ImageD:
-    """Make an image array from a set of Gaussians.
-
-    Parameters
-    ----------
-    gaussians_source
-        Gaussians representing components of sources.
-    gaussians_kernel
-        Gaussians representing the smoothing kernel.
-    **kwargs
-        Additional keyword arguments to pass to gauss2d.make_gaussians_pixel_D
-        (i.e. image size, etc).
-
-    Returns
-    -------
-    image
-        The rendered image of the given Gaussians.
-    """
-    if gaussians_kernel is None:
-        gaussians_kernel = g2.Gaussians([g2.Gaussian()])
-    n_gaussians_kernel = len(gaussians_kernel)
-    n_gaussians_source = len(gaussians_source)
-    gaussians = g2.ConvolvedGaussians(
-        [
-            g2.ConvolvedGaussian(source=source, kernel=kernel)
-            for source in (gaussians_source.at(idx) for idx in range(n_gaussians_source))
-            for kernel in (gaussians_kernel.at(idx) for idx in range(n_gaussians_kernel))
-        ]
-    )
-    return g2.make_gaussians_pixel_D(gaussians=gaussians, **kwargs)
-
-
-def make_psfmodel_null() -> g2f.PsfModel:
-    """Make a default (null) PSF model.
-
-    Returns
-    -------
-    model
-        A null PSF model consisting of a single, normalized, zero-size
-        Gaussian.
-    """
-    return g2f.PsfModel(g2f.GaussianComponent.make_uniq_default_gaussians([0], True))
 
 
 class FitInputsBase(ABC):

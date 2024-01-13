@@ -33,16 +33,13 @@ import lsst.pex.config as pexConfig
 import numpy as np
 
 from .componentconfig import GaussianConfig, ParameterConfig
+from .errors import PsfRebuildFitFlagError
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, LinearGaussians, Modeller, make_psfmodel_null
 from .psfmodel_utils import make_psf_source
 from .utils import get_params_uniq
 
-__all__ = ["PsfRebuildFitFlagError", "CatalogExposurePsfABC", "CatalogPsfFitterConfig", "CatalogPsfFitter"]
-
-
-class PsfRebuildFitFlagError(RuntimeError):
-    """RuntimeError for when a PSF can't be rebuilt because the fit failed."""
+__all__ = ["CatalogExposurePsfABC", "CatalogPsfFitterConfig", "CatalogPsfFitter"]
 
 
 class CatalogPsfFitterConfig(CatalogFitterConfig):

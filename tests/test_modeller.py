@@ -27,13 +27,8 @@ from typing import Tuple
 
 import gauss2d as g2
 import gauss2d.fit as g2f
-from lsst.multiprofit.modeller import (
-    LinearGaussians,
-    Modeller,
-    fitmethods_linear,
-    make_image_gaussians,
-    make_psfmodel_null,
-)
+from lsst.multiprofit.model_utils import ModelConfig, SourceConfig
+from lsst.multiprofit.modeller import LinearGaussians, Modeller, fitmethods_linear, make_psfmodel_null
 from lsst.multiprofit.transforms import transforms_ref
 from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
@@ -41,49 +36,20 @@ import pytest
 import scipy.optimize as spopt
 
 
-@dataclass
-class ComponentConfig:
-    n_comp: int = 2
-    rho_base: float = -0.2
-    rho_increment: float = 0.4
-    size_base: float = 1.5
-    size_increment: float = 1.0
-
-
-@dataclass
-class Config:
-    comps_psf: ComponentConfig
-    comps_src: ComponentConfig
-    n_rows: int = 27
-    n_cols: int = 41
-    noise_psf: float = 1e-5
-    seed: int = 1
-    sigma_img: float = 1e-3
-    size_increment_psf: float = 0.3
-    src_n: int = 1
-    src_flux_base: float = 1.0
-    src_flux_increment: float = 1.0
-
-
-@dataclass
-class Limits:
-    x: g2f.LimitsD
-    y: g2f.LimitsD
-    rho: g2f.LimitsD
-
-
-@dataclass
-class Transforms:
-    x: g2f.TransformD
-    y: g2f.TransformD
-    rho: g2f.TransformD
-
-
 @pytest.fixture(scope="module")
 def config():
-    return Config(
-        comps_psf=ComponentConfig(size_base=2.5),
-        comps_src=ComponentConfig(size_base=2.0),
+    return ModelConfig(
+        comps_psf=ComponentConfig(size_base=2.5, size_increment=1.0, rho_base=-0.1, rho_increment=0.2),
+        comps_src=ComponentConfig(size_base=1.5, size_increment=2.5, rho_base=-0.2, rho_increment=0.5),
+        n_rows=27,
+        n_cols=41,
+        noise_psf=1e-5,
+        seed = 1,
+        sigma_img: float = 1e-3,
+        size_increment_psf=0.3,
+        src_n: int = 1,
+        src_flux_base: float = 1.0,
+        src_flux_increment: float = 1.0
     )
 
 
@@ -145,55 +111,7 @@ def data(channels, images) -> g2f.Data:
 
 @pytest.fixture(scope="module")
 def psfmodels(channels, config, data, limits):
-    compconf = config.comps_psf
-    n_comps = compconf.n_comp
-    n_last = n_comps - 1
-    psfmodels = [None] * len(data)
-    translog = transforms_ref["log10"]
-    transrho = transforms_ref["logit_rho"]
-    last = None
-    for i in range(len(psfmodels)):
-        components = [None] * n_comps
-        centroid = g2f.CentroidParameters(
-            g2f.CentroidXParameterD(config.n_cols / 2.0, limits=limits.x),
-            g2f.CentroidYParameterD(config.n_rows / 2.0, limits=limits.y),
-        )
-        size_psf = config.size_increment_psf * i
-        for c in range(n_comps):
-            is_last = c == n_last
-            last = g2f.FractionalIntegralModel(
-                [
-                    (
-                        g2f.Channel.NONE,
-                        g2f.ProperFractionParameterD(
-                            (is_last == 1) or (0.5 + 0.5 * (c > 0)),
-                            fixed=is_last,
-                            transform=transforms_ref["logit"],
-                        ),
-                    )
-                ],
-                g2f.LinearIntegralModel([(g2f.Channel.NONE, g2f.IntegralParameterD(1.0, fixed=True))])
-                if (c == 0)
-                else last,
-                is_last,
-            )
-            components[c] = g2f.GaussianComponent(
-                g2f.GaussianParametricEllipse(
-                    g2f.SigmaXParameterD(
-                        compconf.size_base + c * compconf.size_increment + size_psf, transform=translog
-                    ),
-                    g2f.SigmaYParameterD(
-                        compconf.size_base + c * compconf.size_increment + size_psf, transform=translog
-                    ),
-                    g2f.RhoParameterD(
-                        compconf.rho_base + c * compconf.rho_increment, limits=limits.rho, transform=transrho
-                    ),
-                ),
-                centroid,
-                last,
-            )
-        psfmodels[i] = g2f.PsfModel(components)
-    return psfmodels
+    return None
 
 
 @pytest.fixture(scope="module")
@@ -218,71 +136,7 @@ def psf_fit_models(psfmodels, psf_observations):
 @pytest.fixture(scope="module")
 def psf_observations(config, psfmodels) -> Tuple[g2f.Observation]:
     observations = [None] * len(psfmodels)
-    gaussians_kernel = g2.Gaussians([g2.Gaussian()])
-    rng = np.random.default_rng(config.seed)
-    for idx, psfmodel in enumerate(psfmodels):
-        image = make_image_gaussians(
-            gaussians_source=psfmodel.gaussians(g2f.Channel.NONE),
-            gaussians_kernel=gaussians_kernel,
-            n_rows=config.n_rows,
-            n_cols=config.n_cols,
-        )
-        data = image.data
-        data += config.noise_psf * rng.standard_normal(image.data.shape)
-        sigma_inv = g2.ImageD(np.full_like(image.data, config.noise_psf))
-        mask = g2.ImageB(np.ones_like(image.data))
-        observations[idx] = g2f.Observation(
-            image=image,
-            sigma_inv=sigma_inv,
-            mask_inv=mask,
-            channel=g2f.Channel.NONE,
-        )
     return tuple(observations)
-
-
-def get_sources(channels, config, limits: Limits, transforms: Transforms):
-    compconf = config.comps_src
-    n_components = compconf.n_comp
-    sources = [None] * config.src_n
-
-    for i in range(config.src_n):
-        flux = (config.src_flux_base + i * config.src_flux_increment) / n_components
-        components = [None] * n_components
-        position_ratio = (1 + i) / (1 + config.src_n)
-        centroid = g2f.CentroidParameters(
-            g2f.CentroidXParameterD(config.n_cols * position_ratio, limits=limits.x),
-            g2f.CentroidYParameterD(config.n_rows * position_ratio, limits=limits.y),
-        )
-        for c in range(n_components):
-            fluxes = [
-                (channel, g2f.IntegralParameterD(flux, label=channel.name)) for channel in channels.values()
-            ]
-            size = compconf.size_base + c * compconf.size_increment
-            sersicindex = g2f.SersicMixComponentIndexParameterD(1.0 + 3 * c)
-            # Add a small offset if using linear interpolation
-            # n=1.0 should always be a knot and finite differencing breaks
-            # for linear interpolators right at knots
-            sersicindex.value += 1e-3 * (sersicindex.interptype == g2f.InterpType.linear)
-            ellipse = g2f.SersicParametricEllipse(
-                g2f.ReffXParameterD(size, transform=transforms.x),
-                g2f.ReffYParameterD(size, transform=transforms.y),
-                g2f.RhoParameterD(
-                    compconf.rho_base + c * compconf.rho_increment,
-                    limits=limits.rho,
-                    transform=transforms.rho,
-                ),
-            )
-            component = g2f.SersicMixComponent(
-                ellipse,
-                centroid,
-                g2f.LinearIntegralModel(fluxes),
-                sersicindex,
-            )
-            components[c] = component
-        sources[i] = g2f.Source(components)
-        gaussians = sources[i].gaussians(list(channels.values())[0])
-        assert len(gaussians) == 4 * n_components
-    return sources
 
 
 @pytest.fixture(scope="module")

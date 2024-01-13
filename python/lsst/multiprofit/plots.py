@@ -5,6 +5,7 @@ from typing import Any, Iterable, Type, TypeAlias
 
 import astropy.table
 import astropy.visualization as apVis
+import gauss2d as g2
 import gauss2d.fit as g2f
 import matplotlib as mpl
 import matplotlib.figure
@@ -379,6 +380,8 @@ def plot_model_rgb(
 
     observations = {}
     models = {}
+    x_min, x_max, y_min, y_max = np.Inf, -np.Inf, np.Inf, -np.Inf
+    coordsys_last = None
     for obs, output in zip(model.data, model.outputs):
         band = obs.channel.name
         if band in bands:
@@ -386,12 +389,40 @@ def plot_model_rgb(
                 raise ValueError(f"Cannot plot {model=} because {band=} has multiple observations")
             observations[band] = obs
             models[band] = output.data
+            coordsys = obs.coordsys
+            if coordsys:
+                coordsys_last = coordsys
+                x_min = min(x_min, coordsys.x_min)
+                x_max = max(x_max, coordsys.x_min + obs.image.n_cols)
+                y_min = min(y_min, coordsys.y_min)
+                y_max = max(y_max, coordsys.y_min + obs.image.n_rows)
+            elif coordsys_last is not None:
+                raise ValueError(f"coordinate system for {band=} is None but last was not; they must either "
+                                 f"all be None or all non-None")
+    if coordsys_last:
+        shape_new = y_max - y_min, x_max - x_min
+        for band, obs in observations.items():
+            x_min_o, x_max_o = coordsys.x_min - x_min, coordsys.x_min + obs.image.n_cols - x_max
+            y_min_o, y_max_o = coordsys.y_min - y_min, coordsys.y_min + obs.image.n_cols - y_max
+            if x_min_o or x_max_o or y_min_o or y_max_o:
+                # zero-pad the relevant images into a new observation
+                data_new = {}
+                for key in ("image", "mask", "sigma_inv", "model"):
+                    img = np.zeros(shape_new)
+                    img[x_min_o:x_max_o, y_min_o:y_max_o] = (
+                        models[band] if (key == "model") else obs.getattr(key).data
+                    )
+                    if key == "model":
+                        models[band] = img
+                    else:
+                        data_new[key] = (g2.ImageB if (key == "sigma_inv") else g2.ImageD)(img)
+                observations[band] = g2f.Observation(**data_new)
 
     img_rgb = apVis.make_lupton_rgb(
         *[observation.image.data * weights[band] for band, observation in observations.items()]
     )
     img_model_rgb = apVis.make_lupton_rgb(
-        *[output.data * weight for output, weight in zip(model.outputs, weights.values())]
+        *[model * weight for output, weight in zip(model.outputs, weights.values())]
     )
     fig_rgb, ax_rgb = plt.subplots(2, 2)
     fig_gs, ax_gs = plt.subplots(2, len(bands))
