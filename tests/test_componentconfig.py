@@ -1,11 +1,34 @@
+# This file is part of multiprofit.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (https://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
     EllipticalComponentConfig,
-    GaussianConfig,
+    GaussianComponentConfig,
     ParameterConfig,
-    SersicConfig,
+    SersicComponentConfig,
+    SersicIndexConfig,
 )
 from lsst.multiprofit.config import set_config_from_dict
+from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
 
@@ -37,39 +60,69 @@ def test_EllipticalComponentConfig():
 
 
 def test_GaussianComponentConfig_fractional(centroid):
-    config1 = GaussianConfig(
+    config = GaussianComponentConfig(
         rho=ParameterConfig(value_initial=0),
         size_x=ParameterConfig(value_initial=1.4),
         size_y=ParameterConfig(value_initial=1.6),
         is_fractional=True,
     )
     channel = g2f.Channel.NONE
-    component1, priors = config1.make_component(
+    componentdata1 = config.make_component(
         centroid=centroid,
-        fluxes={channel: ParameterConfig(value_initial=1.0, fixed=True)},
-        last=1.0,
+        fluxes={channel: ParameterConfig(value_initial=0.5)},
         is_final=False,
     )
-    assert component1 is not None
-    assert len(priors) == 0
-
-
-def test_GaussianComponentConfig_linear(centroid, channels):
-    config = GaussianConfig(
-        rho=ParameterConfig(value_initial=0),
-        size_x=ParameterConfig(value_initial=1.4),
-        size_y=ParameterConfig(value_initial=1.6),
-    )
-    component, priors = config.make_component(
+    componentdata2 = config.make_component(
         centroid=centroid,
-        fluxes={
-            channel: ParameterConfig(value_initial=float(idx))
-            for idx, channel in enumerate(channels.values())
-        },
+        fluxes=None,
+        last=componentdata1.integralmodel,
+        is_final=True,
     )
-    assert component is not None
-    assert len(priors) == 0
+    components = (componentdata1, componentdata2)
+    n_components = len(components)
+    for idx, componentdata in enumerate(components):
+        component = componentdata.component
+        assert component.centroid is centroid
+        assert len(componentdata.priors) == 0
+        fluxes = list(get_params_uniq(component, nonlinear=False))
+        assert len(fluxes) == 1
+        assert isinstance(fluxes[0], g2f.IntegralParameterD)
+        fracs = [param for param in get_params_uniq(component, linear=False)
+                 if isinstance(param, g2f.ProperFractionParameterD)]
+        assert len(fracs) == (idx + (idx == 0) - (idx == n_components))
 
 
-def test_SersicComponentConfig():
-    pass
+def test_SersicConfig(centroid, channels):
+    rho, size_x, size_y, sersicindex = -0.3, 1.4, 1.6, 3.2
+    config = SersicComponentConfig(
+        rho=ParameterConfig(value_initial=rho),
+        size_x=ParameterConfig(value_initial=size_x),
+        size_y=ParameterConfig(value_initial=size_y),
+        sersicindex=SersicIndexConfig(value_initial=sersicindex),
+    )
+    fluxes = {
+        channel: ParameterConfig(value_initial=float(idx))
+        for idx, channel in enumerate(channels.values())
+    }
+    componentdata = config.make_component(
+        centroid=centroid,
+        fluxes=fluxes,
+    )
+    assert componentdata.component is not None
+    assert len(componentdata.priors) == 0
+    params = get_params_uniq(componentdata.component)
+    values_init = {
+        g2f.RhoParameterD: rho,
+        g2f.ReffXParameterD: size_x,
+        g2f.ReffYParameterD: size_y,
+        g2f.SersicIndexParameterD: sersicindex,
+    }
+    fluxes_label = {
+        config.format_label(config.get_integral_label_default(), name_channel=channel.name):
+            fluxes[channel].value_initial for channel in fluxes.keys()
+    }
+    for param in params:
+        if isinstance(param, g2f.IntegralParameterD):
+            assert fluxes_label[param.label] == param.value
+        elif value_init := values_init.get(param.__class__):
+            assert param.value == value_init

@@ -18,3 +18,98 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import gauss2d.fit as g2f
+from lsst.multiprofit.componentconfig import GaussianComponentConfig, ParameterConfig
+from lsst.multiprofit.model_utils import make_psfmodel_null
+from lsst.multiprofit.modelconfig import ModelConfig
+from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
+from lsst.multiprofit.plots import plot_model_rgb
+from lsst.multiprofit.sourceconfig import ComponentMixtureConfig, SourceConfig
+import numpy as np
+import pytest
+
+sigma_inv = 1e4
+
+@pytest.fixture(scope="module")
+def channels() -> dict[str, g2f.Channel]:
+    return {band: g2f.Channel.get(band) for band in ("R", "G", "B")}
+
+
+@pytest.fixture(scope="module")
+def data(channels) -> g2f.Data:
+    n_rows, n_cols = 15, 21
+    x_min, y_min = 0, 0
+
+    dn_rows, dn_cols = 1, -2
+    dx_min, dy_min = -2, 1
+
+    observations = []
+    for idx, band in enumerate(channels):
+        config = ObservationConfig(
+            band=band,
+            coordsys=CoordinateSystemConfig(
+                x_min=x_min + idx*dx_min,
+                y_min=y_min + idx*dy_min,
+            ),
+            n_rows=n_rows + idx*dn_rows,
+            n_cols=n_cols + idx*dn_cols,
+        )
+        observation = config.make_observation()
+        observation.image.fill(0)
+        observation.sigma_inv.fill(sigma_inv)
+        observation.mask_inv.fill(1)
+        observations.append(observation)
+    return g2f.Data(observations)
+
+
+@pytest.fixture(scope="module")
+def psfmodel():
+    return make_psfmodel_null()
+
+
+@pytest.fixture(scope="module")
+def psfmodels(psfmodel, channels) -> list[g2f.PsfModel]:
+    return [psfmodel]*len(channels)
+
+
+@pytest.fixture(scope="module")
+def model(channels, data, psfmodels):
+    config_comp = GaussianComponentConfig(
+        rho=ParameterConfig(value_initial=0.1),
+        size_x=ParameterConfig(value_initial=3.8),
+        size_y=ParameterConfig(value_initial=5.1),
+    )
+    fluxes_mix = [{
+        channel: ParameterConfig(value_initial=1.0, fixed=True)
+        for channel in channels.values()
+    }]
+
+    modelconfig = ModelConfig(
+        sources={
+            'src': SourceConfig(
+                componentmixtures={
+                    'mix': ComponentMixtureConfig(components_gauss={'g': config_comp}),
+                }
+            ),
+        },
+    )
+    centroid = g2f.CentroidParameters(
+        x=g2f.CentroidXParameterD(8., fixed=True),
+        y=g2f.CentroidYParameterD(11., fixed=True),
+    )
+    model = modelconfig.make_model([[(centroid, fluxes_mix)]], data=data, psfmodels=psfmodels)
+    model.setup_evaluators(model.EvaluatorMode.image)
+    model.evaluate()
+    rng = np.random.default_rng(1)
+    for output, obs in zip(model.outputs, model.data):
+        img = obs.image.data
+        img.flat = output.data.flat
+        img.flat += rng.standard_normal(img.size) / sigma_inv
+    return model
+
+
+def test_plot_model_rgb(model):
+    fig, ax, *_ = plot_model_rgb(model, stretch=10/sigma_inv, Q=3)
+    assert fig is not None
+    assert ax is not None

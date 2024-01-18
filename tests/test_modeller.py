@@ -19,109 +19,181 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from dataclasses import dataclass
 import math
 import time
-import timeit
-from typing import Tuple
 
 import gauss2d as g2
 import gauss2d.fit as g2f
-from lsst.multiprofit.model_utils import ModelConfig, SourceConfig
-from lsst.multiprofit.modeller import LinearGaussians, Modeller, fitmethods_linear, make_psfmodel_null
-from lsst.multiprofit.transforms import transforms_ref
+from lsst.multiprofit.componentconfig import (
+    GaussianComponentConfig,
+    ParameterConfig,
+    SersicComponentConfig,
+    SersicIndexConfig,
+)
+from lsst.multiprofit.model_utils import make_image_gaussians, make_psfmodel_null
+from lsst.multiprofit.modelconfig import ModelConfig
+from lsst.multiprofit.modeller import FitInputs, LinearGaussians, Modeller, fitmethods_linear
+from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
+from lsst.multiprofit.sourceconfig import ComponentMixtureConfig, SourceConfig
 from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
-import scipy.optimize as spopt
+
+sigma_inv = 1e4
 
 
 @pytest.fixture(scope="module")
-def config():
-    return ModelConfig(
-        comps_psf=ComponentConfig(size_base=2.5, size_increment=1.0, rho_base=-0.1, rho_increment=0.2),
-        comps_src=ComponentConfig(size_base=1.5, size_increment=2.5, rho_base=-0.2, rho_increment=0.5),
-        n_rows=27,
-        n_cols=41,
-        noise_psf=1e-5,
-        seed = 1,
-        sigma_img: float = 1e-3,
-        size_increment_psf=0.3,
-        src_n: int = 1,
-        src_flux_base: float = 1.0,
-        src_flux_increment: float = 1.0
+def channels() -> dict[str, g2f.Channel]:
+    return {band: g2f.Channel.get(band) for band in ("R", "G", "B")}
+
+
+@pytest.fixture(scope="module")
+def data(channels) -> g2f.Data:
+    n_rows, n_cols = 25, 27
+    x_min, y_min = 0, 0
+
+    dn_rows, dn_cols = 0, 0 #2, -3
+    dx_min, dy_min = 0, 0 #-1, 1
+
+    observations = []
+    for idx, band in enumerate(channels):
+        config = ObservationConfig(
+            band=band,
+            coordsys=CoordinateSystemConfig(
+                x_min=x_min + idx*dx_min,
+                y_min=y_min + idx*dy_min,
+            ),
+            n_rows=n_rows + idx*dn_rows,
+            n_cols=n_cols + idx*dn_cols,
+        )
+        observation = config.make_observation()
+        observation.image.fill(0)
+        observation.sigma_inv.fill(sigma_inv)
+        observation.mask_inv.fill(1)
+        observations.append(observation)
+    return g2f.Data(observations)
+
+
+@pytest.fixture(scope="module")
+def psfmodels(channels) -> list[g2f.PsfModel]:
+    rho, size_x, size_y = 0.12, 1.6, 1.2
+    drho, dsize_x, dsize_y = -0.3, 1.1, 1.9
+    drho_chan, dsize_x_chan, dsize_y_chan = 0.03, 0.12, 0.14
+    frac, dfrac = 0.62, -0.08
+
+    psfmodels = []
+    for idx_chan, channel in enumerate(channels.values()):
+        fluxes = [1.0, frac + idx_chan*dfrac]
+        n_components = len(fluxes)
+        config = SourceConfig(
+            componentmixtures={
+                'psf': ComponentMixtureConfig(
+                    components_gauss={
+                        str(idx): GaussianComponentConfig(
+                            rho=ParameterConfig(value_initial=rho + idx*drho + idx_chan*drho_chan),
+                            size_x=ParameterConfig(value_initial=size_x + idx*dsize_x + idx_chan*dsize_x_chan),
+                            size_y=ParameterConfig(value_initial=size_y + idx*dsize_y + idx_chan*dsize_y_chan),
+                            is_fractional=True,
+                        )
+                        for idx in range(n_components)
+                    },
+                    is_fractional=True,
+                )
+            },
+        )
+        config.validate()
+
+        centroid = g2f.CentroidParameters(
+            x=g2f.CentroidXParameterD(0, fixed=True),
+            y=g2f.CentroidYParameterD(0, fixed=True),
+        )
+        psfmodel, priors = config.make_psfmodel(
+            [
+                (
+                    centroid,
+                    [
+                        {g2f.Channel.NONE: ParameterConfig(value_initial=flux, fixed=True)}
+                        for flux in fluxes
+                    ]
+                ),
+            ],
+        )
+        psfmodels.append(psfmodel)
+    return psfmodels
+
+
+@pytest.fixture(scope="module")
+def model(channels, data, psfmodels) -> g2f.Model:
+    rho, size_x, size_y, sersicn, flux = 0.4, 1.5, 1.9, 0.5, 4.7
+    drho, dsize_x, dsize_y, dsersicn, dflux = -0.9, 2.5, 5.4, 2.8, 13.9
+
+    components_sersic = {}
+    fluxes_mix = []
+    for idx, name in enumerate(("PS", "Sersic")):
+        components_sersic[name] = SersicComponentConfig(
+            rho=ParameterConfig(value_initial=rho + idx*drho),
+            size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
+            size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
+            sersicindex=SersicIndexConfig(value_initial=sersicn + idx*dsersicn, fixed=idx == 0),
+        )
+        fluxes_comp = {
+            channel: ParameterConfig(value_initial=flux + idx_channel*dflux*idx, fixed=True)
+            for idx_channel, channel in enumerate(channels.values())
+        }
+        fluxes_mix.append(fluxes_comp)
+
+    modelconfig = ModelConfig(
+        sources={
+            'src': SourceConfig(
+                componentmixtures={
+                    'mix': ComponentMixtureConfig(components_sersic=components_sersic),
+                }
+            ),
+        },
     )
-
-
-@pytest.fixture(scope="module")
-def limits(config):
-    return Limits(
-        x=g2f.LimitsD(min=0, max=config.n_cols),
-        y=g2f.LimitsD(min=0, max=config.n_rows),
-        rho=g2f.LimitsD(min=-0.99, max=0.99),
+    centroid = g2f.CentroidParameters(
+        x=g2f.CentroidXParameterD(12.14, fixed=True),
+        y=g2f.CentroidYParameterD(13.78, fixed=True),
     )
+    model = modelconfig.make_model([[(centroid, fluxes_mix)]], data=data, psfmodels=psfmodels)
+    return model
 
 
 @pytest.fixture(scope="module")
-def transforms(config):
-    transform_log10 = g2f.Log10TransformD()
-    return Transforms(
-        x=transform_log10,
-        y=transform_log10,
-        rho=g2f.LogitLimitedTransformD(limits=g2f.LimitsD(min=-0.99, max=0.99)),
-    )
+def model_jac(model) -> g2f.Model:
+    model_jac = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model.sources)
+    return model_jac
 
 
 @pytest.fixture(scope="module")
-def bands():
-    return tuple(("i", "r", "g"))
+def psf_observations(psfmodels) -> list[g2f.Observation]:
+    config = ObservationConfig(n_rows=17, n_cols=19)
+    rng = np.random.default_rng(1)
 
-
-@pytest.fixture(scope="module")
-def channels(bands):
-    return {band: g2f.Channel.get(band) for band in bands}
-
-
-@pytest.fixture(scope="module")
-def images(bands, config):
-    images = {}
-    for band in bands:
-        image = g2.ImageD(n_rows=config.n_rows, n_cols=config.n_cols)
-        sigma_inv = g2.ImageD(n_rows=config.n_rows, n_cols=config.n_cols)
-        sigma_inv.data.flat = 1 / config.sigma_img
-        mask_inv = g2.ImageB(np.ones((config.n_rows, config.n_cols), dtype=bool))
-        images[band] = (image, sigma_inv, mask_inv)
-    return images
-
-
-@pytest.fixture(scope="module")
-def data(channels, images) -> g2f.Data:
-    return g2f.Data(
-        [
-            g2f.Observation(
-                channel=channels[band],
-                image=imagelist[0],
-                sigma_inv=imagelist[1],
-                mask_inv=imagelist[2],
-            )
-            for band, imagelist in images.items()
-        ]
-    )
-
-
-@pytest.fixture(scope="module")
-def psfmodels(channels, config, data, limits):
-    return None
-
-
-@pytest.fixture(scope="module")
-def psfmodels_linear_gaussians(channels, psfmodels):
-    gaussians = [None] * len(psfmodels)
-    for idx, psfmodel in enumerate(psfmodels):
-        params = psfmodel.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE))
-        params[0].fixed = False
-        gaussians[idx] = LinearGaussians.make(psfmodel, is_psf=True)
-    return gaussians
+    observations = []
+    for psfmodel in psfmodels:
+        observation = config.make_observation()
+        # Have to make a duplicate image here because one can only call
+        # make_image_gaussians with an owning pointer, whereas
+        # observation.image is a reference
+        image = g2.ImageD(observation.image.data)
+        # Make the kernel centered
+        gaussians_source = psfmodel.gaussians(g2f.Channel.NONE)
+        for idx in range(len(gaussians_source)):
+            gaussian_idx = gaussians_source.at(idx)
+            gaussian_idx.centroid.x = image.n_cols/2.
+            gaussian_idx.centroid.y = image.n_rows/2.
+        gaussians_kernel = g2.Gaussians([g2.Gaussian()])
+        make_image_gaussians(
+            gaussians_source=gaussians_source,
+            gaussians_kernel=gaussians_kernel,
+            output=image,
+        )
+        image.data.flat += 1e-4 * rng.standard_normal(image.data.size)
+        observation.mask_inv.fill(1)
+        observation.sigma_inv.fill(1e3)
+        observations.append(observation)
+    return observations
 
 
 @pytest.fixture(scope="module")
@@ -133,87 +205,7 @@ def psf_fit_models(psfmodels, psf_observations):
     ]
 
 
-@pytest.fixture(scope="module")
-def psf_observations(config, psfmodels) -> Tuple[g2f.Observation]:
-    observations = [None] * len(psfmodels)
-    return tuple(observations)
-
-
-@pytest.fixture(scope="module")
-def sources(channels, config, limits, transforms):
-    return get_sources(channels, config, limits, transforms)
-
-
-@pytest.fixture(scope="module")
-def model(data, psfmodels, sources):
-    return g2f.Model(data, list(psfmodels), list(sources))
-
-
-@pytest.fixture(scope="module")
-def model_jac(data, psfmodels, sources):
-    return g2f.Model(data, list(psfmodels), list(sources))
-
-
-def _get_exposure_params(exposure):
-    params_all = exposure[0].psf.model.get_parameters(free=True, fixed=True)
-    param_integral = None
-    params = []
-    for param in params_all:
-        str_param = str(param)
-        if str_param.startswith("gauss2d::fit::Integral"):
-            if param_integral is None:
-                param_integral = param
-                continue
-            else:
-                raise RuntimeError("Got second Exposure IntegralParameter before entering first")
-        elif str_param.startswith("gauss2d::fit::ProperFraction"):
-            if param_integral is not None:
-                params.append(param_integral)
-                param_integral = None
-        params.append(param)
-    return params
-
-
-def fit_model(model: g2f.Model, jacobian, residuals, params_init=None):
-    def residual_func(params_new, model, params, jacobian, residuals):
-        for param, value in zip(params, params_new):
-            param.value_transformed = value
-        model.evaluate()
-        return residuals
-
-    def jacobian_func(params_new, model, params, jacobian, residuals):
-        return -jacobian
-
-    params = list(get_params_uniq(model, fixed=False))
-    n_params = len(params)
-    bounds = ([None] * n_params, [None] * n_params)
-    params_init_is_none = params_init is None
-    if params_init_is_none:
-        params_init = [None] * n_params
-
-    for idx, param in enumerate(params):
-        limits = param.limits
-        bounds[0][idx] = limits.min
-        bounds[1][idx] = limits.max
-        if params_init_is_none:
-            params_init[idx] = param.value_transformed
-
-    time_init = time.process_time()
-    result = spopt.least_squares(
-        residual_func,
-        params_init,
-        jac=jacobian_func,
-        bounds=bounds,
-        args=(model, params, jacobian, residuals),
-        x_scale="jac",
-        ftol=1e-6,
-        xtol=1e-6,
-    )
-    time_run = time.process_time() - time_init
-    return result, time_run
-
-
-def test_model_evaluation(channels, config, model, model_jac, images):
+def test_model_evaluation(channels, model, model_jac):
     with pytest.raises(RuntimeError):
         model.evaluate()
 
@@ -227,10 +219,6 @@ def test_model_evaluation(channels, config, model, model_jac, images):
 
     model.setup_evaluators(print=printout)
     model.evaluate()
-    models = {
-        "image": (model, ""),
-        "jacob": (model_jac, ""),
-    }
 
     n_priors = 0
     n_obs = len(model.data)
@@ -239,13 +227,12 @@ def test_model_evaluation(channels, config, model, model_jac, images):
     datasizes = np.zeros(n_obs, dtype=int)
     ranges_params = [None] * n_obs
     params_free = tuple(get_params_uniq(model_jac, fixed=False))
-    values_init = tuple(param.value_transformed for param in params_free)
 
     # There's one extra validation array
     n_params_jac = len(params_free) + 1
     assert n_params_jac > 1
 
-    rng = np.random.default_rng(config.seed + 1)
+    rng = np.random.default_rng(2)
 
     for idx_obs in range(n_obs):
         observation = model.data[idx_obs]
@@ -299,40 +286,15 @@ def test_model_evaluation(channels, config, model, model_jac, images):
 
     assert all(np.isclose(loglike_init, loglike_jac))
 
-    if printout:
-        print(f"starting with loglike={sum(loglike_init)} from LLs={loglike_init}")
-    result, time = fit_model(model_jac, jacobian[:, 1:], residual)
-    for param, value in zip(params_free, result.x):
-        param.value_transformed = value
-    loglike_best = model.evaluate()
-    if printout:
-        print(f"got loglike={sum(loglike_best)} from LLs={loglike_best} in t={time:.3e}, result: \n{result}")
 
-    assert sum(loglike_best) > sum(loglike_init)
-
-    n_eval = 10
-
-    n_name_model_max = max(len(x) for x in models.keys())
-    format_name = f"{{0: <{n_name_model_max}}}"
-
-    for name, obj in models.items():
-        result = (
-            np.array(
-                timeit.repeat(
-                    f"model.evaluate({obj[1]})", repeat=n_eval, number=n_eval, globals={"model": obj[0]}
-                )
-            )
-            / n_eval
-        )
-        if printout:
-            print(
-                f"{format_name.format(name)}: min={np.min(result, axis=0):.4e}"
-                f", med={np.median(result, axis=0):.4e} (for n_params_jac={n_params_jac})"
-            )
-
-    # Return param values to init
-    for param, value in zip(params_free, values_init):
-        param.value_transformed = value
+@pytest.fixture(scope="module")
+def psfmodels_linear_gaussians(channels, psfmodels):
+    gaussians = [None] * len(psfmodels)
+    for idx, psfmodel in enumerate(psfmodels):
+        params = psfmodel.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE))
+        params[0].fixed = False
+        gaussians[idx] = LinearGaussians.make(psfmodel, is_psf=True)
+    return gaussians
 
 
 def test_make_psf_source_linear(psfmodels, psfmodels_linear_gaussians):
@@ -343,13 +305,13 @@ def test_make_psf_source_linear(psfmodels, psfmodels_linear_gaussians):
         )
 
 
-def test_modeller(config, model):
+def test_modeller(model):
     # For debugging purposes
     printout = False
     model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
     # Get the model images
     model.evaluate()
-    rng = np.random.default_rng(config.seed)
+    rng = np.random.default_rng(3)
 
     for idx_obs, observation in enumerate(model.data):
         output = model.outputs[idx_obs]
@@ -367,7 +329,7 @@ def test_modeller(config, model):
 
     modeller = Modeller()
 
-    dloglike = model.compute_loglike_grad(verify=True, findiff_frac=1e-7, findiff_add=1e-7)
+    dloglike = model.compute_loglike_grad(verify=True, findiff_frac=1e-8, findiff_add=1e-8)
     assert all(np.isfinite(dloglike))
 
     time_init = time.process_time()
@@ -455,31 +417,38 @@ def test_modeller(config, model):
 
 def test_psf_model_fit(psf_fit_models):
     for model in psf_fit_models:
-        param = [x for x in model.parameters() if isinstance(x, g2f.ProperFractionParameterD)][0]
-        param.fixed = False
-        errors = model.verify_jacobian()
+        params = get_params_uniq(model.sources[0])
+        for param in params:
+            # Fitting the total flux won't work in a fractional model (yet)
+            if not isinstance(param, g2f.IntegralParameterD):
+                param.fixed = False
+        # Necessary whenever parameters are freed/fixed
+        model.setup_evaluators(model.EvaluatorMode.jacobian, force=True)
+        errors = model.verify_jacobian(rtol=5e-4, atol=5e-4, findiff_add=1e-6, findiff_frac=1e-6)
         if errors:
             import matplotlib.pyplot as plt
 
-            jacobian, jacobians, residual, residuals = Modeller.make_jacobians(model=model)
+            fitinputs = FitInputs.from_model(model)
             model.setup_evaluators(
                 evaluatormode=g2f.Model.EvaluatorMode.jacobian,
-                outputs=jacobians,
-                residuals=residuals,
+                outputs=fitinputs.jacobians,
+                residuals=fitinputs.residuals,
                 print=True,
+                force=True,
             )
             model.evaluate()
-            assert np.sum(np.abs(jacobians[0][0].data)) > 0
+            assert (fitinputs.jacobians[0][0].data == 0).all()
+            assert np.sum(np.abs(fitinputs.jacobians[0][1].data)) > 0
             model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
             model.evaluate()
             outputs = model.outputs
             diffs = [g2.ImageD(img.data.copy()) for img in outputs]
-            delta = 1e-3
+            delta = 1e-5
             param.value -= delta
             model.evaluate()
             for diff, output in zip(diffs, outputs):
                 diff = (output.data - diff.data) / delta
-                jacobian = jacobians[0][1].data
+                jacobian = fitinputs.jacobians[0][1].data
                 fig, ax = plt.subplots(1, 2)
                 ax[0].imshow(diff)
                 ax[1].imshow(jacobian)

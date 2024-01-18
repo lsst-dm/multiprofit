@@ -33,7 +33,7 @@ import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
 
-from .componentconfig import SersicConfig
+from .componentconfig import ParameterConfig, SersicComponentConfig
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, Modeller
 from .transforms import transforms_ref
@@ -108,7 +108,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
     sersics = pexConfig.ConfigDictField(
         default={},
         doc="Sersic components",
-        itemtype=SersicConfig,
+        itemtype=SersicComponentConfig,
         keytype=str,
         optional=False,
     )
@@ -182,9 +182,10 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
             )
         idx = self.n_pointsources
         for sersic in self.sersics.values():
-            component, priors_comp = sersic.make_component(centroid=centroid, channels=channels)
-            components[idx] = component
-            priors.extend(priors_comp)
+            fluxes = {channel: ParameterConfig(value_initial=1.0) for channel in channels}
+            componentdata = sersic.make_component(centroid=centroid, fluxes=fluxes)
+            components[idx] = componentdata.component
+            priors.extend(componentdata.priors)
             idx += 1
         if self.prior_cen_x_stddev > 0 and np.isfinite(self.prior_cen_x_stddev):
             priors.append(g2f.GaussianPrior(centroid.x_param_ptr, 0, self.prior_cen_x_stddev))

@@ -27,6 +27,7 @@ from .limits import limits_ref
 __all__ = ["make_psf_source"]
 
 
+# TODO: This function should be replaced with SourceConfig.make_source
 def make_psf_source(
     sigma_xs: list[float] | None = None,
     sigma_ys: list[float] | None = None,

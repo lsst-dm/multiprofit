@@ -21,9 +21,9 @@
 
 import gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
-    GaussianConfig,
+    GaussianComponentConfig,
     ParameterConfig,
-    SersicConfig,
+    SersicComponentConfig,
     SersicIndexConfig,
     init_component,
 )
@@ -56,7 +56,7 @@ plot = False
 def config_psf():
     return CatalogPsfFitterConfig(
         gaussians={
-            "comp1": GaussianConfig(
+            "comp1": GaussianComponentConfig(
                 size_x=ParameterConfig(value_initial=sigma_psf),
                 size_y=ParameterConfig(value_initial=sigma_psf),
             )
@@ -71,7 +71,7 @@ def config_source_fit():
         config_fit=ModelFitConfig(fit_linear_iter=3),
         n_pointsources=1,
         sersics={
-            "comp1": SersicConfig(
+            "comp1": SersicComponentConfig(
                 prior_size_mean=reff_y_src,
                 prior_size_stddev=1.0,
                 prior_axrat_mean=reff_x_src / reff_y_src,

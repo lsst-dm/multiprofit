@@ -32,7 +32,7 @@ import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 
-from .componentconfig import GaussianConfig, ParameterConfig
+from .componentconfig import GaussianComponentConfig, ParameterConfig
 from .errors import PsfRebuildFitFlagError
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modeller import FitInputsDummy, LinearGaussians, Modeller, make_psfmodel_null
@@ -47,15 +47,15 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
 
     gaussians = pexConfig.ConfigDictField(
         default={
-            "comp1": GaussianConfig(
+            "comp1": GaussianComponentConfig(
                 size_x=ParameterConfig(value_initial=1.5), size_y=ParameterConfig(value_initial=1.5)
             ),
-            "comp2": GaussianConfig(
+            "comp2": GaussianComponentConfig(
                 size_x=ParameterConfig(value_initial=3.0), size_y=ParameterConfig(value_initial=3.0)
             ),
         },
         doc="Gaussian components",
-        itemtype=GaussianConfig,
+        itemtype=GaussianComponentConfig,
         keytype=str,
         optional=False,
     )

@@ -8,6 +8,7 @@ import astropy.visualization as apVis
 import gauss2d as g2
 import gauss2d.fit as g2f
 import matplotlib as mpl
+import matplotlib.axes
 import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +27,10 @@ __all__ = [
 
 linestyles_default = ["--", "-.", ":"]
 ln10 = np.log(10)
+
+Figure = matplotlib.figure.Figure
+Axes = matplotlib.axes.Axes | Iterable[matplotlib.axes.Axes]
+FigureAxes = tuple[Figure, Axes]
 
 
 @dataclass(kw_only=True)
@@ -335,7 +340,8 @@ def plot_model_rgb(
     model: g2f.Model,
     weights: dict[str, float] | None = None,
     high_sn_threshold: float | None = None,
-) -> tuple[plt.Figure, plt.Axes, plt.Figure, plt.Axes, np.ndarray]:
+    **kwargs
+) -> tuple[Figure, Axes, Figure, Axes, np.ndarray]:
     """Plot RGB images of a model, its data and residuals thereof.
 
     Parameters
@@ -347,6 +353,9 @@ def plot_model_rgb(
     high_sn_threshold
         If non-None, will return an image with the pixels having a model S/N
         above this threshold in every band.
+    **kwargs
+        Aadditional keyword arguments to pass to make_lupton_rgb when creating
+        RGB images.
 
     Returns
     -------
@@ -389,40 +398,43 @@ def plot_model_rgb(
                 raise ValueError(f"Cannot plot {model=} because {band=} has multiple observations")
             observations[band] = obs
             models[band] = output.data
-            coordsys = obs.coordsys
+            coordsys = obs.image.coordsys
             if coordsys:
                 coordsys_last = coordsys
-                x_min = min(x_min, coordsys.x_min)
-                x_max = max(x_max, coordsys.x_min + obs.image.n_cols)
-                y_min = min(y_min, coordsys.y_min)
-                y_max = max(y_max, coordsys.y_min + obs.image.n_rows)
+                x_min = int(round(min(x_min, coordsys.x_min), 0))
+                x_max = int(round(max(x_max, coordsys.x_min + obs.image.n_cols), 0))
+                y_min = int(round(min(y_min, coordsys.y_min), 0))
+                y_max = int(round(max(y_max, coordsys.y_min + obs.image.n_rows), 0))
             elif coordsys_last is not None:
                 raise ValueError(f"coordinate system for {band=} is None but last was not; they must either "
                                  f"all be None or all non-None")
     if coordsys_last:
-        shape_new = y_max - y_min, x_max - x_min
+        shape_new = (y_max - y_min, x_max - x_min)
         for band, obs in observations.items():
-            x_min_o, x_max_o = coordsys.x_min - x_min, coordsys.x_min + obs.image.n_cols - x_max
-            y_min_o, y_max_o = coordsys.y_min - y_min, coordsys.y_min + obs.image.n_cols - y_max
+            coordsys = obs.image.coordsys
+            x_min_c = int(round(coordsys.x_min, 0)) - x_min
+            y_min_c = int(round(coordsys.y_min, 0)) - y_min
+            x_min_o, x_max_o = x_min_c, x_min_c + obs.image.n_cols
+            y_min_o, y_max_o = y_min_c, y_min_c + obs.image.n_rows
             if x_min_o or x_max_o or y_min_o or y_max_o:
                 # zero-pad the relevant images into a new observation
                 data_new = {}
-                for key in ("image", "mask", "sigma_inv", "model"):
+                for key in ("image", "mask_inv", "sigma_inv", "model"):
                     img = np.zeros(shape_new)
-                    img[x_min_o:x_max_o, y_min_o:y_max_o] = (
-                        models[band] if (key == "model") else obs.getattr(key).data
+                    img[y_min_o:y_max_o, x_min_o:x_max_o] = (
+                        models[band] if (key == "model") else getattr(obs, key).data
                     )
                     if key == "model":
                         models[band] = img
                     else:
-                        data_new[key] = (g2.ImageB if (key == "sigma_inv") else g2.ImageD)(img)
-                observations[band] = g2f.Observation(**data_new)
+                        data_new[key] = (g2.ImageB if (key == "mask_inv") else g2.ImageD)(img)
+                observations[band] = g2f.Observation(channel=obs.channel, **data_new)
 
     img_rgb = apVis.make_lupton_rgb(
-        *[observation.image.data * weights[band] for band, observation in observations.items()]
+        *[observation.image.data * weights[band] for band, observation in observations.items()], **kwargs
     )
     img_model_rgb = apVis.make_lupton_rgb(
-        *[model * weight for output, weight in zip(model.outputs, weights.values())]
+        *[models[band] * weight for band, weight in weights.items()], **kwargs
     )
     fig_rgb, ax_rgb = plt.subplots(2, 2)
     fig_gs, ax_gs = plt.subplots(2, len(bands))
@@ -444,7 +456,7 @@ def plot_model_rgb(
         img_data = obs.image.data
         img_sigma_inv = obs.sigma_inv.data
         imgs_sigma_inv[band] = img_sigma_inv
-        img_model = model.outputs[idx].data
+        img_model = models[band]
         if mask_inv_highsn:
             mask_inv_highsn *= (img_model * np.nanmedian(img_sigma_inv)) > high_sn_threshold
         residual = (img_data - img_model) * mask_inv
@@ -498,7 +510,7 @@ Interpolator: TypeAlias = g2f.SersicMixInterpolator | tuple[Type, dict[str, Any]
 
 def plot_sersicmix_interp(
     interps: dict[str, tuple[Interpolator, str | tuple]], n_ser: np.ndarray, **kwargs: Any
-) -> matplotlib.figure.Figure:
+) -> FigureAxes:
     """Plot Gaussian mixture Sersic profile interpolated values.
 
     Parameters
@@ -622,4 +634,4 @@ def plot_sersicmix_interp(
                 axis.set_ylabel(f"{y_prefix}{y_label}")
             if make_label:
                 axis.legend(loc="upper left")
-    return fig
+    return fig, axes
