@@ -638,13 +638,15 @@ class Modeller:
 
         results = FitResult(inputs=fitinputs, config=config)
         time_init = time.process_time()
+        model.evaluate()
+        x_scale_jac_clipped = np.clip(1.0/(np.sum(jac**2, axis=0)**0.5), 0.05, 20)
         result_opt = spopt.least_squares(
             residual_func,
             params_init,
             jac=jacobian_func,
             bounds=bounds,
             args=(model, model_ll, params_free, results, jac),
-            x_scale="jac",
+            x_scale=x_scale_jac_clipped,
             **kwargs,
         )
         results.time_run = time.process_time() - time_init
