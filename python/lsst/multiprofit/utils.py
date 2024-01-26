@@ -39,9 +39,6 @@ class ArbitraryAllowedConfig:
 class FrozenArbitraryAllowedConfig(ArbitraryAllowedConfig):
     """Pydantic config to allow arbitrary typed Fields for frozen classes."""
 
-    # Needed to allow __post_init__ to add attrs to a frozen class
-    post_init_call = "after_validation"
-
 
 def get_params_uniq(parametric: g2f.Parametric, **kwargs: Any):
     """Get a sorted set of parameters matching a filter.
