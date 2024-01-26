@@ -55,7 +55,10 @@ def get_params_uniq(parametric: g2f.Parametric, **kwargs: Any):
     params
         The unique parameters from the parametric object matching the filter.
     """
-    return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()
+    params = parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))
+    # This should always return the same list as:
+    # list({p: None for p in }.keys())
+    return g2f.params_unique(params)
 
 
 def normalize(ndarray: numpy.ndarray, return_sum: bool = False):
