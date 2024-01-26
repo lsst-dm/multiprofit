@@ -441,8 +441,9 @@ class Modeller:
         n_params = len(gaussians_linear.gaussians_free)
         if not (n_params > 0):
             raise ValueError(f"!({len(gaussians_linear.gaussians_free)=}>0); can't fit with no free params")
-        image = observation.image.data
+        image = observation.image
         shape = image.shape
+        coordsys = image.coordsys
 
         mask_inv = observation.mask_inv.data
         sigma_inv = observation.sigma_inv.data
@@ -474,6 +475,7 @@ class Modeller:
                 gaussians_kernel=gaussians_psf,
                 n_rows=shape[0],
                 n_cols=shape[1],
+                coordsys=coordsys,
             ).data
             x[:, idx_param] = ((image_free if mask_inv is None else image_free[mask_inv]) * sigma_inv).flat
             params[idx_param] = param
