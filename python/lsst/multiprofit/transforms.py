@@ -135,6 +135,11 @@ transforms_ref = {
     "log10": g2f.Log10TransformD(),
     "inverse": g2f.InverseTransformD(),
     "logit": g2f.LogitTransformD(),
+    "logit_fluxfrac": get_logit_limited(
+        limits_ref["fluxfrac"].min,
+        limits_ref["fluxfrac"].max,
+        name=f"ref_logit_fluxfrac[{limits_ref['fluxfrac'].min}, {limits_ref['fluxfrac'].max}]",
+    ),
     "logit_rho": get_logit_limited(
         limits_ref["rho"].min,
         limits_ref["rho"].max,
