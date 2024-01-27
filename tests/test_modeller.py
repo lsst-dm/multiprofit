@@ -25,16 +25,19 @@ import time
 import gauss2d as g2
 import gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
+    CentroidConfig,
+    FluxFractionParameterConfig,
+    FluxParameterConfig,
     GaussianComponentConfig,
     ParameterConfig,
     SersicComponentConfig,
-    SersicIndexConfig,
+    SersicIndexParameterConfig,
 )
 from lsst.multiprofit.model_utils import make_image_gaussians, make_psfmodel_null
 from lsst.multiprofit.modelconfig import ModelConfig
 from lsst.multiprofit.modeller import FitInputs, LinearGaussians, Modeller, fitmethods_linear
 from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
-from lsst.multiprofit.sourceconfig import ComponentMixtureConfig, SourceConfig
+from lsst.multiprofit.sourceconfig import ComponentGroupConfig, SourceConfig
 from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
@@ -52,8 +55,8 @@ def data(channels) -> g2f.Data:
     n_rows, n_cols = 25, 27
     x_min, y_min = 0, 0
 
-    dn_rows, dn_cols = 0, 0 #2, -3
-    dx_min, dy_min = 0, 0 #-1, 1
+    dn_rows, dn_cols = 2, -3
+    dx_min, dy_min = -1, 1
 
     observations = []
     for idx, band in enumerate(channels):
@@ -81,19 +84,25 @@ def psfmodels(channels) -> list[g2f.PsfModel]:
     drho_chan, dsize_x_chan, dsize_y_chan = 0.03, 0.12, 0.14
     frac, dfrac = 0.62, -0.08
 
+    n_components = 2
     psfmodels = []
+
     for idx_chan, channel in enumerate(channels.values()):
-        fluxes = [1.0, frac + idx_chan*dfrac]
-        n_components = len(fluxes)
+        frac_chan = frac + idx_chan*dfrac
         config = SourceConfig(
-            componentmixtures={
-                'psf': ComponentMixtureConfig(
+            componentgroups={
+                'psf': ComponentGroupConfig(
                     components_gauss={
                         str(idx): GaussianComponentConfig(
                             rho=ParameterConfig(value_initial=rho + idx*drho + idx_chan*drho_chan),
-                            size_x=ParameterConfig(value_initial=size_x + idx*dsize_x + idx_chan*dsize_x_chan),
-                            size_y=ParameterConfig(value_initial=size_y + idx*dsize_y + idx_chan*dsize_y_chan),
-                            is_fractional=True,
+                            size_x=ParameterConfig(
+                                value_initial=size_x + idx*dsize_x + idx_chan*dsize_x_chan),
+                            size_y=ParameterConfig(
+                                value_initial=size_y + idx*dsize_y + idx_chan*dsize_y_chan),
+                            **({
+                                "flux": FluxParameterConfig(value_initial=1.0, fixed=True),
+                                "fluxfrac": FluxFractionParameterConfig(value_initial=frac_chan, fixed=False),
+                            } if (idx == 0) else {})
                         )
                         for idx in range(n_components)
                     },
@@ -102,60 +111,54 @@ def psfmodels(channels) -> list[g2f.PsfModel]:
             },
         )
         config.validate()
-
-        centroid = g2f.CentroidParameters(
-            x=g2f.CentroidXParameterD(0, fixed=True),
-            y=g2f.CentroidYParameterD(0, fixed=True),
-        )
-        psfmodel, priors = config.make_psfmodel(
-            [
-                (
-                    centroid,
-                    [
-                        {g2f.Channel.NONE: ParameterConfig(value_initial=flux, fixed=True)}
-                        for flux in fluxes
-                    ]
-                ),
-            ],
-        )
+        psfmodel, priors = config.make_psfmodel([
+            componentgroup.get_fluxes_default(
+                channels=(g2f.Channel.NONE,),
+                componentconfigs=componentgroup.get_componentconfigs(),
+                is_fractional=componentgroup.is_fractional,
+            )
+            for componentgroup in config.componentgroups.values()
+        ])
         psfmodels.append(psfmodel)
     return psfmodels
 
 
 @pytest.fixture(scope="module")
 def model(channels, data, psfmodels) -> g2f.Model:
-    rho, size_x, size_y, sersicn, flux = 0.4, 1.5, 1.9, 0.5, 4.7
-    drho, dsize_x, dsize_y, dsersicn, dflux = -0.9, 2.5, 5.4, 2.8, 13.9
+    rho, size_x, size_y, sersicn, flux = 0.4, 1.5, 1.9, 1.0, 4.7
+    drho, dsize_x, dsize_y, dsersicn, dflux = -0.9, 2.5, 5.4, 3.0, 13.9
 
     components_sersic = {}
-    fluxes_mix = []
-    for idx, name in enumerate(("PS", "Sersic")):
+    fluxes_group = []
+    for idx, name in enumerate(("exp", "dev")):
         components_sersic[name] = SersicComponentConfig(
             rho=ParameterConfig(value_initial=rho + idx*drho),
             size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
             size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
-            sersicindex=SersicIndexConfig(value_initial=sersicn + idx*dsersicn, fixed=idx == 0),
+            sersicindex=SersicIndexParameterConfig(value_initial=sersicn + idx * dsersicn, fixed=idx == 0),
         )
         fluxes_comp = {
-            channel: ParameterConfig(value_initial=flux + idx_channel*dflux*idx, fixed=True)
+            channel: flux + idx_channel*dflux*idx
             for idx_channel, channel in enumerate(channels.values())
         }
-        fluxes_mix.append(fluxes_comp)
+        fluxes_group.append(fluxes_comp)
 
     modelconfig = ModelConfig(
         sources={
-            'src': SourceConfig(
-                componentmixtures={
-                    'mix': ComponentMixtureConfig(components_sersic=components_sersic),
+            "src": SourceConfig(
+                componentgroups={
+                    "": ComponentGroupConfig(
+                        components_sersic=components_sersic,
+                        centroids={"default": CentroidConfig(
+                            x=ParameterConfig(value_initial=12.14, fixed=True),
+                            y=ParameterConfig(value_initial=13.78, fixed=True),
+                        )},
+                    ),
                 }
             ),
         },
     )
-    centroid = g2f.CentroidParameters(
-        x=g2f.CentroidXParameterD(12.14, fixed=True),
-        y=g2f.CentroidYParameterD(13.78, fixed=True),
-    )
-    model = modelconfig.make_model([[(centroid, fluxes_mix)]], data=data, psfmodels=psfmodels)
+    model = modelconfig.make_model([[fluxes_group]], data=data, psfmodels=psfmodels)
     return model
 
 
@@ -436,7 +439,7 @@ def test_psf_model_fit(psf_fit_models):
                 print=True,
                 force=True,
             )
-            model.evaluate()
+            model.evaluate(print=True)
             assert (fitinputs.jacobians[0][0].data == 0).all()
             assert np.sum(np.abs(fitinputs.jacobians[0][1].data)) > 0
             model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
@@ -468,3 +471,10 @@ def test_psfmodels_linear_gaussians(data, psfmodels_linear_gaussians, psf_observ
             plot=False,
         )
         assert len(results[idx]) > 0
+
+
+def test_modeller_fit_linear(model):
+    modeller = Modeller()
+    results = modeller.fit_model_linear(model, validate=True)
+    # TODO: add more here
+    assert results is not None

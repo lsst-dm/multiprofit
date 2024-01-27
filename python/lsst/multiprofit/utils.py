@@ -25,7 +25,7 @@ import gauss2d.fit as g2f
 import numpy
 import numpy as np
 
-__all__ = ["ArbitraryAllowedConfig", "get_params_uniq", "normalize"]
+__all__ = ["ArbitraryAllowedConfig", "FrozenArbitraryAllowedConfig", "get_params_uniq", "normalize"]
 
 
 class ArbitraryAllowedConfig:

@@ -64,3 +64,12 @@ class ObservationConfig(pexConfig.Config):
             channel=g2f.Channel.get(self.band),
         )
         return observation
+
+
+class PsfObservationConfig(ObservationConfig):
+    """Configuration for a gauss2d.fit Observation used for PSF fitting."""
+
+    def validate(self):
+        super().validate()
+        if self.band != "None":
+            raise ValueError("band must be None for PSF fitting")

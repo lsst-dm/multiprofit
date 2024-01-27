@@ -18,7 +18,7 @@ import astropy.visualization as apVis
 from astropy.wcs import WCS
 import gauss2d as g2
 import gauss2d.fit as g2f
-from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexConfig
+from lsst.multiprofit.componentconfig import SersicConfig, SersicIndexParameterConfig
 from lsst.multiprofit.fit_psf import CatalogExposurePsfABC, CatalogPsfFitter, CatalogPsfFitterConfig
 from lsst.multiprofit.fit_source import (
     CatalogExposureSourcesABC,
@@ -204,12 +204,12 @@ config_source = CatalogSourceFitterConfig(
     n_pointsources=1,
     sersics={
         'disk': SersicConfig(
-            sersicindex=SersicIndexConfig(value_initial=1., fixed=True),
+            sersicindex=SersicIndexParameterConfig(value_initial=1., fixed=True),
             prior_size_stddev=0.3,
             prior_axrat_stddev=0.2,
         ),
         'bulge': SersicConfig(
-            sersicindex=SersicIndexConfig(value_initial=4., fixed=True),
+            sersicindex=SersicIndexParameterConfig(value_initial=4., fixed=True),
             prior_size_stddev=0.3,
             prior_axrat_stddev=0.2,
         ),

@@ -19,9 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from abc import abstractmethod
 import string
-from typing import Any
 
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
@@ -30,71 +28,97 @@ from pydantic.dataclasses import dataclass
 
 from .priors import ShapePriorConfig
 from .transforms import transforms_ref
-from .utils import ArbitraryAllowedConfig
-
-parameter_names = {
-    g2f.CentroidXParameterD: "cen_x",
-    g2f.CentroidYParameterD: "cen_y",
-    g2f.ReffXParameterD: "reff_x",
-    g2f.ReffYParameterD: "reff_y",
-    g2f.RhoParameterD: "rho",
-    g2f.SigmaXParameterD: "sigma_x",
-    g2f.SigmaYParameterD: "sigma_y",
-}
+from .utils import FrozenArbitraryAllowedConfig
 
 __all__ = [
-    "init_component",
     "ParameterConfig",
+    "FluxFractionParameterConfig",
+    "FluxParameterConfig",
+    "CentroidConfig",
+    "ComponentData",
+    "Fluxes",
     "EllipticalComponentConfig",
     "GaussianComponentConfig",
-    "SersicIndexConfig",
+    "SersicIndexParameterConfig",
     "SersicComponentConfig",
 ]
 
 
-def init_component(component: g2f.Component, **kwargs: Any):
-    """Initialize a component with parameter name-value pairs.
-
-    Parameters
-    ----------
-    component
-        The component to initialize.
-    **kwargs
-        Additional keyword arguments.
-
-    Notes
-    -----
-    kwargs keywords should be a value in parameter_names and values should be
-    valid for initializing the parameter of that type.
-    """
-    for parameter in set(component.parameters()):
-        if kwarg := parameter_names.get(parameter.__class__):
-            if value := kwargs.get(kwarg):
-                parameter.value = value
-
-
 class ParameterConfig(pexConfig.Config):
-    """Basic configuration for all parameters."""
+    """Configuration for a parameter."""
 
     fixed = pexConfig.Field[bool](default=False, doc="Whether parameter is fixed or not (free)")
     value_initial = pexConfig.Field[float](default=0, doc="Initial value")
 
 
-@dataclass(kw_only=True, frozen=True, config=ArbitraryAllowedConfig)
+class FluxParameterConfig(ParameterConfig):
+    """Configuration for flux parameters (IntegralParameterD).
+
+    The safest initial value for a flux is 1.0, because if it's set to zero,
+    linear fitting will not work correctly initially.
+    """
+
+    def setDefaults(self):
+        super().setDefaults()
+        self.value_initial = 1.0
+
+
+class FluxFractionParameterConfig(ParameterConfig):
+    """Configuration for flux fraction parameters (ProperFractionParameterD).
+
+    The safest initial value for a flux fraction is 0.5, because if it's set
+    to one, downstream fractions will be zero, while if it's set to zero,
+    linear fitting will not work correctly initially.
+    """
+
+    def setDefaults(self):
+        super().setDefaults()
+        self.value_initial = 1.0
+
+
+class CentroidConfig(pexConfig.Config):
+    """Configuration for a component centroid."""
+
+    x = pexConfig.ConfigField[ParameterConfig](doc="The x-axis centroid configuration")
+    y = pexConfig.ConfigField[ParameterConfig](doc="The y-axis centroid configuration")
+
+    def make_centroid(self) -> g2f.CentroidParameters:
+        cen_x, cen_y = (
+            type_param(config.value_initial, fixed=config.fixed, limits=g2f.LimitsD())
+            for (config, type_param) in (
+                (self.x, g2f.CentroidXParameterD), (self.y, g2f.CentroidYParameterD)
+            )
+        )
+        centroid = g2f.CentroidParameters(x=cen_x, y=cen_y)
+        return centroid
+
+
+@dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
 class ComponentData:
+    """Dataclass for a Component config."""
+
     component: g2f.Component = pydantic.Field(title="The component instance")
     integralmodel: g2f.IntegralModel = pydantic.Field(title="The component's integralmodel")
     priors: list[g2f.Prior] = pydantic.Field(title="The priors associated with the component")
 
 
-Fluxes = dict[g2f.Channel, ParameterConfig]
+Fluxes = dict[g2f.Channel, float]
 
 
 class EllipticalComponentConfig(ShapePriorConfig):
-    """Config for an elliptically-symmetric component.
+    """Configuration for an elliptically-symmetric component.
 
     This class can be initialized but cannot implement make_component.
     """
+
+    fluxfrac = pexConfig.ConfigField[FluxFractionParameterConfig](
+        doc="Fractional flux parameter(s) config",
+        default=FluxFractionParameterConfig,
+    )
+    flux = pexConfig.ConfigField[FluxParameterConfig](
+        doc="Flux parameter(s) config",
+        default=FluxParameterConfig,
+    )
 
     rho = pexConfig.ConfigField[ParameterConfig](doc="Rho parameter config")
     size_x = pexConfig.ConfigField[ParameterConfig](doc="x-axis size parameter config")
@@ -102,6 +126,11 @@ class EllipticalComponentConfig(ShapePriorConfig):
     transform_flux_name = pexConfig.Field[str](
         doc="The name of the reference transform for flux parameters",
         default="log10",
+        optional=True,
+    )
+    transform_fluxfrac_name = pexConfig.Field[str](
+        doc="The name of the reference transform for flux fraction parameters",
+        default="logit_fluxfrac",
         optional=True,
     )
     transform_rho_name = pexConfig.Field[str](
@@ -116,18 +145,40 @@ class EllipticalComponentConfig(ShapePriorConfig):
     )
 
     def format_label(self, label: str, name_channel: str) -> str:
-        return string.Template(label).safe_substitute(
+        """Format a label for a band-dependent parameter.
+
+        Parameters
+        ----------
+        label
+            The label to format.
+        name_channel
+            The name of the channel to format with.
+
+        Returns
+        -------
+        label_formmated
+            The formatted label.
+        """
+        label_formatted = string.Template(label).safe_substitute(
             type_component=self.get_type_name(), name_channel=name_channel,
         )
+        return label_formatted
 
     @staticmethod
     def get_integral_label_default() -> str:
+        """Return the default integral label."""
         return "${type_component} ${name_channel}-band"
 
-    @abstractmethod
+    def get_size_label(self) -> str:
+        """Return the label for the component's size parameters."""
+        raise NotImplementedError("EllipticalComponent does not implement get_size_label")
+
     def get_type_name(self) -> str:
         """Return a descriptive component name."""
         raise NotImplementedError("EllipticalComponent does not implement get_type_name")
+
+    def get_transform_fluxfrac(self) -> g2f.TransformD | None:
+        return transforms_ref[self.transform_fluxfrac_name] if self.transform_fluxfrac_name else None
 
     def get_transform_flux(self) -> g2f.TransformD | None:
         return transforms_ref[self.transform_flux_name] if self.transform_flux_name else None
@@ -138,13 +189,10 @@ class EllipticalComponentConfig(ShapePriorConfig):
     def get_transform_size(self) -> g2f.TransformD | None:
         return transforms_ref[self.transform_size_name] if self.transform_size_name else None
 
-    @abstractmethod
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
-        fluxes: Fluxes,
-        label_integral: str | None = None,
-        **kwargs
+        integralmodel: g2f.IntegralModel,
     ) -> ComponentData:
         """Make a Component reflecting the current configuration.
 
@@ -152,14 +200,8 @@ class EllipticalComponentConfig(ShapePriorConfig):
         ----------
         centroid
             Centroid parameters for the component.
-        fluxes
-            A dictionary of initial fluxes by gauss2d.fit.Channel to populate
-            a `gauss2d.fit.IntegralModel` with.
-        label_integral
-            A label to apply to integral parameters. Can reference the
-            relevant channel with e.g. {channel.name}.
-        **kwargs
-            Additional optional keyword arguments for subclasses.
+        integralmodel
+            The integralmodel for this component.
 
         Returns
         -------
@@ -188,156 +230,127 @@ class EllipticalComponentConfig(ShapePriorConfig):
         )
         return ellipse
 
+    def make_fluxfrac_parameter(
+        self,
+        value: float | None,
+        label: str | None = None,
+        **kwargs
+    ) -> g2f.ProperFractionParameterD:
+        parameter = g2f.ProperFractionParameterD(
+            value if value is None else self.fluxfrac.value_initial,
+            fixed=self.fluxfrac.fixed,
+            transform=self.get_transform_fluxfrac(),
+            label=label if label is not None else "",
+            **kwargs
+        )
+        return parameter
+
+    def make_flux_parameter(
+        self,
+        value: float | None,
+        label: str | None = None,
+        **kwargs
+    ) -> g2f.IntegralParameterD:
+        parameter = g2f.IntegralParameterD(
+            value if value is not None else self.flux.value_initial,
+            fixed=self.flux.fixed,
+            transform=self.get_transform_flux(),
+            label=label if label is not None else "",
+            **kwargs
+        )
+        return parameter
+
     def make_linearintegralmodel(
         self,
         fluxes: Fluxes,
         label_integral: str | None = None,
+        **kwargs
     ) -> g2f.IntegralModel:
+        """Make a gauss2d.fit LinearIntegralModel for this component.
+
+        Parameters
+        ----------
+        fluxes
+            Configurations, including initial values, for the flux
+            parameters by channel.
+        label_integral
+            A label to apply to integral parameters. Can reference the
+            relevant channel with e.g. {channel.name}.
+        **kwargs
+            Additional keyword arguments to pass to make_flux_parameter.
+            Some parameters cannot be overriden from their configs.
+
+        Returns
+        -------
+        integralmodel
+            The requested integralmodel.
+        """
         if label_integral is None:
             label_integral = self.get_integral_label_default()
-        transform_flux = self.get_transform_flux()
         integralmodel = g2f.LinearIntegralModel(
             [
                 (
                     channel,
-                    g2f.IntegralParameterD(
-                        config_flux.value_initial,
-                        transform=transform_flux,
-                        fixed=config_flux.fixed,
+                    self.make_flux_parameter(
+                        flux,
                         label=self.format_label(label_integral, name_channel=channel.name),
+                        **kwargs,
                     ),
                 )
-                for channel, config_flux in fluxes.items()
+                for channel, flux in fluxes.items()
             ]
         )
         return integralmodel
+
+    @staticmethod
+    def set_size_x(component: g2f.EllipticalComponent, size_x: float) -> None:
+        component.ellipse.sigma_x = size_x
+
+    @staticmethod
+    def set_size_y(component: g2f.EllipticalComponent, size_y: float) -> None:
+        component.ellipse.sigma_y = size_y
+
+    @staticmethod
+    def set_rho(component: g2f.EllipticalComponent, rho: float) -> None:
+        component.ellipse.rho = rho
 
 
 class GaussianComponentConfig(EllipticalComponentConfig):
     """Configuration for a gauss2d.fit Gaussian component."""
 
-    is_fractional = pexConfig.Field[bool](
-        doc="Whether the integralmodel is fractional",
-        default=False,
-        optional=False,
-    )
     transform_frac_name = pexConfig.Field[str](
-        doc="The name of the reference transform for size parameters",
+        doc="The name of the reference transform for flux fraction parameters",
         default="log10",
         optional=True,
     )
 
+    def get_size_label(self) -> str:
+        return "sigma"
+
     def get_type_name(self) -> str:
         return "Gaussian"
-
-    def get_transform_frac(self) -> g2f.TransformD | None:
-        return transforms_ref[self.transform_frac_name] if self.transform_frac_name else None
 
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
-        fluxes: Fluxes | None,
-        label_integral: str | None = None,
-        last: g2f.IntegralModel | dict[g2f.Channel, float] | None = None,
-        is_final: bool | None = None,
-        **kwargs,
+        integralmodel: g2f.IntegralModel,
     ) -> ComponentData:
-        """Make a Component reflecting the current configuration.
-
-        Parameters
-        ----------
-        centroid
-            Centroid parameters for the component.
-        fluxes
-            A dictionary of initial fluxes (or fractions if is_fractional) by
-            gauss2d.fit.Channel to populate an appropriate
-            `gauss2d.fit.IntegralModel` with.
-        label_integral
-            A label to apply to integral parameters. See format_label for
-            valid templates for substitution via string formatting.
-        last
-            The previous IntegralModel, or dict of total flux values by channel
-            if this is the first component. Required if self.is_fractional and
-            must be None otherwise.
-        is_final
-            Whether this is the final component in a fractional model.
-            Required if self.is_fractional and must be None otherwise.
-        **kwargs
-            Any additional keyword arguments are invalid and will raise a
-            ValueError.
-
-        Returns
-        -------
-        componentdata
-            An appropriate ComponentData including the initialized component.
-
-        Notes
-        -----
-        The default `gauss2d.fit.LinearIntegralModel` can be populated with
-        unit fluxes (`gauss2d.fit.IntegralParameterD` instances) to prepare
-        for linear least squares fitting.
-        """
-        if kwargs:
-            raise ValueError(f"GaussianConfig.make_component got unrecognized kwargs: {list(kwargs.keys())=}")
-        if label_integral is None:
-            label_integral = self.get_integral_label_default()
-        if self.is_fractional:
-            if is_final is None:
-                raise ValueError(f"is_final must be specified since {self.is_fractional=} is True")
-            is_first = not isinstance(last, g2f.IntegralModel)
-            channel = g2f.Channel.NONE
-            if is_final:
-                if fluxes is not None:
-                    raise ValueError(f"fluxes must not be specified if {is_final=}")
-                value_initial = 1.0
-                fixed = True
-            else:
-                config_flux = fluxes[channel]
-                fixed = config_flux.fixed
-                value_initial = config_flux.value_initial
-
-            param_frac = g2f.ProperFractionParameterD(
-                value_initial,
-                fixed=fixed,
-                transform=self.get_transform_frac(),
-            )
-            if is_first:
-                if last is not None:
-                    config_flux = last[channel]
-                    value_initial, fixed = config_flux.value_initial, config_flux.fixed
-                else:
-                    value_initial, fixed = 1.0, False
-                integralmodel = g2f.LinearIntegralModel(
-                    [(channel, g2f.IntegralParameterD(value=value_initial, fixed=fixed))]
-                )
-            else:
-                integralmodel = last
-            integral = g2f.FractionalIntegralModel(
-                [(channel, param_frac)],
-                integralmodel,
-                is_final,
-            )
-        else:
-            if last is not None or is_final is not None:
-                raise ValueError(
-                    f"Cannot specify {last=} or {is_final=} since {self.is_fractional=} is not True"
-                )
-            integral = self.make_linearintegralmodel(fluxes, label_integral=label_integral)
         ellipse = self.make_gaussianparametricellipse()
         prior = self.get_shape_prior(ellipse)
-        return ComponentData(
+        componentdata = ComponentData(
             component=g2f.GaussianComponent(
                 centroid=centroid,
                 ellipse=ellipse,
-                integral=integral,
+                integral=integralmodel,
             ),
-            integralmodel=integral,
+            integralmodel=integralmodel,
             priors=[] if prior is None else [prior],
         )
+        return componentdata
 
 
-class SersicIndexConfig(ParameterConfig):
-    """Specific configuration for a Sersic index parameter."""
+class SersicIndexParameterConfig(ParameterConfig):
+    """Configuration for a gauss2d.fit Sersic index parameter."""
 
     def setDefaults(self):
         self.value_initial = 0.5
@@ -355,7 +368,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
     _interpolators: dict[int, g2f.SersicMixInterpolator] = {}
 
     order = pexConfig.ChoiceField[int](doc="Sersic mix order", allowed={4: "Four", 8: "Eight"}, default=4)
-    sersicindex = pexConfig.ConfigField[SersicIndexConfig](doc="Sersic index config")
+    sersicindex = pexConfig.ConfigField[SersicIndexParameterConfig](doc="Sersic index config")
 
     def get_interpolator(self, order: int):
         return self._interpolators.get(
@@ -367,6 +380,9 @@ class SersicComponentConfig(EllipticalComponentConfig):
             )(order=order),
         )
 
+    def get_size_label(self) -> str:
+        return "reff"
+
     def get_type_name(self) -> str:
         is_gaussian_fixed = self.is_gaussian_fixed()
         return f"{'Gaussian (fixed Sersic)' if is_gaussian_fixed else 'Sersic'}"
@@ -377,16 +393,9 @@ class SersicComponentConfig(EllipticalComponentConfig):
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
-        fluxes: Fluxes,
-        label_integral: str | None = None,
-        **kwargs,
-    ) -> tuple[g2f.Component, list[g2f.Prior]]:
-        if kwargs:
-            raise ValueError("SersicConfig.make_component does not take kwargs")
+        integralmodel: g2f.IntegralModel,
+    ) -> ComponentData:
         is_gaussian_fixed = self.is_gaussian_fixed()
-        if label_integral is None:
-            label_integral = self.get_integral_label_default()
-        integral = self.make_linearintegralmodel(fluxes, label_integral=label_integral)
         transform_size = self.get_transform_size()
         transform_rho = self.get_transform_rho()
         if is_gaussian_fixed:
@@ -394,12 +403,12 @@ class SersicComponentConfig(EllipticalComponentConfig):
             component = g2f.GaussianComponent(
                 centroid=centroid,
                 ellipse=ellipse,
-                integral=integral,
+                integral=integralmodel,
             )
         else:
             ellipse = g2f.SersicParametricEllipse(
                 size_x=g2f.ReffXParameterD(
-                    self.size_x.value_initial, transform=transform_size, fixed=self.size_y.fixed
+                    self.size_x.value_initial, transform=transform_size, fixed=self.size_x.fixed
                 ),
                 size_y=g2f.ReffYParameterD(
                     self.size_y.value_initial, transform=transform_size, fixed=self.size_y.fixed
@@ -409,7 +418,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
             component = g2f.SersicMixComponent(
                 centroid=centroid,
                 ellipse=ellipse,
-                integral=integral,
+                integral=integralmodel,
                 sersicindex=g2f.SersicMixComponentIndexParameterD(
                     value=self.sersicindex.value_initial,
                     fixed=self.sersicindex.fixed,
@@ -420,6 +429,9 @@ class SersicComponentConfig(EllipticalComponentConfig):
         prior = self.get_shape_prior(ellipse)
         return ComponentData(
             component=component,
-            integralmodel=integral,
+            integralmodel=integralmodel,
             priors=[] if prior is None else [prior],
         )
+
+    def validate(self):
+        super().validate()

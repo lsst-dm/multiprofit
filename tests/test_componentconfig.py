@@ -25,7 +25,7 @@ from lsst.multiprofit.componentconfig import (
     GaussianComponentConfig,
     ParameterConfig,
     SersicComponentConfig,
-    SersicIndexConfig,
+    SersicIndexParameterConfig,
 )
 from lsst.multiprofit.config import set_config_from_dict
 from lsst.multiprofit.utils import get_params_uniq
@@ -59,24 +59,27 @@ def test_EllipticalComponentConfig():
     assert config == config2
 
 
-def test_GaussianComponentConfig_fractional(centroid):
+def test_GaussianComponentConfig(centroid):
     config = GaussianComponentConfig(
         rho=ParameterConfig(value_initial=0),
         size_x=ParameterConfig(value_initial=1.4),
         size_y=ParameterConfig(value_initial=1.6),
-        is_fractional=True,
     )
     channel = g2f.Channel.NONE
     componentdata1 = config.make_component(
         centroid=centroid,
-        fluxes={channel: ParameterConfig(value_initial=0.5)},
-        is_final=False,
+        integralmodel=g2f.FractionalIntegralModel(
+            [(channel, g2f.ProperFractionParameterD(0.5, fixed=False))],
+            model=config.make_linearintegralmodel({channel: 1.0}),
+        ),
     )
     componentdata2 = config.make_component(
         centroid=centroid,
-        fluxes=None,
-        last=componentdata1.integralmodel,
-        is_final=True,
+        integralmodel=g2f.FractionalIntegralModel(
+            [(channel, g2f.ProperFractionParameterD(1.0, fixed=True))],
+            model=componentdata1.integralmodel,
+            is_final=True,
+        ),
     )
     components = (componentdata1, componentdata2)
     n_components = len(components)
@@ -98,15 +101,16 @@ def test_SersicConfig(centroid, channels):
         rho=ParameterConfig(value_initial=rho),
         size_x=ParameterConfig(value_initial=size_x),
         size_y=ParameterConfig(value_initial=size_y),
-        sersicindex=SersicIndexConfig(value_initial=sersicindex),
+        sersicindex=SersicIndexParameterConfig(value_initial=sersicindex),
     )
     fluxes = {
-        channel: ParameterConfig(value_initial=float(idx))
+        channel: 1.0 + idx
         for idx, channel in enumerate(channels.values())
     }
+    integralmodel = config.make_linearintegralmodel(fluxes)
     componentdata = config.make_component(
         centroid=centroid,
-        fluxes=fluxes,
+        integralmodel=integralmodel,
     )
     assert componentdata.component is not None
     assert len(componentdata.priors) == 0
@@ -119,7 +123,7 @@ def test_SersicConfig(centroid, channels):
     }
     fluxes_label = {
         config.format_label(config.get_integral_label_default(), name_channel=channel.name):
-            fluxes[channel].value_initial for channel in fluxes.keys()
+            fluxes[channel] for channel in fluxes.keys()
     }
     for param in params:
         if isinstance(param, g2f.IntegralParameterD):

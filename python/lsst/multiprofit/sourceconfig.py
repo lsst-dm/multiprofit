@@ -24,18 +24,45 @@ import string
 import gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 
-from .componentconfig import EllipticalComponentConfig, Fluxes, GaussianComponentConfig, SersicComponentConfig
+from .componentconfig import (
+    CentroidConfig,
+    EllipticalComponentConfig,
+    Fluxes,
+    GaussianComponentConfig,
+    SersicComponentConfig,
+)
 
-CentroidFluxes = list[tuple[g2f.CentroidParameters, list[Fluxes]]]
+__all__ = [
+    "ComponentConfigs", "CentroidConfig", "ComponentGroupConfig", "SourceConfig",
+]
+
+ComponentConfigs = dict[str, EllipticalComponentConfig]
 
 
-class ComponentMixtureConfig(pexConfig.Config):
-    """Configuration for a group of gauss2d.fit Components sharing a centroid.
+class ComponentGroupConfig(pexConfig.Config):
+    """Configuration for a group of gauss2d.fit Components.
 
-    ComponentMixtures may also have linked IntegralModels, e.g. if
-    is_fractional is True.
+    ComponentGroups may have linked CentroidParameters
+    and IntegralModels, e.g. if is_fractional is True.
+
+    Notes
+    -----
+    Gaussian components are generated first, then Sersic.
+
+    This config class has no equivalent in gauss2dfit, because gauss2dfit
+    model parameter dependencies implicitly. This class implements only a
+    subset of typical use cases, i.e. PSFs sharing a fractional integral
+    model with fixed unit flux, and galaxies/PSF components sharing a single
+    common centroid.
+    If greater flexibility in linking parameter values is needed,
+    users must assemble their own gauss2dfit models directly.
     """
 
+    centroids = pexConfig.ConfigDictField[str, CentroidConfig](
+        doc="Centroids by key, which can be a component name or 'default'."
+            "The 'default' key-value pair must be specified if it is needed.",
+        default={"default": CentroidConfig()},
+    )
     # TODO: Change this to just one EllipticalComponentConfig field
     # when pex_config supports derived types in ConfigDictField
     # (possibly DM-41049)
@@ -50,76 +77,153 @@ class ComponentMixtureConfig(pexConfig.Config):
         default={},
     )
     is_fractional = pexConfig.Field[bool](doc="Whether the integralmodel is fractional", default=False)
+    transform_fluxfrac_name = pexConfig.Field[str](
+        doc="The name of the reference transform for flux parameters",
+        default="logit_fluxfrac",
+        optional=True,
+    )
+    transform_flux_name = pexConfig.Field[str](
+        doc="The name of the reference transform for flux parameters",
+        default="log10",
+        optional=True,
+    )
 
-    def format_label(self, label: str, name_component: str) -> str:
+    @staticmethod
+    def format_label(label: str, name_component: str) -> str:
         return string.Template(label).safe_substitute(name_component=name_component)
 
     @staticmethod
     def get_integral_label_default() -> str:
         return "comp: ${name_component} " + EllipticalComponentConfig.get_integral_label_default()
 
+    def get_componentconfigs(self) -> ComponentConfigs:
+        componentconfigs: ComponentConfigs = dict(self.components_gauss)
+        for name, component in self.components_sersic.items():
+            componentconfigs[name] = component
+        return componentconfigs
+
+    @staticmethod
+    def get_fluxes_default(
+        channels: tuple[g2f.Channel], componentconfigs: ComponentConfigs, is_fractional: bool = False,
+    ) -> list[Fluxes]:
+        if len(componentconfigs) == 0:
+            raise ValueError("Must provide at least one ComponentConfig")
+        fluxes = []
+        componentconfigs_iter = tuple(componentconfigs.values())[:len(componentconfigs) - is_fractional]
+        for idx, componentconfig in enumerate(componentconfigs_iter):
+            if is_fractional:
+                if idx == 0:
+                    value = componentconfig.flux.value_initial
+                    fluxes.append({channel: value for channel in channels})
+                value = componentconfig.fluxfrac.value_initial
+                fluxes.append({channel: value for channel in channels})
+            else:
+                value = componentconfig.flux.value_initial
+                fluxes.append({channel: value for channel in channels})
+        return fluxes
+
     def make_components(
         self,
-        centroid: g2f.CentroidParameters,
-        fluxes: list[Fluxes],
+        componentfluxes: list[Fluxes],
         label_integral: str | None = None,
     ) -> tuple[list[g2f.Component], list[g2f.Prior]]:
         """Make a list of gauss2d.fit.Component from this configuration.
 
         Parameters
         ----------
-        centroid
-            Centroid parameters for all components.
-        fluxes
-            A list of dictionary of initial fluxes by gauss2d.fit.Channel to
-            populate an appropriate `gauss2d.fit.IntegralModel` with.
+        componentfluxes
+            A list of Fluxes to populate an appropriate
+            `gauss2d.fit.IntegralModel` with.
             If self.is_fractional, the first item in the list must be
             total fluxes while the remainder are fractions (the final
             fraction is always fixed at 1.0 and must not be provided).
         label_integral
             A label to apply to integral parameters. Can reference the
-            relevant component name with {{name_component}}.
+            relevant component name with ${name_component}}.
 
         Returns
         -------
         componentdata
             An appropriate ComponentData including the initialized component.
         """
-        if label_integral is None:
-            label_integral = self.get_integral_label_default()
-
-        componentconfigs: dict[str, EllipticalComponentConfig] = dict(self.components_gauss)
-        for name, component in self.components_sersic.items():
-            componentconfigs[name] = component
-        fluxes_iter = (fluxes[1:] + [None]) if self.is_fractional else fluxes
-        if len(fluxes_iter) != len(componentconfigs):
-            raise ValueError(f"{len(fluxes_iter)=} != {len(componentconfigs)=}")
+        componentconfigs = self.get_componentconfigs()
+        fluxes_first = componentfluxes[0]
+        channels = fluxes_first.keys()
+        fluxes_all = (componentfluxes[1:] + [None]) if self.is_fractional else componentfluxes
+        if len(fluxes_all) != len(componentconfigs):
+            raise ValueError(f"{len(fluxes_all)=} != {len(componentconfigs)=}")
         priors = []
-        idx_last = len(componentconfigs) - 1
-        kwargs = {"last": fluxes[0]} if self.is_fractional else {}
+        idx_final = len(componentconfigs) - 1
         components = []
+        last = None
 
-        for idx, (fluxes_component, (name_component, config)) in enumerate(
-            zip(fluxes_iter, componentconfigs.items())
+        centroid_default = None
+        for idx, (fluxes_component, (name_component, config_comp)) in enumerate(
+            zip(fluxes_all, componentconfigs.items())
         ):
-            if self.is_fractional:
-                kwargs["is_final"] = idx == idx_last
-
-            componentdata = config.make_component(
-                centroid=centroid,
-                fluxes=fluxes_component,
-                label_integral=self.format_label(label_integral, name_component=name_component),
-                **kwargs
+            label_integral_comp = self.format_label(
+                label_integral if label_integral is not None else (
+                    config_comp.get_integral_label_default()
+                ),
+                name_component=name_component,
             )
+
             if self.is_fractional:
-                kwargs["last"] = componentdata.integralmodel
+                if idx == 0:
+                    last = config_comp.make_linearintegralmodel(
+                        fluxes=fluxes_first,
+                        label_integral=label_integral_comp,
+                    )
+
+                is_final = idx == idx_final
+                if is_final:
+                    params_frac = [
+                        (channel, g2f.ProperFractionParameterD(1.0, fixed=True))
+                        for channel in channels
+                    ]
+                else:
+                    if fluxes_component.keys() != channels:
+                        raise ValueError(f"{name_component=} {fluxes_component=}")
+                    params_frac = [
+                        (
+                            channel,
+                            config_comp.make_fluxfrac_parameter(value=fluxfrac),
+                        ) for channel, fluxfrac in fluxes_component.items()
+                    ]
+
+                integralmodel = g2f.FractionalIntegralModel(
+                    params_frac,
+                    model=last,
+                    is_final=is_final,
+                )
+                # TODO: Omitting this crucial step should raise but doesn't
+                # There shouldn't be two integralmodels with the same last
+                # especially not one is_final and one not
+                last = integralmodel
+            else:
+                integralmodel = config_comp.make_linearintegralmodel(
+                    fluxes_component,
+                    label_integral=label_integral_comp,
+                )
+
+            centroid = self.centroids.get(name_component)
+            if not centroid:
+                if centroid_default is None:
+                    centroid_default = self.centroids["default"].make_centroid()
+                centroid = centroid_default
+            componentdata = config_comp.make_component(
+                centroid=centroid,
+                integralmodel=integralmodel,
+            )
             components.append(componentdata.component)
             priors.extend(componentdata.priors)
         return components, priors
 
     def validate(self):
+        super().validate()
         errors = []
-        components: dict[str, EllipticalComponentConfig] = dict(self.components_gauss)
+        components: ComponentConfigs = dict(self.components_gauss)
+
         for name, component in self.components_sersic.items():
             if name in components:
                 errors.append(
@@ -127,19 +231,13 @@ class ComponentMixtureConfig(pexConfig.Config):
                 )
             components[name] = component
 
-        n_components = len(components)
-        n_components_min = 1 + self.is_fractional
-        if not (n_components >= n_components_min):
-            errors.append(f"Must have at least 1 + {self.is_fractional=} = {n_components_min} components")
-        for name, component in components:
-            if hasattr(component, "is_fractional"):
-                is_fractional = component.is_fractional
-                if is_fractional != self.is_fractional:
-                    errors.append(
-                        f"components[{name}].is_fractional={is_fractional} != {self.is_fractional=}"
-                    )
-            elif self.is_fractional:
-                errors.append(f"components[{name}] cannot be fractional but {self.is_fractional=}")
+        keys = set(self.centroids.keys())
+        has_default = "default" in keys
+        for name in components.keys():
+            if name in keys:
+                keys.remove(name)
+            elif not has_default:
+                errors.append(f"component {name=} has no entry in self.centroids and default not specified")
         if errors:
             newline = "\n"
             raise ValueError(f"ComponentMixtureConfig has validation errors:\n{newline.join(errors)}")
@@ -153,80 +251,90 @@ class SourceConfig(pexConfig.Config):
     although such priors are not yet implemented.
     """
 
-    componentmixtures = pexConfig.ConfigDictField[str, ComponentMixtureConfig](
+    componentgroups = pexConfig.ConfigDictField[str, ComponentGroupConfig](
         doc="Components in the source",
         optional=False,
     )
 
     def _make_components_priors(
         self,
-        centroid_fluxes: CentroidFluxes,
+        componentgroup_fluxes: list[list[Fluxes]],
         label_integral: str,
         validate_psf: bool = False,
     ) -> [list[g2f.Component], list[g2f.Prior]]:
-        if len(centroid_fluxes) != len(self.componentmixtures):
-            raise ValueError(f"{len(centroid_fluxes)=} != {len(self.componentmixtures)=}")
+        if len(componentgroup_fluxes) != len(self.componentgroups):
+            raise ValueError(f"{len(componentgroup_fluxes)=} != {len(self.componentgroups)=}")
         components = []
         priors = []
         if validate_psf:
             keys_expected = tuple((g2f.Channel.NONE,))
-        for (centroid, fluxes), (name_mix, componentmixture) in zip(
-            centroid_fluxes, self.componentmixtures.items()
+        for componentfluxes, (name_group, componentgroup) in zip(
+            componentgroup_fluxes, self.componentgroups.items()
         ):
             if validate_psf:
-                for idx, fluxes_bands in enumerate(fluxes):
-                    keys = tuple(fluxes_bands.keys())
+                for idx, fluxes_comp in enumerate(componentfluxes):
+                    keys = tuple(fluxes_comp.keys())
                     if keys != keys_expected:
                         raise ValueError(
-                            f"{name_mix=} comp[{idx}] {keys=} != {keys_expected=} with {validate_psf=}"
+                            f"{name_group=} comp[{idx}] {keys=} != {keys_expected=} with {validate_psf=}"
                         )
 
-            components_i, priors_i = componentmixture.make_components(
-                centroid=centroid,
-                fluxes=fluxes,
-                label_integral=self.format_label(label=label_integral, name_mixture=name_mix),
+            components_i, priors_i = componentgroup.make_components(
+                componentfluxes=componentfluxes,
+                label_integral=self.format_label(label=label_integral, name_group=name_group),
             )
             components.extend(components_i)
             priors.extend(priors_i)
-        # TODO: Do more thorough PSF model validation
-        # Consider asserting that is_fractional is True...
-        # ...but PSF models don't have to be fractional.
-        # Perhaps only check for unity total flux - but only fractional
-        # models can actually guarantee this (to what threshold otherwise?)
+
         return components, priors
 
-    def format_label(self, label: str, name_mixture: str) -> str:
-        return string.Template(label).safe_substitute(name_mixture=name_mixture)
-
     @staticmethod
-    def get_integral_label_default() -> str:
-        return "mix: ${name_mixture} " + ComponentMixtureConfig.get_integral_label_default()
+    def format_label(label: str, name_group: str) -> str:
+        return string.Template(label).safe_substitute(name_group=name_group)
+
+    def get_componentconfigs(self) -> ComponentConfigs:
+        has_prefix_group = self.has_prefix_group()
+        componentconfigs = {}
+        for name_group, config_group in self.componentgroups.items():
+            prefix_group = f"{name_group}_" if has_prefix_group else ""
+            for name_comp, componentconfig in config_group.get_componentconfigs().items():
+                componentconfigs[f"{prefix_group}{name_comp}"] = componentconfig
+        return componentconfigs
+
+    def get_integral_label_default(self) -> str:
+        prefix = "mix: ${name_group} " if self.has_prefix_group() else ""
+        return f"{prefix}{ComponentGroupConfig.get_integral_label_default()}"
+
+    def has_prefix_group(self) -> bool:
+        return (len(self.componentgroups) > 1) or next(iter(self.componentgroups.keys()))
 
     def make_source(
         self,
-        centroid_fluxes: CentroidFluxes,
+        componentgroup_fluxes: list[list[Fluxes]],
         label_integral: str | None = None,
     ) -> [g2f.Source, list[g2f.Prior]]:
         """Make a gauss2d.fit.Source from this configuration.
 
         Parameters
         ----------
-        centroid_fluxes
-            A pair of Centroid parameters and a list of Fluxes to pass to each
-            of the self.componentmixtures when calling make_components.
+        componentgroup_fluxes
+            A list of Fluxes for each of the self.componentgroups to use
+            when calling make_components.
         label_integral
             A label to apply to integral parameters. Can reference the
-            relevant component mixture name with {{name_mixture}}.
+            relevant component mixture name with ${name_group}.
 
         Returns
         -------
-        componentdata
-            An appropriate ComponentData including the initialized component.
+        source
+            An appropriate gauss2d.fit.Source.
+        priors
+            A list of priors from all constituent components.
         """
         if label_integral is None:
             label_integral = self.get_integral_label_default()
         components, priors = self._make_components_priors(
-            centroid_fluxes=centroid_fluxes,
+            componentgroup_fluxes=componentgroup_fluxes,
             label_integral=label_integral,
         )
         source = g2f.Source(components)
@@ -234,13 +342,34 @@ class SourceConfig(pexConfig.Config):
 
     def make_psfmodel(
         self,
-        centroid_fluxes: CentroidFluxes,
+        componentgroup_fluxes: list[list[Fluxes]],
         label_integral: str | None = None,
     ) -> [g2f.PsfModel, list[g2f.Prior]]:
+        """Make a gauss2d.fit.PsfModel from this configuration.
+
+        This method will validate that the arguments make a valid PSF model,
+        i.e. with a unity total flux, and only one config for the none band.
+
+        Parameters
+        ----------
+        componentgroup_fluxes
+            A list of CentroidFluxes for each of the self.componentgroups
+            when calling make_components.
+        label_integral
+            A label to apply to integral parameters. Can reference the
+            relevant component mixture name with ${name_group}.
+
+        Returns
+        -------
+        psfmodel
+            An appropriate gauss2d.fit.PSfModel.
+        priors
+            A list of priors from all constituent components.
+        """
         if label_integral is None:
             label_integral = f"PSF {self.get_integral_label_default()}"
         components, priors = self._make_components_priors(
-            centroid_fluxes=centroid_fluxes,
+            componentgroup_fluxes=componentgroup_fluxes,
             label_integral=label_integral,
             validate_psf=True,
         )
@@ -249,14 +378,6 @@ class SourceConfig(pexConfig.Config):
         return model, priors
 
     def validate(self):
-        errors = []
-        if self.componentmixtures is None:
-            errors.append("components is not optional")
-        else:
-            n_components = len(self.componentmixtures)
-            n_components_min = 1
-            if not (n_components >= n_components_min):
-                errors.append(f"Must have at least {n_components_min=} components")
-        if errors:
-            newline = "\n"
-            raise ValueError(f"SourceConfig has validation errors:\n{newline.join(errors)}")
+        super().validate()
+        if not self.componentgroups:
+            raise ValueError("Must have at least one componentgroup")

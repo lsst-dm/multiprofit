@@ -20,36 +20,38 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from functools import cached_property
-from typing import Any, Mapping
+import logging
+from typing import Any, Mapping, Sequence
 
 import astropy
-import gauss2d as g2
 import gauss2d.fit as g2f
+import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
 
-from .componentconfig import init_component
 from .config import set_config_from_dict
-from .fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig
-from .fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfig
+from .fit_psf import CatalogExposurePsfABC, CatalogPsfFitterConfig, CatalogPsfFitterConfigData
+from .fit_source import CatalogExposureSourcesABC, CatalogSourceFitterABC, CatalogSourceFitterConfigData
+from .model_utils import make_image_gaussians
+from .observationconfig import ObservationConfig
 from .utils import FrozenArbitraryAllowedConfig, get_params_uniq
 
 __all__ = [
-    "SourceCatalogBootstrap",
+    "CatalogBootstrapConfig",
     "CatalogExposurePsfBootstrap",
     "CatalogExposureSourcesBootstrap",
+    "CatalogPsfBootstrapConfig",
+    "CatalogSourceBootstrapConfig",
     "CatalogSourceFitterBootstrap",
+    "NoisyObservationConfig",
 ]
 
 
-@dataclass(kw_only=True, frozen=True)
-class SourceCatalogBootstrap:
-    """Config class for a bootstrap source catalog fitter."""
+class CatalogBootstrapConfig(pexConfig.Config):
+    """Configuration for a bootstrap source catalog fitter."""
 
-    n_cols_img: int = pydantic.Field(default=25, title="Number of columns in the image")
-    n_rows_img: int = pydantic.Field(default=25, title="Number of rows in the image")
-    n_sources: int = pydantic.Field(default=1, title="Number of sources")
+    n_sources = pexConfig.Field[int](doc="Number of sources", default=1)
 
     @cached_property
     def catalog(self):
@@ -57,94 +59,117 @@ class SourceCatalogBootstrap:
         return catalog
 
 
-@dataclass(kw_only=True, frozen=True)
-class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, SourceCatalogBootstrap):
+class ObservationNoiseConfig(pexConfig.Config):
+    """Configuration for noise to be added to an Observation.
+
+    The background level is in user-defined flux units, should be multiplied
+    by the gain to obtain counts.
+    """
+
+    background = pexConfig.Field[float](doc="Background flux per pixel", default=1e-4)
+    gain = pexConfig.Field[float](doc="Multiplicative factor to convert flux to counts", default=1.0)
+
+
+class NoisyObservationConfig(ObservationConfig, ObservationNoiseConfig):
+    """Configuration for an observation with noise."""
+
+
+class NoisyPsfObservationConfig(ObservationConfig, ObservationNoiseConfig):
+    """Configuration for a PSF observation with noise."""
+
+
+class CatalogPsfBootstrapConfig(CatalogBootstrapConfig):
+    """Configuration for a catalog of noisy PSF observations for bootstrapping.
+
+    Each row is a stacked and normalized image of any number of point sources.
+    """
+
+    observation = pexConfig.ConfigField[NoisyPsfObservationConfig](
+        doc="The PSF image configuration",
+        default=NoisyPsfObservationConfig,
+    )
+
+
+class CatalogSourceBootstrapConfig(CatalogBootstrapConfig):
+    """Configuration for a catalog of noisy source observations
+     for bootstrapping.
+
+    Each row is a PSF-convolved observation of the sources in one band.
+    """
+
+    observation = pexConfig.ConfigField[NoisyObservationConfig](
+        doc="The source image configuration",
+        default=NoisyObservationConfig,
+    )
+
+
+@dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
+class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, CatalogPsfFitterConfigData):
     """Dataclass for a PSF-convolved bootstrap fitter."""
 
-    noise: float = pydantic.Field(default=1e-4, title="Background noise per pixel")
-    # TODO: Replace these with componentconfigs
-    sigma_x: float = pydantic.Field(title="sigma_x for the PSF Gaussian")
-    sigma_y: float = pydantic.Field(title="sigma_y for the PSF Gaussian")
-    rho: float = pydantic.Field(title="rho for the PSF Gaussian")
-
-    @cached_property
-    def centroid(self) -> g2.Centroid:
-        centroid = g2.Centroid(x=self.n_cols_img / 2, y=self.n_rows_img / 2)
-        return centroid
-
-    @cached_property
-    def ellipse(self) -> g2.Ellipse:
-        g2.Centroid(x=self.n_cols_img / 2, y=self.n_rows_img / 2)
-        ellipse = g2.Ellipse(g2.EllipseValues(self.sigma_x, self.sigma_y, self.rho))
-        return ellipse
+    config_boot: CatalogPsfBootstrapConfig = pydantic.Field(title="The configuration for bootstrapping")
 
     @cached_property
     def image(self) -> np.ndarray:
-        image = g2.make_gaussians_pixel_D(
-            g2.ConvolvedGaussians(
-                [
-                    g2.ConvolvedGaussian(
-                        g2.Gaussian(centroid=self.centroid, ellipse=self.ellipse),
-                        g2.Gaussian(),
-                    )
-                ]
-            ),
-            n_rows=self.n_rows_img,
-            n_cols=self.n_cols_img,
-        ).data
-        return image
+        psfmodel_init = self.config.make_psfmodel()
+        # A hacky way to initialize the psfmodel property to the same values
+        # TODO: Include this functionality in fit_psf.py
+        for param_init, param in zip(get_params_uniq(psfmodel_init), get_params_uniq(self.psfmodel)):
+            param.value = param_init.value
+        image = make_image_gaussians(
+            psfmodel_init.gaussians(g2f.Channel.NONE),
+            n_rows=self.config_boot.observation.n_rows,
+            n_cols=self.config_boot.observation.n_cols,
+        )
+        return image.data
 
     def get_catalog(self) -> astropy.table.Table:
-        return self.catalog
+        return self.config_boot.catalog
 
     def get_psf_image(
         self, source: astropy.table.Row | Mapping[str, Any], config: CatalogPsfFitterConfig | None = None
     ) -> np.ndarray:
         rng = np.random.default_rng(source["id"])
-        return self.image + 1e-4 * rng.standard_normal(self.image.shape)
+        image = self.image
+        config_obs = self.config_boot.observation
+        return image + rng.standard_normal(image.shape)*np.sqrt(
+            (image + config_obs.background)/config_obs.gain)
+
+    def __post_init__(self):
+        self.config_boot.freeze()
 
 
 @dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
-class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC, SourceCatalogBootstrap):
+class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC):
     """A CatalogExposure for bootstrap fitting of source catalogs."""
 
-    channel_name: str | None = None
-    config_fit: CatalogSourceFitterConfig
-    model_source: g2f.Source
-    n_buffer_img: int = 10
-    table_psf_fits: astropy.table.Table
+    config_boot: CatalogSourceBootstrapConfig = pydantic.Field(
+        title="A CatalogSourceBootstrapConfig to be frozen")
+    table_psf_fits: astropy.table.Table = pydantic.Field(title="PSF fit parameters for the catalog")
 
-    # TODO: Consider making cached property
-    @property
+    @cached_property
     def channel(self):
-        return g2f.Channel.get(self.channel_name) if self.channel_name else g2f.Channel.NONE
+        channel = g2f.Channel.get(self.config_boot.observation.band)
+        return channel
 
     def get_catalog(self) -> astropy.table.Table:
-        return self.catalog
+        return self.config_boot.catalog
 
     def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
-        return self.config_fit_psf.rebuild_psfmodel(self.table_psf_fits[params["id"]])
+        psfmodel = self.psfmodel_data.psfmodel
+        self.psfmodel_data.init_psfmodel(self.table_psf_fits[params["id"]])
+        return psfmodel
 
     def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
-        n_rows = self.n_rows_img + self.n_buffer_img
-        n_cols = self.n_cols_img + self.n_buffer_img
-        obs = g2f.Observation(
-            image=g2.ImageD(n_rows=n_rows, n_cols=n_cols),
-            sigma_inv=g2.ImageD(n_rows=n_rows, n_cols=n_cols),
-            mask_inv=g2.ImageB(n_rows=n_rows, n_cols=n_cols),
-            channel=self.channel,
-        )
+        obs = self.config_boot.observation.make_observation()
         return obs
 
     def __post_init__(self):
-        # TODO: This seems like a pydantic bug, shouldn't all dataclasses
-        # have this attr by default?
-        if hasattr(SourceCatalogBootstrap, "__post_init__"):
-            SourceCatalogBootstrap.__post_init__()
         config_dict = self.table_psf_fits.meta["config"]
         config = CatalogPsfFitterConfig()
         set_config_from_dict(config, config_dict)
-        object.__setattr__(self, "config_fit_psf", config)
+        configdata = CatalogPsfFitterConfigData(config=config)
+        object.__setattr__(self, "psfmodel_data", configdata)
 
 
 @dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
@@ -156,66 +181,85 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
     statistics of the best-fit parameters.
     """
 
-    # TODO: These should be componentconfigs
-    background: float = 1e2
-    flux: float = 1e4
-    reff_x: float
-    reff_y: float
-    rho: float
-    nser: float
-
     def get_model_radec(self, source: Mapping[str, Any], cen_x: float, cen_y: float) -> tuple[float, float]:
         return float(cen_x), float(cen_y)
 
     def initialize_model(
-        self, model: g2f.Model, source: g2f.Source, limits_x: g2f.LimitsD = None, limits_y: g2f.LimitsD = None
+        self,
+        model: g2f.Model,
+        source: Mapping[str, Any],
+        catexps: list[CatalogExposureSourcesABC],
+        values_init: Mapping[g2f.ParameterD, float] | None = None,
     ):
-        # TODO: Should not assume only two components
-        comp1, comp2 = model.sources[0].components
-        observation = model.data[0]
-        cenx = observation.image.n_cols / 2.0
-        ceny = observation.image.n_rows / 2.0
-        if limits_x is not None:
-            limits_x.max = float(observation.image.n_cols)
-        if limits_y is not None:
-            limits_y.max = float(observation.image.n_rows)
-        init_component(comp1, cen_x=cenx, cen_y=ceny)
-        init_component(
-            comp2,
-            cen_x=cenx,
-            cen_y=ceny,
-            reff_x=self.reff_x,
-            reff_y=self.reff_y,
-            rho=self.rho,
-            nser=self.nser,
-        )
+        if values_init is None:
+            values_init = {}
+        min_x, max_x = np.Inf, -np.Inf
+        min_y, max_y = np.Inf, -np.Inf
+        for idx_obs, observation in enumerate(model.data):
+            x_min = observation.image.coordsys.x_min
+            min_x = min(min_x, x_min)
+            max_x = max(max_x, x_min + observation.image.n_cols*observation.image.coordsys.dx1)
+            y_min = observation.image.coordsys.y_min
+            min_y = min(min_y, y_min)
+            max_y = max(max_y, y_min + observation.image.n_rows*observation.image.coordsys.dy2)
+
+        cen_x = (min_x + max_x) / 2.0
+        cen_y = (min_y + max_y) / 2.0
+
+        params_limits_init = {
+            g2f.CentroidXParameterD: (cen_x, (min_x, max_x)),
+            g2f.CentroidYParameterD: (cen_y, (min_y, max_y)),
+        }
+
         params_free = get_params_uniq(model, fixed=False)
         for param in params_free:
-            if isinstance(param, g2f.IntegralParameterD):
-                param.value = self.flux
+            value_init, limits_new = params_limits_init.get(
+                type(param),
+                (values_init.get(param), None)
+            )
+            if value_init is not None:
+                param.value = value_init
+            if limits_new:
+                param.limits.min = -np.Inf
+                param.limits.max = limits_new[1]
+                param.limits.min = limits_new[0]
 
         # Should be done in get_source_observation, but it gets called first
         # ... and therefore does not have the initialization above
+        # Also, this must be done per-iteration because PSF parameters vary
         model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.image)
         model.evaluate()
 
-        rng = np.random.default_rng(source["id"] + 100000)
+        # You're not fitting more than a million sources... right?
+        rng = np.random.default_rng(source["id"] + 1000000)
 
         for idx_obs, observation in enumerate(model.data):
+            config_obs = catexps[idx_obs].config_boot.observation
             image, sigma_inv = observation.image, observation.sigma_inv
-            image.data.flat = model.outputs[0].data
-            sigma_inv.data.flat = np.sqrt(image.data + self.background)
-            image.data.flat = image.data + sigma_inv.data * rng.standard_normal(image.data.shape)
-            sigma_inv.data.flat = 1 / sigma_inv.data
+            # TODO: This doesn't raise or warn or anything if setting to
+            # the wrong (differently sized output). That seems dangerous.
+            image.data.flat = model.outputs[idx_obs].data.flat
+            sigma_inv.data.flat = np.sqrt((image.data + config_obs.background)/config_obs.gain)
+            image.data.flat += sigma_inv.data.flat * rng.standard_normal(image.data.size)
+            sigma_inv.data.flat = (1.0 / sigma_inv.data).flat
             # This is mandatory because C++ construction does no initialization
             # (could instead initialize in get_source_observation)
             # TODO: Do some timings to see which is more efficient
             observation.mask_inv.data.flat = 1
 
-        del self.params_values_init[0:]
-        self.params_values_init.extend([param.value for param in params_free])
-
-    def __post_init__(self):
-        if hasattr(CatalogSourceFitterABC, "__post_init__"):
-            CatalogSourceFitterABC.__post_init__()
-        object.__setattr__(self, "params_values_init", [])
+    def validate_fit_inputs(
+        self,
+        catalog_multi: Sequence,
+        catexps: list[CatalogExposureSourcesABC],
+        configdata: CatalogSourceFitterConfigData = None,
+        logger: logging.Logger = None,
+        **kwargs: Any,
+    ) -> None:
+        errors = []
+        for idx, catexp in enumerate(catexps):
+            if not (
+                (config_boot := getattr(catexp, "config_boot", None))
+                and isinstance(config_boot, CatalogSourceBootstrapConfig)
+            ):
+                errors.append(f"catexps[{idx=}] = {catexp} does not have a config_boot attr of type"
+                              f"{CatalogSourceBootstrapConfig}")

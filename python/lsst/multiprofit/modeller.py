@@ -638,8 +638,8 @@ class Modeller:
 
         results = FitResult(inputs=fitinputs, config=config)
         time_init = time.process_time()
-        model.evaluate()
-        x_scale_jac_clipped = np.clip(1.0/(np.sum(jac**2, axis=0)**0.5), 0.05, 20)
+        _ll_init = model.evaluate()
+        x_scale_jac_clipped = np.clip(1.0/(np.sum(jac**2, axis=0)**0.5), 1e-5, 1e19)
         result_opt = spopt.least_squares(
             residual_func,
             params_init,
@@ -698,6 +698,13 @@ class Modeller:
                 values_new[parameter] = value_new
 
         for parameter, value in values_new.items():
+            # TODO: maybe just np.clip instead
+            if not (value > parameter.limits.min):
+                value = parameter.limits.min + (1e-5 if (parameter.limits.max == np.Inf) else (
+                    0.02 * (parameter.limits.max - parameter.limits.min)
+                ))
+            elif not (value < parameter.limits.max):
+                value = parameter.limits.min + 0.98*(parameter.limits.max - parameter.limits.min)
             parameter.value = value
 
         if validate:

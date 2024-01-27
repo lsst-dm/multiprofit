@@ -24,9 +24,9 @@ from lsst.multiprofit.componentconfig import (
     GaussianComponentConfig,
     ParameterConfig,
     SersicComponentConfig,
-    SersicIndexConfig,
+    SersicIndexParameterConfig,
 )
-from lsst.multiprofit.sourceconfig import ComponentMixtureConfig, SourceConfig
+from lsst.multiprofit.sourceconfig import ComponentGroupConfig, SourceConfig
 from lsst.multiprofit.utils import get_params_uniq
 import numpy as np
 import pytest
@@ -51,9 +51,9 @@ def channels():
     return {band: g2f.Channel.get(band) for band in ("R", "G", "B")}
 
 
-def test_ComponentMixtureConfig(centroid):
+def test_ComponentGroupConfig(centroid):
     with pytest.raises(ValueError) as exc:
-        config = ComponentMixtureConfig(
+        config = ComponentGroupConfig(
             components_gauss={"x": GaussianComponentConfig()},
             components_sersic={"x": SersicComponentConfig()},
         )
@@ -66,7 +66,7 @@ def test_SourceConfig_base():
         config.validate()
 
     with pytest.raises(ValueError) as exc:
-        config = SourceConfig(componentmixtures={})
+        config = SourceConfig(componentgroups={})
         config.validate()
 
 
@@ -76,14 +76,13 @@ def test_SourceConfig_fractional(centroid):
 
     n_components = 2
     config = SourceConfig(
-        componentmixtures={
-            'src': ComponentMixtureConfig(
+        componentgroups={
+            'src': ComponentGroupConfig(
                 components_gauss={
                     str(idx): GaussianComponentConfig(
                         rho=ParameterConfig(value_initial=rho + idx*drho),
                         size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
                         size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
-                        is_fractional=True,
                     )
                     for idx in range(n_components)
                 },
@@ -95,13 +94,10 @@ def test_SourceConfig_fractional(centroid):
     channel = g2f.Channel.NONE
     psfmodel, priors = config.make_psfmodel(
         [
-            (
-                centroid,
-                [
-                    {channel: ParameterConfig(value_initial=1.0, fixed=True)},
-                    {channel: ParameterConfig(value_initial=0.5)},
-                ]
-            ),
+            [
+                {channel: 1.0},
+                {channel: 0.5},
+            ]
         ],
     )
     assert len(priors) == 0
@@ -114,14 +110,14 @@ def test_SourceConfig_linear(centroid, channels):
 
     names = ("PS", "Sersic")
     config = SourceConfig(
-        componentmixtures={
-            'src': ComponentMixtureConfig(
+        componentgroups={
+            'src': ComponentGroupConfig(
                 components_sersic={
                     name: SersicComponentConfig(
                         rho=ParameterConfig(value_initial=rho + idx*drho),
                         size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
                         size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
-                        sersicindex=SersicIndexConfig(value_initial=sersicn + idx*dsersicn, fixed=idx == 0),
+                        sersicindex=SersicIndexParameterConfig(value_initial=sersicn + idx * dsersicn, fixed=idx == 0),
                     )
                     for idx, name in enumerate(names)
                 }
@@ -130,12 +126,12 @@ def test_SourceConfig_linear(centroid, channels):
     )
     fluxes = [
         {
-            channel: ParameterConfig(value_initial=flux + idx_channel*dflux*idx_comp, fixed=True)
+            channel: flux + idx_channel*dflux*idx_comp
             for idx_channel, channel in enumerate(channels.values())
         }
-        for idx_comp in range(len(config.componentmixtures["src"].components_sersic))
+        for idx_comp in range(len(config.componentgroups["src"].components_sersic))
     ]
-    source, priors = config.make_source([(centroid, fluxes)])
+    source, priors = config.make_source([fluxes])
     assert len(priors) == 0
     for idx, component in enumerate(source.components):
         params = get_params_uniq(component)
@@ -145,19 +141,19 @@ def test_SourceConfig_linear(centroid, channels):
             g2f.ReffYParameterD: size_y + idx*dsize_y,
             g2f.SersicIndexParameterD: sersicn + idx*dsersicn,
         }
-        for name_mix, componentmixture in config.componentmixtures.items():
+        for name_group, componentgroup in config.componentgroups.items():
             fluxes_comp = fluxes[idx]
             name_comp = names[idx]
-            config_comp = componentmixture.components_sersic[name_comp]
+            config_comp = componentgroup.components_sersic[name_comp]
             fluxes_label = {
                 config.format_label(
-                    componentmixture.format_label(
+                    componentgroup.format_label(
                         label=config_comp.format_label(label=config.get_integral_label_default(),
                                                        name_channel=channel.name),
                         name_component=name_comp,
                     ),
-                    name_mixture=name_mix,
-                ): fluxes_comp[channel].value_initial
+                    name_group=name_group,
+                ): fluxes_comp[channel]
                 for channel in channels.values()
             }
             for param in params:

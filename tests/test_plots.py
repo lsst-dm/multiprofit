@@ -20,12 +20,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import gauss2d.fit as g2f
-from lsst.multiprofit.componentconfig import GaussianComponentConfig, ParameterConfig
+from lsst.multiprofit.componentconfig import CentroidConfig, GaussianComponentConfig, ParameterConfig
 from lsst.multiprofit.model_utils import make_psfmodel_null
 from lsst.multiprofit.modelconfig import ModelConfig
 from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
 from lsst.multiprofit.plots import plot_model_rgb
-from lsst.multiprofit.sourceconfig import ComponentMixtureConfig, SourceConfig
+from lsst.multiprofit.sourceconfig import ComponentGroupConfig, SourceConfig
 import numpy as np
 import pytest
 
@@ -75,30 +75,30 @@ def psfmodels(psfmodel, channels) -> list[g2f.PsfModel]:
 
 @pytest.fixture(scope="module")
 def model(channels, data, psfmodels):
-    config_comp = GaussianComponentConfig(
-        rho=ParameterConfig(value_initial=0.1),
-        size_x=ParameterConfig(value_initial=3.8),
-        size_y=ParameterConfig(value_initial=5.1),
-    )
-    fluxes_mix = [{
-        channel: ParameterConfig(value_initial=1.0, fixed=True)
-        for channel in channels.values()
-    }]
+    fluxes_group = [{channel: 1.0 for channel in channels.values()}]
 
     modelconfig = ModelConfig(
         sources={
             'src': SourceConfig(
-                componentmixtures={
-                    'mix': ComponentMixtureConfig(components_gauss={'g': config_comp}),
+                componentgroups={
+                    '': ComponentGroupConfig(
+                        centroids={"default": CentroidConfig(
+                            x=ParameterConfig(value_initial=8., fixed=True),
+                            y=ParameterConfig(value_initial=11., fixed=True),
+                        )},
+                        components_gauss={
+                            "": GaussianComponentConfig(
+                                rho=ParameterConfig(value_initial=0.1),
+                                size_x=ParameterConfig(value_initial=3.8),
+                                size_y=ParameterConfig(value_initial=5.1),
+                            )
+                        },
+                    )
                 }
             ),
         },
     )
-    centroid = g2f.CentroidParameters(
-        x=g2f.CentroidXParameterD(8., fixed=True),
-        y=g2f.CentroidYParameterD(11., fixed=True),
-    )
-    model = modelconfig.make_model([[(centroid, fluxes_mix)]], data=data, psfmodels=psfmodels)
+    model = modelconfig.make_model([[fluxes_group]], data=data, psfmodels=psfmodels)
     model.setup_evaluators(model.EvaluatorMode.image)
     model.evaluate()
     rng = np.random.default_rng(1)

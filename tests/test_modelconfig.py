@@ -22,14 +22,15 @@
 import gauss2d as g2
 import gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
+    CentroidConfig,
     GaussianComponentConfig,
     ParameterConfig,
     SersicComponentConfig,
-    SersicIndexConfig,
+    SersicIndexParameterConfig,
 )
 from lsst.multiprofit.modelconfig import ModelConfig
 from lsst.multiprofit.observationconfig import ObservationConfig
-from lsst.multiprofit.sourceconfig import ComponentMixtureConfig, SourceConfig
+from lsst.multiprofit.sourceconfig import ComponentGroupConfig, SourceConfig
 import numpy as np
 import pytest
 
@@ -59,8 +60,8 @@ def psfmodel():
     fluxes = [x/flux_total for x in range(1, 1 + n_components)]
 
     config = SourceConfig(
-        componentmixtures={
-            'src': ComponentMixtureConfig(
+        componentgroups={
+            'src': ComponentGroupConfig(
                 components_gauss={
                     str(idx): GaussianComponentConfig(
                         rho=ParameterConfig(value_initial=rho + idx*drho),
@@ -74,19 +75,11 @@ def psfmodel():
     )
     config.validate()
     channel = g2f.Channel.NONE
-    centroid = g2f.CentroidParameters(
-        x=g2f.CentroidXParameterD(0, fixed=True),
-        y=g2f.CentroidYParameterD(0, fixed=True),
-    )
     psfmodel, priors = config.make_psfmodel(
         [
-            (
-                centroid,
-                [
-                    {channel: ParameterConfig(value_initial=flux, fixed=True)}
-                    for flux in fluxes
-                ]
-            ),
+            [
+                {channel: flux} for flux in fluxes
+            ],
         ],
     )
     return psfmodel
@@ -109,10 +102,10 @@ def modelconfig_fluxes(channels):
             rho=ParameterConfig(value_initial=rho + idx*drho),
             size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
             size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
-            sersicindex=SersicIndexConfig(value_initial=sersicn + idx*dsersicn, fixed=idx == 0),
+            sersicindex=SersicIndexParameterConfig(value_initial=sersicn + idx * dsersicn, fixed=idx == 0),
         )
         fluxes_comp = {
-            channel: ParameterConfig(value_initial=flux + idx_channel*dflux*idx, fixed=True)
+            channel: flux + idx_channel*dflux*idx
             for idx_channel, channel in enumerate(channels.values())
         }
         fluxes_mix.append(fluxes_comp)
@@ -120,8 +113,16 @@ def modelconfig_fluxes(channels):
     modelconfig = ModelConfig(
         sources={
             'src': SourceConfig(
-                componentmixtures={
-                    'mix': ComponentMixtureConfig(components_sersic=components_sersic),
+                componentgroups={
+                    'mix': ComponentGroupConfig(
+                        centroids={
+                            "default": CentroidConfig(
+                                x=ParameterConfig(value_initial=15.8, fixed=True),
+                                y=ParameterConfig(value_initial=14.3, fixed=False),
+                            ),
+                        },
+                        components_sersic=components_sersic,
+                    ),
                 }
             ),
         },
@@ -131,12 +132,7 @@ def modelconfig_fluxes(channels):
 
 def test_ModelConfig(modelconfig_fluxes, data, psfmodels):
     modelconfig, fluxes = modelconfig_fluxes
-
-    centroid = g2f.CentroidParameters(
-        x=g2f.CentroidXParameterD(14., fixed=True),
-        y=g2f.CentroidYParameterD(16., fixed=True),
-    )
-    model = modelconfig.make_model([[(centroid, fluxes)]], data=data, psfmodels=psfmodels)
+    model = modelconfig.make_model([[fluxes]], data=data, psfmodels=psfmodels)
     assert model is not None
     assert model.data is data
     for observation in model.data:
