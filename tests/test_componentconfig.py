@@ -113,7 +113,8 @@ def test_SersicConfig(centroid, channels):
         integralmodel=integralmodel,
     )
     assert componentdata.component is not None
-    assert len(componentdata.priors) == 0
+    # As long as there's a default Sersic index prior
+    assert len(componentdata.priors) == 1
     params = get_params_uniq(componentdata.component)
     values_init = {
         g2f.RhoParameterD: rho,

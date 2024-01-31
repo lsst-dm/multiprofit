@@ -391,7 +391,7 @@ class CatalogSourceFitterABC(ABC):
 
         channels = self.get_channels(catexps)
         model_sources, priors = configdata.sources_priors
-        # TODO: If Observation params are ever supported, make null Data
+        # TODO: If free Observation params are ever supported, make null Data
         # Because configdata knows nothing about the Observation(s)
         params = configdata.parameters
         values_init = {param: param.value for param in params.values() if param.free}

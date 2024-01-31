@@ -36,6 +36,8 @@ __all__ = ["CatalogExposureABC", "ColumnInfo", "CatalogFitterConfig"]
 class CatalogExposureABC(ABC):
     """Interface for catalog-exposure pairs."""
 
+    # TODO: add get_exposure (with Any return type?)
+
     @abstractmethod
     def get_catalog(self) -> Iterable:
         """Return a row-iterable catalog covering an exposure."""

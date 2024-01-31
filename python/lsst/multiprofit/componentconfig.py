@@ -26,6 +26,7 @@ import lsst.pex.config as pexConfig
 import pydantic
 from pydantic.dataclasses import dataclass
 
+from .limits import limits_ref
 from .priors import ShapePriorConfig
 from .transforms import transforms_ref
 from .utils import FrozenArbitraryAllowedConfig
@@ -113,7 +114,7 @@ class EllipticalComponentConfig(ShapePriorConfig):
 
     fluxfrac = pexConfig.ConfigField[FluxFractionParameterConfig](
         doc="Fractional flux parameter(s) config",
-        default=FluxFractionParameterConfig,
+        default=None,
     )
     flux = pexConfig.ConfigField[FluxParameterConfig](
         doc="Flux parameter(s) config",
@@ -352,8 +353,34 @@ class GaussianComponentConfig(EllipticalComponentConfig):
 class SersicIndexParameterConfig(ParameterConfig):
     """Configuration for a gauss2d.fit Sersic index parameter."""
 
+    prior_mean = pexConfig.Field[float](doc="Mean for the prior (untransformed)", default=1.0, optional=True)
+    prior_stddev = pexConfig.Field[float](doc="Std. dev. for the prior", default=0.5, optional=True)
+    prior_transformed = pexConfig.Field[float](
+        doc="Whether the prior should be in transformed values", default=True,
+    )
+
+    def get_prior(self, param: g2f.SersicIndexParameterD) -> g2f.Prior | None:
+        if self.prior_mean is not None:
+            mean = param.transform.forward(self.prior_mean) if self.prior_transformed else self.prior_mean
+            stddev = (
+                param.transform.forward(self.prior_mean + self.prior_stddev/2.) -
+                param.transform.forward(self.prior_mean - self.prior_stddev/2.)
+            ) if self.prior_transformed else self.prior_stddev
+            return g2f.GaussianPrior(
+                param=param, mean=mean, stddev=stddev, transformed=self.prior_transformed,
+            )
+        return None
+
     def setDefaults(self):
         self.value_initial = 0.5
+
+    def validate(self):
+        super().validate()
+        if self.prior_mean is not None:
+            if not self.prior_mean > 0.:
+                raise ValueError("Sersic index prior mean must be > 0")
+            if not self.prior_stddev > 0.:
+                raise ValueError("Sersic index prior std. dev. must be > 0")
 
 
 class SersicComponentConfig(EllipticalComponentConfig):
@@ -405,6 +432,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
                 ellipse=ellipse,
                 integral=integralmodel,
             )
+            priors = []
         else:
             ellipse = g2f.SersicParametricEllipse(
                 size_x=g2f.ReffXParameterD(
@@ -415,22 +443,28 @@ class SersicComponentConfig(EllipticalComponentConfig):
                 ),
                 rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
             )
+            sersicindex = g2f.SersicMixComponentIndexParameterD(
+                value=self.sersicindex.value_initial,
+                fixed=self.sersicindex.fixed,
+                transform=transforms_ref["logit_sersic"] if not self.sersicindex.fixed else None,
+                interpolator=self.get_interpolator(order=self.order),
+                limits=limits_ref["n_ser_multigauss"],
+            )
             component = g2f.SersicMixComponent(
                 centroid=centroid,
                 ellipse=ellipse,
                 integral=integralmodel,
-                sersicindex=g2f.SersicMixComponentIndexParameterD(
-                    value=self.sersicindex.value_initial,
-                    fixed=self.sersicindex.fixed,
-                    transform=transforms_ref["logit_sersic"] if not self.sersicindex.fixed else None,
-                    interpolator=self.get_interpolator(order=self.order),
-                ),
+                sersicindex=sersicindex,
             )
+            prior = self.sersicindex.get_prior(sersicindex) if not sersicindex.fixed else None
+            priors = [prior] if prior else []
         prior = self.get_shape_prior(ellipse)
+        if prior:
+            priors.append(prior)
         return ComponentData(
             component=component,
             integralmodel=integralmodel,
-            priors=[] if prior is None else [prior],
+            priors=priors,
         )
 
     def validate(self):
