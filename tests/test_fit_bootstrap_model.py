@@ -56,6 +56,7 @@ reff_x_src, reff_y_src, rho_src, nser_src = 2.5, 3.6, -0.25, 2.0
 # TODO: These can be parameterized; should they be?
 compute_errors_no_covar = True
 compute_errors_from_jacobian = True
+include_point_source = False
 n_sources = 3
 # Set to True for interactive debugging (but don't commit)
 plot = False
@@ -126,7 +127,7 @@ def configfitter_source(channels) -> CatalogSourceFitterConfigData:
                                     size_x=ParameterConfig(value_initial=0, fixed=True),
                                     size_y=ParameterConfig(value_initial=0, fixed=True),
                                 )
-                            },
+                            } if include_point_source else {},
                             components_sersic={
                                 "ser": SersicComponentConfig(
                                     prior_size_mean=reff_y_src,
