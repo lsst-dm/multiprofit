@@ -24,6 +24,7 @@ __all__ = [
     "plot_sersicmix_interp",
 ]
 
+bands_weights_sdss = {'i': 1.0, 'r': 1.191, 'g': 2.249}
 
 linestyles_default = ["--", "-.", ":"]
 ln10 = np.log(10)
