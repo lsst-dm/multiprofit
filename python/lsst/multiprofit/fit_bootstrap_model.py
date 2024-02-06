@@ -190,6 +190,7 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
         source: Mapping[str, Any],
         catexps: list[CatalogExposureSourcesABC],
         values_init: Mapping[g2f.ParameterD, float] | None = None,
+        centroid_pixel_offset: float = 0,
     ):
         if values_init is None:
             values_init = {}

@@ -97,10 +97,13 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
 class CatalogSourceFitterConfig(CatalogFitterConfig):
     """Configuration for the MultiProFit profile fitter."""
 
+    centroid_pixel_offset = pexConfig.Field[float](
+        doc="Number to add to MultiProFit centroids (bottom-left corner is 0,0) to convert to catalog"
+            " coordinates (e.g. set to -0.5 if the bottom-left corner is -0.5, -0.5)",
+        default=0,
+    )
     config_model = pexConfig.ConfigField[ModelConfig](doc="Source model configuration")
     convert_cen_xy_to_radec = pexConfig.Field[bool](default=True, doc="Convert cen x/y params to RA/dec")
-    fit_cen_x = pexConfig.Field[bool](default=True, doc="Fit x centroid parameter")
-    fit_cen_y = pexConfig.Field[bool](default=True, doc="Fit y centroid parameter")
     prior_cen_x_stddev = pexConfig.Field[float](
         default=0, doc="Prior std. dev. on x centroid (ignored if not >0)"
     )
@@ -326,6 +329,21 @@ class CatalogSourceFitterABC(ABC):
 
         return logger
 
+    def copy_centroid_errors(
+        self,
+        columns_cenx_err_copy: tuple[str],
+        columns_ceny_err_copy: tuple[str],
+        results: Table,
+        catalog_multi: Sequence,
+        catexps: list[CatalogExposureSourcesABC],
+        configdata: CatalogSourceFitterConfigData,
+    ):
+        if columns_cenx_err_copy or columns_ceny_err_copy:
+            raise RuntimeError(
+                f"Fitter of {type(self)=} got {columns_cenx_err_copy=} and/or {columns_ceny_err_copy=}"
+                f" but has not overriden copy_centroid_errors"
+            )
+
     def fit(
         self,
         catalog_multi: Sequence,
@@ -396,9 +414,9 @@ class CatalogSourceFitterABC(ABC):
         params = configdata.parameters
         values_init = {param: param.value for param in params.values() if param.free}
         prefix = config.prefix_column
-        columns_param_fixed = {}
-        columns_param_free = {}
-        columns_param_flux = {}
+        columns_param_fixed: dict[str, tuple[g2f.ParameterD, float]] = {}
+        columns_param_free: dict[str, tuple[g2f.ParameterD, float]] = {}
+        columns_param_flux: dict[str, g2f.IntegralParameterD] = {}
         params_radec = {}
         columns_err = []
 
@@ -406,17 +424,32 @@ class CatalogSourceFitterABC(ABC):
         errors_hessian_bestfit = config.compute_errors == "INV_HESSIAN_BESTFIT"
         compute_errors = errors_hessian or errors_hessian_bestfit
 
+        columns_cenx_err_copy = []
+        columns_ceny_err_copy = []
+
         for key, param in params.items():
             key_full = f"{prefix}{key}"
+            is_cenx = isinstance(param, g2f.CentroidXParameterD)
+            is_ceny = isinstance(param, g2f.CentroidYParameterD)
+
             if compute_errors:
-                columns_err.append(f"{key_full}_err")
-            (columns_param_fixed if param.fixed else columns_param_free)[key_full] = param
+                if param.free:
+                    columns_err.append(f"{key_full}_err")
+                elif is_cenx:
+                    columns_cenx_err_copy.append(f"{key_full}_err")
+                elif is_ceny:
+                    columns_ceny_err_copy.append(f"{key_full}_err")
+
+            (columns_param_fixed if param.fixed else columns_param_free)[key_full] = (
+                param,
+                configdata.config.centroid_pixel_offset if (is_cenx or is_ceny) else 0,
+            )
             if isinstance(param, g2f.IntegralParameterD):
                 columns_param_flux[key_full] = param
             elif config.convert_cen_xy_to_radec:
-                if isinstance(param, g2f.CentroidXParameterD):
+                if is_cenx:
                     params_radec[f"{key_full[:-5]}"] = [param, None]
-                elif isinstance(param, g2f.CentroidYParameterD):
+                elif is_ceny:
                     params_radec[f"{key_full[:-5]}"][1] = param
 
         if config.convert_cen_xy_to_radec:
@@ -428,11 +461,12 @@ class CatalogSourceFitterABC(ABC):
                     raise RuntimeError(
                         f"Fitter failed to find corresponding cen_y param for {key_base=}; is it fixed?")
                 columns_params_radec.append(
-                    (f"{key_base}cen_ra", f"{key_base}cen_dec", param_cen_x, param_cen_y)
+                    (f"{key_base}cen_ra", f"{key_base}cen_dec",  f"{key_base}cen_x",  f"{key_base}cen_y")
                 )
                 if compute_errors:
                     columns_params_radec_err.append(
-                        (f"{key_base}cen_ra_err", f"{key_base}cen_dec_err", param_cen_x, param_cen_y)
+                        (f"{key_base}cen_ra_err", f"{key_base}cen_dec_err", f"{key_base}cen_x",
+                         f"{key_base}cen_y", f"{key_base}cen_x_err",  f"{key_base}cen_y_err")
                     )
 
         columns = config.schema([channel.name for channel in channels.values()])
@@ -448,6 +482,14 @@ class CatalogSourceFitterABC(ABC):
         meta = {"config": config.toDict()}
         results = Table(
             data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns], meta=meta,
+        )
+        self.copy_centroid_errors(
+            columns_cenx_err_copy=columns_cenx_err_copy,
+            columns_ceny_err_copy=columns_ceny_err_copy,
+            results=results,
+            catalog_multi=catalog_multi,
+            catexps=catexps,
+            configdata=configdata,
         )
 
         # Validate that the columns are in the right order
@@ -476,13 +518,13 @@ class CatalogSourceFitterABC(ABC):
 
         range_idx = range(n_rows)
 
-        # TODO: Do this check once, without assuming first row will succeed
-        # should make some dummy data
-        if False:
-            data, psfmodels = config.make_model_data(idx_row=range_idx[0], catexps=catexps)
-            model = g2f.Model(data=data, psfmodels=psfmodels, sources=model_sources, priors=priors)
-            # Remember to filter out fixed centroids from params
-            assert list(params.values()) == get_params_uniq(model, fixed=False)
+        # TODO: Do this check with dummy data
+        # data, psfmodels = config.make_model_data(
+        #     idx_row=range_idx[0], catexps=catexps)
+        # model = g2f.Model(data=data, psfmodels=psfmodels,
+        #     sources=model_sources, priors=priors)
+        # Remember to filter out fixed centroids from params
+        # assert list(params.values()) == get_params_uniq(model, fixed=False)
 
         for idx in range_idx:
             time_init = time.process_time()
@@ -494,7 +536,10 @@ class CatalogSourceFitterABC(ABC):
             try:
                 data, psfmodels = config.make_model_data(idx_row=idx, catexps=catexps)
                 model = g2f.Model(data=data, psfmodels=psfmodels, sources=model_sources, priors=priors)
-                self.initialize_model(model, source_multi, catexps, values_init)
+                self.initialize_model(
+                    model, source_multi, catexps, values_init,
+                    centroid_pixel_offset=configdata.config.centroid_pixel_offset,
+                )
 
                 # Caches the jacobian residual if the data size is unchanged
                 # Note: this will need to change with priors
@@ -523,12 +568,12 @@ class CatalogSourceFitterABC(ABC):
 
                 # Set all params to best fit values
                 # In case the optimizer doesn't
-                for (key, param), value in zip(columns_param_free.items(), result_full.params_best):
+                for (key, (param, offset)), value in zip(columns_param_free.items(), result_full.params_best):
                     param.value_transformed = value
-                    results[key][idx] = param.value
+                    results[key][idx] = param.value + offset
 
-                for key, param in columns_param_fixed.items():
-                    results[key][idx] = param.value
+                for key, (param, offset) in columns_param_fixed.items():
+                    results[key][idx] = param.value + offset
 
                 if config.fit_linear_final:
                     loglike_init, loglike_new = self.modeller.fit_model_linear(
@@ -539,8 +584,10 @@ class CatalogSourceFitterABC(ABC):
                         results[column][idx] = param.value
 
                 if config.convert_cen_xy_to_radec:
-                    for (key_ra, key_dec, cen_x, cen_y) in columns_params_radec:
-                        radec = self.get_model_radec(source_multi, cen_x.value, cen_y.value)
+                    for (key_ra, key_dec, key_cen_x, key_cen_y) in columns_params_radec:
+                        # These will have been converted back if necessary
+                        cen_x, cen_y = results[key_cen_x][idx], results[key_cen_y][idx]
+                        radec = self.get_model_radec(source_multi, cen_x, cen_y)
                         results[key_ra][idx], results[key_dec][idx] = radec
 
                 if compute_errors:
@@ -623,7 +670,10 @@ class CatalogSourceFitterABC(ABC):
                         for value, column_err in zip(errors, columns_err):
                             results[column_err][idx] = value
                         if config.convert_cen_xy_to_radec:
-                            for (key_ra_err, key_dec_err, cen_x, cen_y) in columns_params_radec_err:
+                            for (
+                                key_ra_err, key_dec_err, key_cen_x, key_cen_y, key_cen_x_err, key_cen_y_err
+                            ) in columns_params_radec_err:
+                                cen_x, cen_y = results[key_cen_x][idx], results[key_cen_y][idx]
                                 # TODO: improve this
                                 # For one, it won't work right at RA=359.99...
                                 # Could consider dividing by sqrt(2)
@@ -631,8 +681,8 @@ class CatalogSourceFitterABC(ABC):
                                 radec_err = np.array(
                                     self.get_model_radec(
                                         source_multi,
-                                        cen_x.value + errors[0],
-                                        cen_y.value + errors[1],
+                                        cen_x + results[key_cen_x_err][idx],
+                                        cen_y + results[key_cen_y_err][idx],
                                     )
                                 )
                                 radec_err -= radec
@@ -743,6 +793,7 @@ class CatalogSourceFitterABC(ABC):
         source: Mapping[str, Any],
         catexps: list[CatalogExposureSourcesABC],
         values_init: Mapping[g2f.ParameterD, float] | None = None,
+        centroid_pixel_offset: float = 0,
     ) -> None:
         """Initialize a Model for a single source row.
 
@@ -757,6 +808,9 @@ class CatalogSourceFitterABC(ABC):
             A list of (source and psf) catalog-exposure pairs.
         values_init
             Initial parameter values from the model configuration.
+        centroid_pixel_offset
+            The value of the offset required to convert pixel centroids from
+            MultiProFit coordinates to catalog coordinates.
         """
 
     @abstractmethod
