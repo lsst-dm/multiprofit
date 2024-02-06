@@ -581,7 +581,9 @@ class Modeller:
 
         def jacobian_func(params_new, model_jac, model_ll, params, result, jac):
             if result.config.eval_residual:
+                time_init = time.process_time()
                 model_jac.evaluate()
+                result.time_eval += time.process_time() - time_init
             return jac
 
         if config.eval_residual:
