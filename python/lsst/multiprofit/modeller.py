@@ -608,10 +608,48 @@ class Modeller:
             force=True,
         )
 
-        params_free_sorted = tuple(get_params_uniq(model, fixed=False))
         offsets_params = dict(model.offsets_parameters())
         params_offsets = {v: k for (k, v) in offsets_params.items()}
         params_free = tuple(params_offsets[idx] for idx in range(1, len(offsets_params) + 1))
+        params_free_sorted_all = tuple(get_params_uniq(model, fixed=False))
+        params_free_sorted = []
+        params_free_sorted_missing = []
+
+        # If we were forced to drop an observation, re-generate the modeller
+        # Only integral parameters should be missing
+        for param in params_free_sorted_all:
+            if param in params_offsets.values():
+                params_free_sorted.append(param)
+            else:
+                if not isinstance(param, g2f.IntegralParameterD):
+                    raise RuntimeError(f"non-integral {param=} missing from {offsets_params=}")
+                param.limits = g2f.LimitsD(param.min, param.max)
+                param.value = param.min
+                param.fixed = True
+                params_free_sorted_missing.append(param)
+
+        if params_free_sorted_missing:
+            if config.eval_residual:
+                model_ll.setup_evaluators(
+                    evaluatormode=g2f.Model.EvaluatorMode.loglike,
+                    residuals=fitinputs.residuals,
+                    residuals_prior=fitinputs.residuals_prior,
+                    force=True,
+                )
+            fitinputs = FitInputs.from_model(model)
+            model.setup_evaluators(
+                evaluatormode=g2f.Model.EvaluatorMode.jacobian,
+                outputs=fitinputs.jacobians,
+                residuals=fitinputs.residuals,
+                outputs_prior=fitinputs.outputs_prior,
+                residuals_prior=fitinputs.residuals_prior,
+                print=printout,
+                force=True,
+            )
+            params_free_sorted = tuple(params_free_sorted)
+        else:
+            params_free_sorted = params_free_sorted_all
+
         jac = fitinputs.jacobian[:, 1:]
         # Assert that this is a view, otherwise this won't work
         assert id(jac.base) == id(fitinputs.jacobian)
@@ -653,9 +691,22 @@ class Modeller:
         )
         results.time_run = time.process_time() - time_init
         results.result = result_opt
-        results.params_best = tuple(result_opt.x[offsets_params[param] - 1] for param in params_free_sorted)
+        if params_free_sorted_missing:
+            params_best = []
+            for param in params_free_sorted_all:
+                if param in params_free_sorted_missing:
+                    params_best.append(param.value)
+                    param.fixed = False
+                else:
+                    params_best.append(result_opt.x[offsets_params[param] - 1])
+            results.params_best = tuple(params_best)
+        else:
+            results.params_best = tuple(
+                result_opt.x[offsets_params[param] - 1] for param in params_free_sorted
+            )
         results.n_eval_func = result_opt.nfev
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
+
         return results
 
     # TODO: change to staticmethod if requiring py3.10+
