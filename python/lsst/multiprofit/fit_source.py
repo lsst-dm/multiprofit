@@ -77,7 +77,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         """
 
     @abstractmethod
-    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
+    def get_source_observation(self, source: Mapping[str, Any], **kwargs: Any) -> g2f.Observation:
         """Get the Observation for a given source row.
 
         Parameters
@@ -85,6 +85,8 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         source : Mapping[str, Any]
             A mapping with any values needed to retrieve an observation for a
             single source.
+        **kwargs
+            Additional keyword arguments not used during fitting.
 
         Returns
         -------
@@ -117,18 +119,34 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         idx_row,
         catexps: list[CatalogExposureSourcesABC],
     ) -> tuple[g2f.Data, list[g2f.PsfModel]]:
-        n_catexps = len(catexps)
-        observations = [None] * n_catexps
-        psfmodels = [None] * n_catexps
+        """Make data and psfmodels for a catalog row.
 
-        for idx_catexp in range(n_catexps):
-            catexp = catexps[idx_catexp]
+        Parameters
+        ----------
+        idx_row
+            The index of the row in each catalog.
+        catexps
+            Catalog-exposure pairs to initialize observations from.
+
+        Returns
+        -------
+        data
+            The resulting data object.
+        psfmodels
+            A list of psfmodels, one per catexp.
+        """
+        observations = []
+        psfmodels = []
+
+        for catexp in catexps:
             source = catexp.get_catalog()[idx_row]
-            observations[idx_catexp] = catexp.get_source_observation(source)
-            psfmodel = catexp.get_psfmodel(source)
-            for param in get_params_uniq(psfmodel):
-                param.fixed = True
-            psfmodels[idx_catexp] = psfmodel
+            observation = catexp.get_source_observation(source)
+            if observation is not None:
+                observations.append(observation)
+                psfmodel = catexp.get_psfmodel(source)
+                for param in get_params_uniq(psfmodel):
+                    param.fixed = True
+                psfmodels.append(psfmodel)
 
         data = g2f.Data(observations)
         return data, psfmodels
@@ -556,6 +574,9 @@ class CatalogSourceFitterABC(ABC):
                 if config.fit_linear_init:
                     self.modeller.fit_model_linear(model=model, ratio_min=0.01)
 
+                for observation in data:
+                    observation.image.data[~np.isfinite(observation.image.data)] = 0
+
                 result_full = self.modeller.fit_model(
                     model, fitinputs=fitInputs, config=config.config_fit, **kwargs
                 )
@@ -728,6 +749,7 @@ class CatalogSourceFitterABC(ABC):
         catexps: list[CatalogExposureSourcesABC],
         configdata: CatalogSourceFitterConfigData = None,
         results: astropy.table.Table = None,
+        **kwargs: Any
     ) -> g2f.Model:
         """Reconstruct the model for a single row of a fit catalog.
 
@@ -745,6 +767,9 @@ class CatalogSourceFitterABC(ABC):
         results
             The corresponding best-fit parameter catalog to initialize
             parameter values from.
+        **kwargs
+            Additional keyword arguments to pass to initialize_model. Not
+            used during fitting.
 
         Returns
         -------
@@ -755,7 +780,7 @@ class CatalogSourceFitterABC(ABC):
         if configdata is None:
             configdata = CatalogSourceFitterConfigData(
                 config=CatalogSourceFitterConfig,
-                channels=channels,
+                channels=list(channels.values()),
             )
         config = configdata.config
 
@@ -774,7 +799,7 @@ class CatalogSourceFitterABC(ABC):
             catexps=catexps,
         )
         model = g2f.Model(data=data, psfmodels=psfmodels, sources=model_sources, priors=priors)
-        self.initialize_model(model, source_multi, catexps)
+        self.initialize_model(model, source_multi, catexps, **kwargs)
 
         if results is not None:
             row = results[idx_row]
@@ -794,6 +819,7 @@ class CatalogSourceFitterABC(ABC):
         catexps: list[CatalogExposureSourcesABC],
         values_init: Mapping[g2f.ParameterD, float] | None = None,
         centroid_pixel_offset: float = 0,
+        **kwargs: Any
     ) -> None:
         """Initialize a Model for a single source row.
 
@@ -811,6 +837,8 @@ class CatalogSourceFitterABC(ABC):
         centroid_pixel_offset
             The value of the offset required to convert pixel centroids from
             MultiProFit coordinates to catalog coordinates.
+        **kwargs
+            Additional keyword arguments that cannot be required for fitting.
         """
 
     @abstractmethod
