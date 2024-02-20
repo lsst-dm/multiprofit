@@ -12,7 +12,7 @@
 # (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# but WITHOUT ANY WARRANTY; without even the implied warrantyfluxes = u.ABmag.to(u.nanojansky, mags) of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
@@ -24,21 +24,22 @@ from lsst.multiprofit.componentconfig import CentroidConfig, GaussianComponentCo
 from lsst.multiprofit.model_utils import make_psfmodel_null
 from lsst.multiprofit.modelconfig import ModelConfig
 from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
-from lsst.multiprofit.plots import plot_model_rgb
+from lsst.multiprofit.plots import abs_mag_sol_lsst, bands_weights_lsst, plot_model_rgb
 from lsst.multiprofit.sourceconfig import ComponentGroupConfig, SourceConfig
 import numpy as np
 import pytest
 
 sigma_inv = 1e4
 
+
 @pytest.fixture(scope="module")
 def channels() -> dict[str, g2f.Channel]:
-    return {band: g2f.Channel.get(band) for band in ("R", "G", "B")}
+    return {band: g2f.Channel.get(band) for band in bands_weights_lsst}
 
 
 @pytest.fixture(scope="module")
 def data(channels) -> g2f.Data:
-    n_rows, n_cols = 15, 21
+    n_rows, n_cols = 16, 21
     x_min, y_min = 0, 0
 
     dn_rows, dn_cols = 1, -2
@@ -56,7 +57,6 @@ def data(channels) -> g2f.Data:
             n_cols=n_cols + idx*dn_cols,
         )
         observation = config.make_observation()
-        observation.image.fill(0)
         observation.sigma_inv.fill(sigma_inv)
         observation.mask_inv.fill(1)
         observations.append(observation)
@@ -75,7 +75,7 @@ def psfmodels(psfmodel, channels) -> list[g2f.PsfModel]:
 
 @pytest.fixture(scope="module")
 def model(channels, data, psfmodels):
-    fluxes_group = [{channel: 1.0 for channel in channels.values()}]
+    fluxes_group = [{channels[band]: 10**(-0.4*(mag - 8.9)) for band, mag in abs_mag_sol_lsst.items()}]
 
     modelconfig = ModelConfig(
         sources={
@@ -83,7 +83,7 @@ def model(channels, data, psfmodels):
                 componentgroups={
                     '': ComponentGroupConfig(
                         centroids={"default": CentroidConfig(
-                            x=ParameterConfig(value_initial=8., fixed=True),
+                            x=ParameterConfig(value_initial=6., fixed=True),
                             y=ParameterConfig(value_initial=11., fixed=True),
                         )},
                         components_gauss={
@@ -104,12 +104,22 @@ def model(channels, data, psfmodels):
     rng = np.random.default_rng(1)
     for output, obs in zip(model.outputs, model.data):
         img = obs.image.data
-        img.flat = output.data.flat
-        img.flat += rng.standard_normal(img.size) / sigma_inv
+        img.flat = output.data.flat + rng.standard_normal(img.size) / sigma_inv
     return model
 
 
 def test_plot_model_rgb(model):
-    fig, ax, *_ = plot_model_rgb(model, stretch=10/sigma_inv, Q=3)
+    fig, ax, fig_gs, ax_gs, *_ = plot_model_rgb(model, minimum=0, stretch=0.15, Q=4, weights=bands_weights_lsst)
+    assert fig is not None
+    assert ax is not None
+    assert fig_gs is not None
+    assert ax_gs is not None
+
+
+def test_plot_model_rgb_auto(model):
+    fig, ax, *_ = plot_model_rgb(
+        model, Q=6, weights=bands_weights_lsst, rgb_min_auto=True, rgb_stretch_auto=True,
+        plot_singleband=False,
+    )
     assert fig is not None
     assert ax is not None
