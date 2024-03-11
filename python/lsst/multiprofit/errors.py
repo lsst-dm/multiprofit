@@ -1,4 +1,4 @@
-# This file is part of meas_extensions_multiprofit.
+# This file is part of multiprofit.
 #
 # Developed for the LSST Data Management System.
 # This product includes software developed by the LSST Project
