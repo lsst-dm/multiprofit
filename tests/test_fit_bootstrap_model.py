@@ -138,7 +138,7 @@ def configfitter_source(channels) -> CatalogSourceFitterConfigData:
                                     rho=ParameterConfig(value_initial=rho_src),
                                     size_x=ParameterConfig(value_initial=reff_x_src),
                                     size_y=ParameterConfig(value_initial=reff_y_src),
-                                    sersicindex=SersicIndexParameterConfig(fixed=False, value_initial=1.0),
+                                    sersic_index=SersicIndexParameterConfig(fixed=False, value_initial=1.0),
                                 ),
                             }
                         )

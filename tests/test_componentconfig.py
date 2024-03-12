@@ -96,12 +96,12 @@ def test_GaussianComponentConfig(centroid):
 
 
 def test_SersicConfig(centroid, channels):
-    rho, size_x, size_y, sersicindex = -0.3, 1.4, 1.6, 3.2
+    rho, size_x, size_y, sersic_index = -0.3, 1.4, 1.6, 3.2
     config = SersicComponentConfig(
         rho=ParameterConfig(value_initial=rho),
         size_x=ParameterConfig(value_initial=size_x),
         size_y=ParameterConfig(value_initial=size_y),
-        sersicindex=SersicIndexParameterConfig(value_initial=sersicindex),
+        sersic_index=SersicIndexParameterConfig(value_initial=sersic_index),
     )
     fluxes = {
         channel: 1.0 + idx
@@ -120,7 +120,7 @@ def test_SersicConfig(centroid, channels):
         g2f.RhoParameterD: rho,
         g2f.ReffXParameterD: size_x,
         g2f.ReffYParameterD: size_y,
-        g2f.SersicIndexParameterD: sersicindex,
+        g2f.SersicIndexParameterD: sersic_index,
     }
     fluxes_label = {
         config.format_label(config.get_integral_label_default(), name_channel=channel.name):

@@ -395,7 +395,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
     _interpolators: dict[int, g2f.SersicMixInterpolator] = {}
 
     order = pexConfig.ChoiceField[int](doc="Sersic mix order", allowed={4: "Four", 8: "Eight"}, default=4)
-    sersicindex = pexConfig.ConfigField[SersicIndexParameterConfig](doc="Sersic index config")
+    sersic_index = pexConfig.ConfigField[SersicIndexParameterConfig](doc="Sersic index config")
 
     def get_interpolator(self, order: int):
         return self._interpolators.get(
@@ -415,7 +415,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
         return f"{'Gaussian (fixed Sersic)' if is_gaussian_fixed else 'Sersic'}"
 
     def is_gaussian_fixed(self):
-        return self.sersicindex.value_initial == 0.5 and self.sersicindex.fixed
+        return self.sersic_index.value_initial == 0.5 and self.sersic_index.fixed
 
     def make_component(
         self,
@@ -443,10 +443,10 @@ class SersicComponentConfig(EllipticalComponentConfig):
                 ),
                 rho=g2f.RhoParameterD(self.rho.value_initial, transform=transform_rho, fixed=self.rho.fixed),
             )
-            sersicindex = g2f.SersicMixComponentIndexParameterD(
-                value=self.sersicindex.value_initial,
-                fixed=self.sersicindex.fixed,
-                transform=transforms_ref["logit_sersic"] if not self.sersicindex.fixed else None,
+            sersic_index = g2f.SersicMixComponentIndexParameterD(
+                value=self.sersic_index.value_initial,
+                fixed=self.sersic_index.fixed,
+                transform=transforms_ref["logit_sersic"] if not self.sersic_index.fixed else None,
                 interpolator=self.get_interpolator(order=self.order),
                 limits=limits_ref["n_ser_multigauss"],
             )
@@ -454,9 +454,9 @@ class SersicComponentConfig(EllipticalComponentConfig):
                 centroid=centroid,
                 ellipse=ellipse,
                 integral=integral_model,
-                sersicindex=sersicindex,
+                sersicindex=sersic_index,
             )
-            prior = self.sersicindex.get_prior(sersicindex) if not sersicindex.fixed else None
+            prior = self.sersic_index.get_prior(sersic_index) if not sersic_index.fixed else None
             priors = [prior] if prior else []
         prior = self.get_shape_prior(ellipse)
         if prior:

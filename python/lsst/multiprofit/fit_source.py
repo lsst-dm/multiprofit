@@ -309,7 +309,7 @@ class CatalogSourceFitterConfigData:
                             raise ValueError(f"{params_flux=} len={len(params_flux)} != {n_channels=}")
                         for channel, param_flux in zip(self.channels, params_flux):
                             parameters[f"{prefix_comp}{channel.name}_flux"] = param_flux
-                    if hasattr(config_comp, "sersicindex") and not config_comp.sersicindex.fixed:
+                    if hasattr(config_comp, "sersic_index") and not config_comp.sersic_index.fixed:
                         parameters[f"{prefix_comp}sersicindex"] = component.sersicindex_param
 
         return parameters
