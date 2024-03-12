@@ -413,8 +413,8 @@ def test_modeller(model):
                     f" from modeller.fit_model in t={time_init:.3e}, x={results.params_best},"
                     f" results: \n{results}"
                 )
-            # Adding a suitably-scaled prior far from the truth should always worsen the log likelihood, but doesn't...
-            # noise bias? bad convergence? unclear
+            # Adding a suitably-scaled prior far from the truth should always
+            # worsen loglikel, but doesn't - why? noise bias? bad convergence?
             # assert (loglike_new >= loglike_noprior) == (offset == 0)
 
 

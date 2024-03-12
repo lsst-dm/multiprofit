@@ -231,8 +231,9 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
         model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.image)
         model.evaluate()
 
-        # You're not fitting more than a million sources... right?
-        rng = np.random.default_rng(source["id"] + 1000000)
+        # The offset is to keep the rng seed different from the PSF image seed
+        # It doesn't really need to be so large but it's reasonably safe
+        rng = np.random.default_rng(source["id"] + 10000000)
 
         for idx_obs, observation in enumerate(model.data):
             config_obs = catexps[idx_obs].config_boot.observation

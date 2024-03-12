@@ -373,7 +373,7 @@ class CatalogPsfFitter:
         )
 
     def _get_data(self, img_psf: np.array, gain: float = 1e5) -> g2f.Data:
-        """Build a fittable Data from a normalized PSF image.
+        """Build a Model-able gauss2d.fit.Data from a normalized PSF image.
 
         Parameters
         ----------
