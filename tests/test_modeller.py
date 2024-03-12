@@ -301,6 +301,8 @@ def psfmodels_linear_gaussians(channels, psfmodels):
         params = psfmodel.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE))
         params[0].fixed = False
         gaussians[idx] = LinearGaussians.make(psfmodel, is_psf=True)
+        # If this is not done, test_psf_model_fit will fail
+        params[0].fixed = True
     return gaussians
 
 
@@ -427,13 +429,16 @@ def test_psf_model_fit(psf_fit_models):
         params = get_params_uniq(model.sources[0])
         for param in params:
             # Fitting the total flux won't work in a fractional model (yet)
-            if not isinstance(param, g2f.IntegralParameterD):
+            if isinstance(param, g2f.IntegralParameterD):
+                assert param.fixed
+            else:
                 param.fixed = False
         # Necessary whenever parameters are freed/fixed
         model.setup_evaluators(model.EvaluatorMode.jacobian, force=True)
         errors = model.verify_jacobian(rtol=5e-4, atol=5e-4, findiff_add=1e-6, findiff_frac=1e-6)
         if errors:
             import matplotlib.pyplot as plt
+            print(model.parameters())
 
             fitinputs = FitInputs.from_model(model)
             model.setup_evaluators(
