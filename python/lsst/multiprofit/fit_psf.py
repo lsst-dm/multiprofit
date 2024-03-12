@@ -406,7 +406,7 @@ class CatalogPsfFitter:
     def fit(
         self,
         catexp: CatalogExposurePsfABC,
-        configdata: CatalogPsfFitterConfigData = None,
+        config_data: CatalogPsfFitterConfigData = None,
         logger: logging.Logger = None,
         **kwargs,
     ) -> astropy.table.Table:
@@ -420,7 +420,7 @@ class CatalogPsfFitter:
         catexp
             An exposure to fit a model PSF at the position of all
             sources in the corresponding catalog.
-        configdata
+        config_data
             Configuration settings for fitting and output.
         logger
             The logger. Defaults to calling `_getlogger`.
@@ -433,11 +433,11 @@ class CatalogPsfFitter:
             A table with fit parameters for the PSF model at the location
             of each source.
         """
-        if configdata is None:
-            configdata = CatalogPsfFitterConfigData(config=CatalogPsfFitterConfig())
+        if config_data is None:
+            config_data = CatalogPsfFitterConfigData(config=CatalogPsfFitterConfig())
         if logger is None:
             logger = CatalogPsfFitter._get_logger()
-        config = configdata.config
+        config = config_data.config
         if config.compute_errors != "NONE":
             raise ValueError("CatalogPsfFitter doesn't support computing errors")
 
@@ -451,14 +451,14 @@ class CatalogPsfFitter:
         priors = []
         sigmas = [
             np.linalg.norm((comp.size_x.value_initial, comp.size_y.value_initial))
-            for comp in configdata.componentconfigs.values()
+            for comp in config_data.componentconfigs.values()
         ]
 
-        psfmodel = configdata.psfmodel
+        psfmodel = config_data.psfmodel
         model_source = g2f.Source(psfmodel.components)
 
         for idx, (comp, config_comp) in enumerate(
-            zip(psfmodel.components, configdata.componentconfigs.values())
+            zip(psfmodel.components, config_data.componentconfigs.values())
         ):
             prior = config_comp.get_shape_prior(comp.ellipse)
             if prior:
@@ -468,7 +468,7 @@ class CatalogPsfFitter:
                     prior_axrat.mean = config.prior_axrat_mean
                 priors.append(prior)
 
-        params = configdata.parameters
+        params = config_data.parameters
         flux_total = tuple(get_params_uniq(psfmodel, nonlinear=False, channel=g2f.Channel.NONE))
         if len(flux_total) != 1:
             raise RuntimeError(f"len({flux_total=}) != 1; PSF model is badly-formed")
@@ -519,7 +519,7 @@ class CatalogPsfFitter:
                 img_psf = catexp.get_psf_image(source)
                 data = self._get_data(img_psf)
                 model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
-                self.initialize_model(model=model, configdata=configdata)
+                self.initialize_model(model=model, config_data=config_data)
 
                 # Caches the jacobian residual if the kernel size is unchanged
                 if img_psf.size != size:
@@ -577,7 +577,7 @@ class CatalogPsfFitter:
     def initialize_model(
         self,
         model: g2f.Model,
-        configdata: CatalogPsfFitterConfigData,
+        config_data: CatalogPsfFitterConfigData,
         limits_x: g2f.LimitsD = None,
         limits_y: g2f.LimitsD = None,
     ) -> None:
@@ -587,7 +587,7 @@ class CatalogPsfFitter:
         ----------
         model
             The model object to initialize.
-        configdata
+        config_data
             The fitter config with cached data.
         limits_x
             Hard limits for the source's x centroid.
@@ -603,7 +603,7 @@ class CatalogPsfFitter:
             limits_y = g2f.LimitsD(0, n_rows)
 
         for component, config_comp in zip(
-            configdata.components.values(), configdata.componentconfigs.values()
+            config_data.components.values(), config_data.componentconfigs.values()
         ):
             centroid = component.centroid
             if centroid not in centroids:

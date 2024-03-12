@@ -168,8 +168,8 @@ class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC):
         config_dict = self.table_psf_fits.meta["config"]
         config = CatalogPsfFitterConfig()
         set_config_from_dict(config, config_dict)
-        configdata = CatalogPsfFitterConfigData(config=config)
-        object.__setattr__(self, "psfmodel_data", configdata)
+        config_data = CatalogPsfFitterConfigData(config=config)
+        object.__setattr__(self, "psfmodel_data", config_data)
 
 
 @dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
@@ -253,7 +253,7 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
         self,
         catalog_multi: Sequence,
         catexps: list[CatalogExposureSourcesABC],
-        configdata: CatalogSourceFitterConfigData = None,
+        config_data: CatalogSourceFitterConfigData = None,
         logger: logging.Logger = None,
         **kwargs: Any,
     ) -> None:

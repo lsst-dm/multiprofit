@@ -30,8 +30,8 @@ def fitter_config() -> CatalogPsfFitterConfig:
 
 @pytest.fixture(scope="module")
 def fitter_config_data(fitter_config) -> CatalogPsfFitterConfigData:
-    configdata = CatalogPsfFitterConfigData(config=fitter_config)
-    return configdata
+    config_data = CatalogPsfFitterConfigData(config=fitter_config)
+    return config_data
 
 
 def test_fitter_config_data(fitter_config_data):

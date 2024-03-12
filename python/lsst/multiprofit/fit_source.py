@@ -354,7 +354,7 @@ class CatalogSourceFitterABC(ABC):
         results: Table,
         catalog_multi: Sequence,
         catexps: list[CatalogExposureSourcesABC],
-        configdata: CatalogSourceFitterConfigData,
+        config_data: CatalogSourceFitterConfigData,
     ):
         if columns_cenx_err_copy or columns_ceny_err_copy:
             raise RuntimeError(
@@ -366,7 +366,7 @@ class CatalogSourceFitterABC(ABC):
         self,
         catalog_multi: Sequence,
         catexps: list[CatalogExposureSourcesABC],
-        configdata: CatalogSourceFitterConfigData = None,
+        config_data: CatalogSourceFitterConfigData = None,
         logger: logging.Logger = None,
         **kwargs: Any,
     ) -> astropy.table.Table:
@@ -383,7 +383,7 @@ class CatalogSourceFitterABC(ABC):
             A multi-band source catalog to fit a model to.
         catexps
             A list of (source and psf) catalog-exposure pairs.
-        configdata
+        config_data
             Configuration settings and data for fitting and output.
         logger
             The logger. Defaults to calling `_getlogger`.
@@ -396,8 +396,8 @@ class CatalogSourceFitterABC(ABC):
             A table with fit parameters for the PSF model at the location
             of each source.
         """
-        if configdata is None:
-            configdata = CatalogSourceFitterConfigData(
+        if config_data is None:
+            config_data = CatalogSourceFitterConfigData(
                 config=CatalogSourceFitterConfig(),
                 channels=[catexp.channel for catexp in catexps],
             )
@@ -407,11 +407,11 @@ class CatalogSourceFitterABC(ABC):
         self.validate_fit_inputs(
             catalog_multi=catalog_multi,
             catexps=catexps,
-            configdata=configdata,
+            config_data=config_data,
             logger=logger,
             **kwargs
         )
-        config = configdata.config
+        config = config_data.config
 
         if len(self.errors_expected) != len(config.flag_errors):
             raise ValueError(f"{self.errors_expected=} keys not same len as {config.flag_errors=}")
@@ -426,10 +426,10 @@ class CatalogSourceFitterABC(ABC):
             raise ValueError(f"{self.errors_expected=} keys contain duplicates from {config.flag_errors=}")
 
         channels = self.get_channels(catexps)
-        model_sources, priors = configdata.sources_priors
+        model_sources, priors = config_data.sources_priors
         # TODO: If free Observation params are ever supported, make null Data
-        # Because configdata knows nothing about the Observation(s)
-        params = configdata.parameters
+        # Because config_data knows nothing about the Observation(s)
+        params = config_data.parameters
         values_init = {param: param.value for param in params.values() if param.free}
         prefix = config.prefix_column
         columns_param_fixed: dict[str, tuple[g2f.ParameterD, float]] = {}
@@ -460,7 +460,7 @@ class CatalogSourceFitterABC(ABC):
 
             (columns_param_fixed if param.fixed else columns_param_free)[key_full] = (
                 param,
-                configdata.config.centroid_pixel_offset if (is_cenx or is_ceny) else 0,
+                config_data.config.centroid_pixel_offset if (is_cenx or is_ceny) else 0,
             )
             if isinstance(param, g2f.IntegralParameterD):
                 columns_param_flux[key_full] = param
@@ -507,7 +507,7 @@ class CatalogSourceFitterABC(ABC):
             results=results,
             catalog_multi=catalog_multi,
             catexps=catexps,
-            configdata=configdata,
+            config_data=config_data,
         )
 
         # Validate that the columns are in the right order
@@ -556,7 +556,7 @@ class CatalogSourceFitterABC(ABC):
                 model = g2f.Model(data=data, psfmodels=psfmodels, sources=model_sources, priors=priors)
                 self.initialize_model(
                     model, source_multi, catexps, values_init,
-                    centroid_pixel_offset=configdata.config.centroid_pixel_offset,
+                    centroid_pixel_offset=config_data.config.centroid_pixel_offset,
                 )
 
                 # Caches the jacobian residual if the data size is unchanged
@@ -747,7 +747,7 @@ class CatalogSourceFitterABC(ABC):
         idx_row: int,
         catalog_multi: Sequence,
         catexps: list[CatalogExposureSourcesABC],
-        configdata: CatalogSourceFitterConfigData = None,
+        config_data: CatalogSourceFitterConfigData = None,
         results: astropy.table.Table = None,
         **kwargs: Any
     ) -> g2f.Model:
@@ -761,7 +761,7 @@ class CatalogSourceFitterABC(ABC):
             The multi-band catalog originally used for initialization.
         catexps
             The catalog-exposure pairs to reconstruct the model for.
-        configdata
+        config_data
             The configuration used to generate sources.
             Default-initialized if None.
         results
@@ -777,12 +777,12 @@ class CatalogSourceFitterABC(ABC):
             The reconstructed model.
         """
         channels = self.get_channels(catexps)
-        if configdata is None:
-            configdata = CatalogSourceFitterConfigData(
+        if config_data is None:
+            config_data = CatalogSourceFitterConfigData(
                 config=CatalogSourceFitterConfig,
                 channels=list(channels.values()),
             )
-        config = configdata.config
+        config = config_data.config
 
         if not idx_row >= 0:
             raise ValueError(f"{idx_row=} !>=0")
@@ -791,7 +791,7 @@ class CatalogSourceFitterABC(ABC):
         if (results is not None) and not (len(results) > idx_row):
             raise ValueError(f"{len(results)=} !> {idx_row=}")
 
-        model_sources, priors = configdata.sources_priors
+        model_sources, priors = config_data.sources_priors
         source_multi = catalog_multi[idx_row]
 
         data, psfmodels = config.make_model_data(
@@ -803,7 +803,7 @@ class CatalogSourceFitterABC(ABC):
 
         if results is not None:
             row = results[idx_row]
-            for column, param in configdata.parameters.items():
+            for column, param in config_data.parameters.items():
                 param.value = row[f"{config.prefix_column}{column}"]
 
         return model
@@ -846,7 +846,7 @@ class CatalogSourceFitterABC(ABC):
         self,
         catalog_multi: Sequence,
         catexps: list[CatalogExposureSourcesABC],
-        configdata: CatalogSourceFitterConfigData = None,
+        config_data: CatalogSourceFitterConfigData = None,
         logger: logging.Logger = None,
         **kwargs: Any,
     ) -> None:
@@ -862,7 +862,7 @@ class CatalogSourceFitterABC(ABC):
             A multi-band source catalog to fit a model to.
         catexps
             A list of (source and psf) catalog-exposure pairs.
-        configdata
+        config_data
             Configuration settings and data for fitting and output.
         logger
             The logger. Defaults to calling `_getlogger`.

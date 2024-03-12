@@ -69,7 +69,7 @@ def channels():
 
 @pytest.fixture(scope="module")
 def configfitter_psfs(channels) -> dict[g2f.Channel, CatalogExposurePsfBootstrap]:
-    configdatas = {}
+    config_datas = {}
     for idx, (band, channel) in enumerate(channels.items()):
         n_rows = 17 + idx*2
         n_cols = 15 + idx*2
@@ -105,10 +105,10 @@ def configfitter_psfs(channels) -> dict[g2f.Channel, CatalogExposurePsfBootstrap
             observation=NoisyPsfObservationConfig(n_rows=n_rows, n_cols=n_cols, gain=1e5),
             n_sources=n_sources,
         )
-        configdata = CatalogExposurePsfBootstrap(config=config, config_boot=config_boot)
-        configdatas[channel] = configdata
+        config_data = CatalogExposurePsfBootstrap(config=config, config_boot=config_boot)
+        config_datas[channel] = config_data
 
-    return configdatas
+    return config_datas
 
 
 @pytest.fixture(scope="module")
@@ -150,11 +150,11 @@ def configfitter_source(channels) -> CatalogSourceFitterConfigData:
         compute_errors_no_covar=compute_errors_no_covar,
         compute_errors_from_jacobian=compute_errors_from_jacobian,
     )
-    configdata = CatalogSourceFitterConfigData(
+    config_data = CatalogSourceFitterConfigData(
         channels=tuple(channels.values()),
         config=config,
     )
-    return configdata
+    return config_data
 
 
 @pytest.fixture(scope="module")
@@ -163,7 +163,7 @@ def tables_psf_fits(configfitter_psfs) -> dict[g2f.Channel, astropy.table.Table]
     fits = {
         channel: fitter.fit(
             catexp=configfitter_psf,
-            configdata=configfitter_psf,
+            config_data=configfitter_psf,
         )
         for channel, configfitter_psf in configfitter_psfs.items()
     }
@@ -171,10 +171,10 @@ def tables_psf_fits(configfitter_psfs) -> dict[g2f.Channel, astropy.table.Table]
 
 
 @pytest.fixture(scope="module")
-def configdata_sources(
+def config_data_sources(
     configfitter_psfs, tables_psf_fits,
 ) -> dict[g2f.Channel, CatalogExposureSourcesBootstrap]:
-    configdatas = {}
+    config_datas = {}
     for idx, (channel, configfitter_psf) in enumerate(configfitter_psfs.items()):
         table_psf_fits = tables_psf_fits[channel]
         n_rows = shape_img[0] + idx*2
@@ -186,13 +186,13 @@ def configdata_sources(
             ),
             n_sources=n_sources,
         )
-        configdata = CatalogExposureSourcesBootstrap(
+        config_data = CatalogExposureSourcesBootstrap(
             config_boot=config_boot,
             table_psf_fits=table_psf_fits,
         )
-        configdatas[channel] = configdata
+        config_datas[channel] = config_data
 
-    return configdatas
+    return config_datas
 
 
 def test_fit_psf(configfitter_psfs, tables_psf_fits):
@@ -200,9 +200,9 @@ def test_fit_psf(configfitter_psfs, tables_psf_fits):
         assert len(results) == n_sources
         assert np.sum(results["mpf_psf_unknown_flag"]) == 0
         assert all(np.isfinite(list(results[0].values())))
-        configdata_psf = configfitter_psfs[band]
-        psfmodel_init = configdata_psf.config.make_psfmodel()
-        psfdata = CatalogPsfFitterConfigData(config=configdata_psf.config)
+        config_data_psf = configfitter_psfs[band]
+        psfmodel_init = config_data_psf.config.make_psfmodel()
+        psfdata = CatalogPsfFitterConfigData(config=config_data_psf.config)
         psfmodel_fit = psfdata.psfmodel
         psfdata.init_psfmodel(results[0])
         assert len(psfmodel_init.components) == len(psfmodel_fit.components)
@@ -226,19 +226,19 @@ def test_fit_psf(configfitter_psfs, tables_psf_fits):
                 assert np.isclose(p_init.value, p_meas.value, atol=atol, rtol=rtol)
 
 
-def test_fit_source(configfitter_source, configdata_sources):
+def test_fit_source(configfitter_source, config_data_sources):
     fitter = CatalogSourceFitterBootstrap()
     # We don't have or need multiband input catalog, so just pretend the first one is
-    catalog_multi = next(iter(configdata_sources.values())).get_catalog()
-    catexps = list(configdata_sources.values())
-    results = fitter.fit(catalog_multi=catalog_multi, catexps=catexps, configdata=configfitter_source)
+    catalog_multi = next(iter(config_data_sources.values())).get_catalog()
+    catexps = list(config_data_sources.values())
+    results = fitter.fit(catalog_multi=catalog_multi, catexps=catexps, config_data=configfitter_source)
     assert len(results) == n_sources
 
     model = fitter.get_model(
-        0, catalog_multi=catalog_multi, catexps=catexps, configdata=configfitter_source, results=results
+        0, catalog_multi=catalog_multi, catexps=catexps, config_data=configfitter_source, results=results
     )
 
-    model_sources, priors = configfitter_source.config.make_sources(channels=list(configdata_sources.keys()))
+    model_sources, priors = configfitter_source.config.make_sources(channels=list(config_data_sources.keys()))
     model_true = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model_sources)
     fitter.initialize_model(model_true, catalog_multi[0], catexps=catexps)
     params_true = tuple(param.value for param in get_params_uniq(model_true, fixed=False))
