@@ -68,7 +68,7 @@ def channels():
 
 
 @pytest.fixture(scope="module")
-def configfitter_psfs(channels) -> dict[g2f.Channel, CatalogExposurePsfBootstrap]:
+def config_fitter_psfs(channels) -> dict[g2f.Channel, CatalogExposurePsfBootstrap]:
     config_datas = {}
     for idx, (band, channel) in enumerate(channels.items()):
         n_rows = 17 + idx*2
@@ -112,7 +112,7 @@ def configfitter_psfs(channels) -> dict[g2f.Channel, CatalogExposurePsfBootstrap
 
 
 @pytest.fixture(scope="module")
-def configfitter_source(channels) -> CatalogSourceFitterConfigData:
+def config_fitter_source(channels) -> CatalogSourceFitterConfigData:
     config = CatalogSourceFitterConfig(
         config_fit=ModelFitConfig(fit_linear_iter=3),
         config_model=ModelConfig(
@@ -158,24 +158,24 @@ def configfitter_source(channels) -> CatalogSourceFitterConfigData:
 
 
 @pytest.fixture(scope="module")
-def tables_psf_fits(configfitter_psfs) -> dict[g2f.Channel, astropy.table.Table]:
+def tables_psf_fits(config_fitter_psfs) -> dict[g2f.Channel, astropy.table.Table]:
     fitter = CatalogPsfFitter()
     fits = {
         channel: fitter.fit(
-            catexp=configfitter_psf,
-            config_data=configfitter_psf,
+            catexp=config_fitter_psf,
+            config_data=config_fitter_psf,
         )
-        for channel, configfitter_psf in configfitter_psfs.items()
+        for channel, config_fitter_psf in config_fitter_psfs.items()
     }
     return fits
 
 
 @pytest.fixture(scope="module")
 def config_data_sources(
-    configfitter_psfs, tables_psf_fits,
+    config_fitter_psfs, tables_psf_fits,
 ) -> dict[g2f.Channel, CatalogExposureSourcesBootstrap]:
     config_datas = {}
-    for idx, (channel, configfitter_psf) in enumerate(configfitter_psfs.items()):
+    for idx, (channel, config_fitter_psf) in enumerate(config_fitter_psfs.items()):
         table_psf_fits = tables_psf_fits[channel]
         n_rows = shape_img[0] + idx*2
         n_cols = shape_img[1] + idx*2
@@ -195,12 +195,12 @@ def config_data_sources(
     return config_datas
 
 
-def test_fit_psf(configfitter_psfs, tables_psf_fits):
+def test_fit_psf(config_fitter_psfs, tables_psf_fits):
     for band, results in tables_psf_fits.items():
         assert len(results) == n_sources
         assert np.sum(results["mpf_psf_unknown_flag"]) == 0
         assert all(np.isfinite(list(results[0].values())))
-        config_data_psf = configfitter_psfs[band]
+        config_data_psf = config_fitter_psfs[band]
         psfmodel_init = config_data_psf.config.make_psfmodel()
         psfdata = CatalogPsfFitterConfigData(config=config_data_psf.config)
         psfmodel_fit = psfdata.psfmodel
@@ -226,19 +226,21 @@ def test_fit_psf(configfitter_psfs, tables_psf_fits):
                 assert np.isclose(p_init.value, p_meas.value, atol=atol, rtol=rtol)
 
 
-def test_fit_source(configfitter_source, config_data_sources):
+def test_fit_source(config_fitter_source, config_data_sources):
     fitter = CatalogSourceFitterBootstrap()
     # We don't have or need multiband input catalog, so just pretend the first one is
     catalog_multi = next(iter(config_data_sources.values())).get_catalog()
     catexps = list(config_data_sources.values())
-    results = fitter.fit(catalog_multi=catalog_multi, catexps=catexps, config_data=configfitter_source)
+    results = fitter.fit(catalog_multi=catalog_multi, catexps=catexps, config_data=config_fitter_source)
     assert len(results) == n_sources
 
     model = fitter.get_model(
-        0, catalog_multi=catalog_multi, catexps=catexps, config_data=configfitter_source, results=results
+        0, catalog_multi=catalog_multi, catexps=catexps, config_data=config_fitter_source, results=results
     )
 
-    model_sources, priors = configfitter_source.config.make_sources(channels=list(config_data_sources.keys()))
+    model_sources, priors = config_fitter_source.config.make_sources(
+        channels=list(config_data_sources.keys())
+    )
     model_true = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model_sources)
     fitter.initialize_model(model_true, catalog_multi[0], catexps=catexps)
     params_true = tuple(param.value for param in get_params_uniq(model_true, fixed=False))
