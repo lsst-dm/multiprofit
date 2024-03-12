@@ -102,7 +102,11 @@ def modelconfig_fluxes(channels):
             rho=ParameterConfig(value_initial=rho + idx*drho),
             size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
             size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
-            sersicindex=SersicIndexParameterConfig(value_initial=sersicn + idx * dsersicn, fixed=idx == 0),
+            sersicindex=SersicIndexParameterConfig(
+                value_initial=sersicn + idx * dsersicn,
+                fixed=idx == 0,
+                prior_mean=None,
+            ),
         )
         fluxes_comp = {
             channel: flux + idx_channel*dflux*idx
