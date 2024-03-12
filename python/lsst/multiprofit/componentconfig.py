@@ -99,7 +99,7 @@ class ComponentData:
     """Dataclass for a Component config."""
 
     component: g2f.Component = pydantic.Field(title="The component instance")
-    integralmodel: g2f.IntegralModel = pydantic.Field(title="The component's integralmodel")
+    integral_model: g2f.IntegralModel = pydantic.Field(title="The component's integral_model")
     priors: list[g2f.Prior] = pydantic.Field(title="The priors associated with the component")
 
 
@@ -193,7 +193,7 @@ class EllipticalComponentConfig(ShapePriorConfig):
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
-        integralmodel: g2f.IntegralModel,
+        integral_model: g2f.IntegralModel,
     ) -> ComponentData:
         """Make a Component reflecting the current configuration.
 
@@ -201,8 +201,8 @@ class EllipticalComponentConfig(ShapePriorConfig):
         ----------
         centroid
             Centroid parameters for the component.
-        integralmodel
-            The integralmodel for this component.
+        integral_model
+            The integral_model for this component.
 
         Returns
         -------
@@ -261,13 +261,13 @@ class EllipticalComponentConfig(ShapePriorConfig):
         )
         return parameter
 
-    def make_linearintegralmodel(
+    def make_linear_integral_model(
         self,
         fluxes: Fluxes,
         label_integral: str | None = None,
         **kwargs
     ) -> g2f.IntegralModel:
-        """Make a gauss2d.fit LinearIntegralModel for this component.
+        """Make a gauss2d.fit.LinearIntegralModel for this component.
 
         Parameters
         ----------
@@ -283,12 +283,12 @@ class EllipticalComponentConfig(ShapePriorConfig):
 
         Returns
         -------
-        integralmodel
-            The requested integralmodel.
+        integral_model
+            The requested gauss2d.fit.IntegralModel.
         """
         if label_integral is None:
             label_integral = self.get_integral_label_default()
-        integralmodel = g2f.LinearIntegralModel(
+        integral_model = g2f.LinearIntegralModel(
             [
                 (
                     channel,
@@ -301,7 +301,7 @@ class EllipticalComponentConfig(ShapePriorConfig):
                 for channel, flux in fluxes.items()
             ]
         )
-        return integralmodel
+        return integral_model
 
     @staticmethod
     def set_size_x(component: g2f.EllipticalComponent, size_x: float) -> None:
@@ -334,7 +334,7 @@ class GaussianComponentConfig(EllipticalComponentConfig):
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
-        integralmodel: g2f.IntegralModel,
+        integral_model: g2f.IntegralModel,
     ) -> ComponentData:
         ellipse = self.make_gaussianparametricellipse()
         prior = self.get_shape_prior(ellipse)
@@ -342,9 +342,9 @@ class GaussianComponentConfig(EllipticalComponentConfig):
             component=g2f.GaussianComponent(
                 centroid=centroid,
                 ellipse=ellipse,
-                integral=integralmodel,
+                integral=integral_model,
             ),
-            integralmodel=integralmodel,
+            integral_model=integral_model,
             priors=[] if prior is None else [prior],
         )
         return componentdata
@@ -420,7 +420,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
     def make_component(
         self,
         centroid: g2f.CentroidParameters,
-        integralmodel: g2f.IntegralModel,
+        integral_model: g2f.IntegralModel,
     ) -> ComponentData:
         is_gaussian_fixed = self.is_gaussian_fixed()
         transform_size = self.get_transform_size()
@@ -430,7 +430,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
             component = g2f.GaussianComponent(
                 centroid=centroid,
                 ellipse=ellipse,
-                integral=integralmodel,
+                integral=integral_model,
             )
             priors = []
         else:
@@ -453,7 +453,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
             component = g2f.SersicMixComponent(
                 centroid=centroid,
                 ellipse=ellipse,
-                integral=integralmodel,
+                integral=integral_model,
                 sersicindex=sersicindex,
             )
             prior = self.sersicindex.get_prior(sersicindex) if not sersicindex.fixed else None
@@ -463,7 +463,7 @@ class SersicComponentConfig(EllipticalComponentConfig):
             priors.append(prior)
         return ComponentData(
             component=component,
-            integralmodel=integralmodel,
+            integral_model=integral_model,
             priors=priors,
         )
 

@@ -49,8 +49,8 @@ class ShapePriorConfig(pexConfig.Config):
     )
 
     def get_shape_prior(self, ellipse: g2f.ParametricEllipse) -> g2f.ShapePrior | None:
-        use_prior_axrat = self.prior_axrat_stddev > 0 and np.isfinite(self.prior_axrat_stddev)
-        use_prior_size = self.prior_size_stddev > 0 and np.isfinite(self.prior_size_stddev)
+        use_prior_axrat = (self.prior_axrat_stddev > 0) and np.isfinite(self.prior_axrat_stddev)
+        use_prior_size = (self.prior_size_stddev > 0) and np.isfinite(self.prior_size_stddev)
 
         if use_prior_axrat or use_prior_size:
             prior_size = (
@@ -70,7 +70,7 @@ class ShapePriorConfig(pexConfig.Config):
                 else None
             )
             return g2f.ShapePrior(ellipse, prior_size, prior_axrat)
-            return None
+        return None
 
 
 def get_hst_size_prior(mag_psf_i):

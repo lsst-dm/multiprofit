@@ -76,7 +76,7 @@ class ComponentGroupConfig(pexConfig.Config):
         optional=False,
         default={},
     )
-    is_fractional = pexConfig.Field[bool](doc="Whether the integralmodel is fractional", default=False)
+    is_fractional = pexConfig.Field[bool](doc="Whether the integral_model is fractional", default=False)
     transform_fluxfrac_name = pexConfig.Field[str](
         doc="The name of the reference transform for flux parameters",
         default="logit_fluxfrac",
@@ -170,7 +170,7 @@ class ComponentGroupConfig(pexConfig.Config):
 
             if self.is_fractional:
                 if idx == 0:
-                    last = config_comp.make_linearintegralmodel(
+                    last = config_comp.make_linear_integral_model(
                         fluxes=fluxes_first,
                         label_integral=label_integral_comp,
                     )
@@ -191,17 +191,17 @@ class ComponentGroupConfig(pexConfig.Config):
                         ) for channel, fluxfrac in fluxes_component.items()
                     ]
 
-                integralmodel = g2f.FractionalIntegralModel(
+                integral_model = g2f.FractionalIntegralModel(
                     params_frac,
                     model=last,
                     is_final=is_final,
                 )
                 # TODO: Omitting this crucial step should raise but doesn't
-                # There shouldn't be two integralmodels with the same last
+                # There shouldn't be two IntegralModels with the same last
                 # especially not one is_final and one not
-                last = integralmodel
+                last = integral_model
             else:
-                integralmodel = config_comp.make_linearintegralmodel(
+                integral_model = config_comp.make_linear_integral_model(
                     fluxes_component,
                     label_integral=label_integral_comp,
                 )
@@ -213,7 +213,7 @@ class ComponentGroupConfig(pexConfig.Config):
                 centroid = centroid_default
             componentdata = config_comp.make_component(
                 centroid=centroid,
-                integralmodel=integralmodel,
+                integral_model=integral_model,
             )
             components.append(componentdata.component)
             priors.extend(componentdata.priors)

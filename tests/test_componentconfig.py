@@ -68,16 +68,16 @@ def test_GaussianComponentConfig(centroid):
     channel = g2f.Channel.NONE
     componentdata1 = config.make_component(
         centroid=centroid,
-        integralmodel=g2f.FractionalIntegralModel(
+        integral_model=g2f.FractionalIntegralModel(
             [(channel, g2f.ProperFractionParameterD(0.5, fixed=False))],
-            model=config.make_linearintegralmodel({channel: 1.0}),
+            model=config.make_linear_integral_model({channel: 1.0}),
         ),
     )
     componentdata2 = config.make_component(
         centroid=centroid,
-        integralmodel=g2f.FractionalIntegralModel(
+        integral_model=g2f.FractionalIntegralModel(
             [(channel, g2f.ProperFractionParameterD(1.0, fixed=True))],
-            model=componentdata1.integralmodel,
+            model=componentdata1.integral_model,
             is_final=True,
         ),
     )
@@ -107,10 +107,10 @@ def test_SersicConfig(centroid, channels):
         channel: 1.0 + idx
         for idx, channel in enumerate(channels.values())
     }
-    integralmodel = config.make_linearintegralmodel(fluxes)
+    integral_model = config.make_linear_integral_model(fluxes)
     componentdata = config.make_component(
         centroid=centroid,
-        integralmodel=integralmodel,
+        integral_model=integral_model,
     )
     assert componentdata.component is not None
     # As long as there's a default Sersic index prior
