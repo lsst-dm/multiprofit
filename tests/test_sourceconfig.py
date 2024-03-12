@@ -66,7 +66,7 @@ def test_SourceConfig_base():
         config.validate()
 
     with pytest.raises(ValueError) as exc:
-        config = SourceConfig(componentgroups={})
+        config = SourceConfig(component_groups={})
         config.validate()
 
 
@@ -76,7 +76,7 @@ def test_SourceConfig_fractional(centroid):
 
     n_components = 2
     config = SourceConfig(
-        componentgroups={
+        component_groups={
             'src': ComponentGroupConfig(
                 components_gauss={
                     str(idx): GaussianComponentConfig(
@@ -110,7 +110,7 @@ def test_SourceConfig_linear(centroid, channels):
 
     names = ("PS", "Sersic")
     config = SourceConfig(
-        componentgroups={
+        component_groups={
             'src': ComponentGroupConfig(
                 components_sersic={
                     name: SersicComponentConfig(
@@ -133,7 +133,7 @@ def test_SourceConfig_linear(centroid, channels):
             channel: flux + idx_channel*dflux*idx_comp
             for idx_channel, channel in enumerate(channels.values())
         }
-        for idx_comp in range(len(config.componentgroups["src"].components_sersic))
+        for idx_comp in range(len(config.component_groups["src"].components_sersic))
     ]
     source, priors = config.make_source([fluxes])
     assert len(priors) == 0
@@ -145,13 +145,13 @@ def test_SourceConfig_linear(centroid, channels):
             g2f.ReffYParameterD: size_y + idx*dsize_y,
             g2f.SersicIndexParameterD: sersicn + idx*dsersicn,
         }
-        for name_group, componentgroup in config.componentgroups.items():
+        for name_group, component_group in config.component_groups.items():
             fluxes_comp = fluxes[idx]
             name_comp = names[idx]
-            config_comp = componentgroup.components_sersic[name_comp]
+            config_comp = component_group.components_sersic[name_comp]
             fluxes_label = {
                 config.format_label(
-                    componentgroup.format_label(
+                    component_group.format_label(
                         label=config_comp.format_label(label=config.get_integral_label_default(),
                                                        name_channel=channel.name),
                         name_component=name_comp,

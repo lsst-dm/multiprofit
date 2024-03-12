@@ -96,42 +96,42 @@ class ComponentGroupConfig(pexConfig.Config):
     def get_integral_label_default() -> str:
         return "comp: ${name_component} " + EllipticalComponentConfig.get_integral_label_default()
 
-    def get_componentconfigs(self) -> ComponentConfigs:
-        componentconfigs: ComponentConfigs = dict(self.components_gauss)
+    def get_component_configs(self) -> ComponentConfigs:
+        component_configs: ComponentConfigs = dict(self.components_gauss)
         for name, component in self.components_sersic.items():
-            componentconfigs[name] = component
-        return componentconfigs
+            component_configs[name] = component
+        return component_configs
 
     @staticmethod
     def get_fluxes_default(
-        channels: tuple[g2f.Channel], componentconfigs: ComponentConfigs, is_fractional: bool = False,
+        channels: tuple[g2f.Channel], component_configs: ComponentConfigs, is_fractional: bool = False,
     ) -> list[Fluxes]:
-        if len(componentconfigs) == 0:
+        if len(component_configs) == 0:
             raise ValueError("Must provide at least one ComponentConfig")
         fluxes = []
-        componentconfigs_iter = tuple(componentconfigs.values())[:len(componentconfigs) - is_fractional]
-        for idx, componentconfig in enumerate(componentconfigs_iter):
+        component_configs_iter = tuple(component_configs.values())[:len(component_configs) - is_fractional]
+        for idx, component_config in enumerate(component_configs_iter):
             if is_fractional:
                 if idx == 0:
-                    value = componentconfig.flux.value_initial
+                    value = component_config.flux.value_initial
                     fluxes.append({channel: value for channel in channels})
-                value = componentconfig.fluxfrac.value_initial
+                value = component_config.fluxfrac.value_initial
                 fluxes.append({channel: value for channel in channels})
             else:
-                value = componentconfig.flux.value_initial
+                value = component_config.flux.value_initial
                 fluxes.append({channel: value for channel in channels})
         return fluxes
 
     def make_components(
         self,
-        componentfluxes: list[Fluxes],
+        component_fluxes: list[Fluxes],
         label_integral: str | None = None,
     ) -> tuple[list[g2f.Component], list[g2f.Prior]]:
         """Make a list of gauss2d.fit.Component from this configuration.
 
         Parameters
         ----------
-        componentfluxes
+        component_fluxes
             A list of Fluxes to populate an appropriate
             `gauss2d.fit.IntegralModel` with.
             If self.is_fractional, the first item in the list must be
@@ -146,20 +146,20 @@ class ComponentGroupConfig(pexConfig.Config):
         componentdata
             An appropriate ComponentData including the initialized component.
         """
-        componentconfigs = self.get_componentconfigs()
-        fluxes_first = componentfluxes[0]
+        component_configs = self.get_component_configs()
+        fluxes_first = component_fluxes[0]
         channels = fluxes_first.keys()
-        fluxes_all = (componentfluxes[1:] + [None]) if self.is_fractional else componentfluxes
-        if len(fluxes_all) != len(componentconfigs):
-            raise ValueError(f"{len(fluxes_all)=} != {len(componentconfigs)=}")
+        fluxes_all = (component_fluxes[1:] + [None]) if self.is_fractional else component_fluxes
+        if len(fluxes_all) != len(component_configs):
+            raise ValueError(f"{len(fluxes_all)=} != {len(component_configs)=}")
         priors = []
-        idx_final = len(componentconfigs) - 1
+        idx_final = len(component_configs) - 1
         components = []
         last = None
 
         centroid_default = None
         for idx, (fluxes_component, (name_component, config_comp)) in enumerate(
-            zip(fluxes_all, componentconfigs.items())
+            zip(fluxes_all, component_configs.items())
         ):
             label_integral_comp = self.format_label(
                 label_integral if label_integral is not None else (
@@ -251,36 +251,36 @@ class SourceConfig(pexConfig.Config):
     although such priors are not yet implemented.
     """
 
-    componentgroups = pexConfig.ConfigDictField[str, ComponentGroupConfig](
+    component_groups = pexConfig.ConfigDictField[str, ComponentGroupConfig](
         doc="Components in the source",
         optional=False,
     )
 
     def _make_components_priors(
         self,
-        componentgroup_fluxes: list[list[Fluxes]],
+        component_group_fluxes: list[list[Fluxes]],
         label_integral: str,
         validate_psf: bool = False,
     ) -> [list[g2f.Component], list[g2f.Prior]]:
-        if len(componentgroup_fluxes) != len(self.componentgroups):
-            raise ValueError(f"{len(componentgroup_fluxes)=} != {len(self.componentgroups)=}")
+        if len(component_group_fluxes) != len(self.component_groups):
+            raise ValueError(f"{len(component_group_fluxes)=} != {len(self.component_groups)=}")
         components = []
         priors = []
         if validate_psf:
             keys_expected = tuple((g2f.Channel.NONE,))
-        for componentfluxes, (name_group, componentgroup) in zip(
-            componentgroup_fluxes, self.componentgroups.items()
+        for component_fluxes, (name_group, component_group) in zip(
+            component_group_fluxes, self.component_groups.items()
         ):
             if validate_psf:
-                for idx, fluxes_comp in enumerate(componentfluxes):
+                for idx, fluxes_comp in enumerate(component_fluxes):
                     keys = tuple(fluxes_comp.keys())
                     if keys != keys_expected:
                         raise ValueError(
                             f"{name_group=} comp[{idx}] {keys=} != {keys_expected=} with {validate_psf=}"
                         )
 
-            components_i, priors_i = componentgroup.make_components(
-                componentfluxes=componentfluxes,
+            components_i, priors_i = component_group.make_components(
+                component_fluxes=component_fluxes,
                 label_integral=self.format_label(label=label_integral, name_group=name_group),
             )
             components.extend(components_i)
@@ -292,33 +292,33 @@ class SourceConfig(pexConfig.Config):
     def format_label(label: str, name_group: str) -> str:
         return string.Template(label).safe_substitute(name_group=name_group)
 
-    def get_componentconfigs(self) -> ComponentConfigs:
+    def get_component_configs(self) -> ComponentConfigs:
         has_prefix_group = self.has_prefix_group()
-        componentconfigs = {}
-        for name_group, config_group in self.componentgroups.items():
+        component_configs = {}
+        for name_group, config_group in self.component_groups.items():
             prefix_group = f"{name_group}_" if has_prefix_group else ""
-            for name_comp, componentconfig in config_group.get_componentconfigs().items():
-                componentconfigs[f"{prefix_group}{name_comp}"] = componentconfig
-        return componentconfigs
+            for name_comp, component_config in config_group.get_component_configs().items():
+                component_configs[f"{prefix_group}{name_comp}"] = component_config
+        return component_configs
 
     def get_integral_label_default(self) -> str:
         prefix = "mix: ${name_group} " if self.has_prefix_group() else ""
         return f"{prefix}{ComponentGroupConfig.get_integral_label_default()}"
 
     def has_prefix_group(self) -> bool:
-        return (len(self.componentgroups) > 1) or next(iter(self.componentgroups.keys()))
+        return (len(self.component_groups) > 1) or next(iter(self.component_groups.keys()))
 
     def make_source(
         self,
-        componentgroup_fluxes: list[list[Fluxes]],
+        component_group_fluxes: list[list[Fluxes]],
         label_integral: str | None = None,
     ) -> [g2f.Source, list[g2f.Prior]]:
         """Make a gauss2d.fit.Source from this configuration.
 
         Parameters
         ----------
-        componentgroup_fluxes
-            A list of Fluxes for each of the self.componentgroups to use
+        component_group_fluxes
+            A list of Fluxes for each of the self.component_groups to use
             when calling make_components.
         label_integral
             A label to apply to integral parameters. Can reference the
@@ -334,7 +334,7 @@ class SourceConfig(pexConfig.Config):
         if label_integral is None:
             label_integral = self.get_integral_label_default()
         components, priors = self._make_components_priors(
-            componentgroup_fluxes=componentgroup_fluxes,
+            component_group_fluxes=component_group_fluxes,
             label_integral=label_integral,
         )
         source = g2f.Source(components)
@@ -342,7 +342,7 @@ class SourceConfig(pexConfig.Config):
 
     def make_psfmodel(
         self,
-        componentgroup_fluxes: list[list[Fluxes]],
+        component_group_fluxes: list[list[Fluxes]],
         label_integral: str | None = None,
     ) -> [g2f.PsfModel, list[g2f.Prior]]:
         """Make a gauss2d.fit.PsfModel from this configuration.
@@ -352,8 +352,8 @@ class SourceConfig(pexConfig.Config):
 
         Parameters
         ----------
-        componentgroup_fluxes
-            A list of CentroidFluxes for each of the self.componentgroups
+        component_group_fluxes
+            A list of CentroidFluxes for each of the self.component_groups
             when calling make_components.
         label_integral
             A label to apply to integral parameters. Can reference the
@@ -369,7 +369,7 @@ class SourceConfig(pexConfig.Config):
         if label_integral is None:
             label_integral = f"PSF {self.get_integral_label_default()}"
         components, priors = self._make_components_priors(
-            componentgroup_fluxes=componentgroup_fluxes,
+            component_group_fluxes=component_group_fluxes,
             label_integral=label_integral,
             validate_psf=True,
         )
@@ -379,5 +379,5 @@ class SourceConfig(pexConfig.Config):
 
     def validate(self):
         super().validate()
-        if not self.componentgroups:
+        if not self.component_groups:
             raise ValueError("Must have at least one componentgroup")

@@ -60,7 +60,7 @@ def psfmodel():
     fluxes = [x/flux_total for x in range(1, 1 + n_components)]
 
     config = SourceConfig(
-        componentgroups={
+        component_groups={
             'src': ComponentGroupConfig(
                 components_gauss={
                     str(idx): GaussianComponentConfig(
@@ -117,7 +117,7 @@ def modelconfig_fluxes(channels):
     modelconfig = ModelConfig(
         sources={
             'src': SourceConfig(
-                componentgroups={
+                component_groups={
                     'mix': ComponentGroupConfig(
                         centroids={
                             "default": CentroidConfig(

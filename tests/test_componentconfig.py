@@ -66,27 +66,27 @@ def test_GaussianComponentConfig(centroid):
         size_y=ParameterConfig(value_initial=1.6),
     )
     channel = g2f.Channel.NONE
-    componentdata1 = config.make_component(
+    component_data1 = config.make_component(
         centroid=centroid,
         integral_model=g2f.FractionalIntegralModel(
             [(channel, g2f.ProperFractionParameterD(0.5, fixed=False))],
             model=config.make_linear_integral_model({channel: 1.0}),
         ),
     )
-    componentdata2 = config.make_component(
+    component_data2 = config.make_component(
         centroid=centroid,
         integral_model=g2f.FractionalIntegralModel(
             [(channel, g2f.ProperFractionParameterD(1.0, fixed=True))],
-            model=componentdata1.integral_model,
+            model=component_data1.integral_model,
             is_final=True,
         ),
     )
-    components = (componentdata1, componentdata2)
+    components = (component_data1, component_data2)
     n_components = len(components)
-    for idx, componentdata in enumerate(components):
-        component = componentdata.component
+    for idx, component_data in enumerate(components):
+        component = component_data.component
         assert component.centroid is centroid
-        assert len(componentdata.priors) == 0
+        assert len(component_data.priors) == 0
         fluxes = list(get_params_uniq(component, nonlinear=False))
         assert len(fluxes) == 1
         assert isinstance(fluxes[0], g2f.IntegralParameterD)
@@ -108,14 +108,14 @@ def test_SersicConfig(centroid, channels):
         for idx, channel in enumerate(channels.values())
     }
     integral_model = config.make_linear_integral_model(fluxes)
-    componentdata = config.make_component(
+    component_data = config.make_component(
         centroid=centroid,
         integral_model=integral_model,
     )
-    assert componentdata.component is not None
+    assert component_data.component is not None
     # As long as there's a default Sersic index prior
-    assert len(componentdata.priors) == 1
-    params = get_params_uniq(componentdata.component)
+    assert len(component_data.priors) == 1
+    params = get_params_uniq(component_data.component)
     values_init = {
         g2f.RhoParameterD: rho,
         g2f.ReffXParameterD: size_x,

@@ -57,7 +57,7 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
 
     model = pexConfig.ConfigField[SourceConfig](
         default=SourceConfig(
-            componentgroups={"": ComponentGroupConfig(
+            component_groups={"": ComponentGroupConfig(
                 components_gauss={
                     "comp1": GaussianComponentConfig(
                         size_x=ParameterConfig(value_initial=1.5),
@@ -79,13 +79,13 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
     prior_axrat_mean = pexConfig.Field[float](default=0.95, doc="Mean for axis ratio prior")
 
     def make_psfmodel(
-        self, componentgroup_fluxes: list[list[Fluxes]] = None,
+        self, component_group_fluxes: list[list[Fluxes]] = None,
     ) -> [g2f.PsfModel, list[g2f.Prior]]:
         """Make a PsfModel object for a given source.
 
         Parameters
         ----------
-        componentgroup_fluxes
+        component_group_fluxes
             Initial fluxes for each constituent ComponentGroup.
 
         Returns
@@ -97,18 +97,18 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
         -----
         This function does not initialize the PSF model.
         """
-        if componentgroup_fluxes is None:
+        if component_group_fluxes is None:
             channels = (g2f.Channel.NONE,)
-            componentgroup_fluxes = [
-                componentgroup.get_fluxes_default(
+            component_group_fluxes = [
+                component_group.get_fluxes_default(
                     channels=channels,
-                    componentconfigs=componentgroup.get_componentconfigs(),
-                    is_fractional=componentgroup.is_fractional,
+                    component_configs=component_group.get_component_configs(),
+                    is_fractional=component_group.is_fractional,
                 )
-                for componentgroup in self.model.componentgroups.values()
+                for component_group in self.model.component_groups.values()
             ]
 
-        psfmodel, priors = self.model.make_psfmodel(componentgroup_fluxes=componentgroup_fluxes)
+        psfmodel, priors = self.model.make_psfmodel(component_group_fluxes=component_group_fluxes)
         return psfmodel
 
     def schema_configurable(self) -> list[ColumnInfo]:
@@ -173,19 +173,19 @@ class CatalogPsfFitterConfigData:
     @cached_property
     def components(self) -> dict[str, ComponentGroupConfig]:
         components = self.psfmodel.components
-        names = self.componentconfigs.keys()
+        names = self.component_configs.keys()
         if len(components) != len(names):
             raise RuntimeError(f"{len(components)=} != {len(names)=}")
         components_names = {name: component for name, component in zip(names, components)}
         return components_names
 
     @cached_property
-    def componentconfigs(self) -> ComponentConfigs:
-        return self.config.model.get_componentconfigs()
+    def component_configs(self) -> ComponentConfigs:
+        return self.config.model.get_component_configs()
 
     @cached_property
     def componentgroupconfigs(self) -> dict[str, ComponentGroupConfig]:
-        return {k: v for k, v in self.config.model.componentgroups.items()}
+        return {k: v for k, v in self.config.model.component_groups.items()}
 
     def init_psfmodel(
         self,
@@ -217,7 +217,7 @@ class CatalogPsfFitterConfigData:
             prefix_group = f"{name_group}_" if has_prefix_group else ""
             is_fractional = config_group.is_fractional
             multicen = len(config_group.centroids) > 1
-            configs_comp = config_group.get_componentconfigs()
+            configs_comp = config_group.get_component_configs()
             idx_last = len(configs_comp) - 1
             n_params_flux_frac = 0
 
@@ -289,10 +289,10 @@ class CatalogPsfFitterConfigData:
 
     def __post_init__(self):
         self.config.freeze()
-        n_componentconfigs = len(self.componentconfigs)
+        n_component_configs = len(self.component_configs)
         n_components = len(self.psfmodel.components)
-        if n_components != n_componentconfigs:
-            raise AssertionError(f"{n_components=} != {n_componentconfigs=}")
+        if n_components != n_component_configs:
+            raise AssertionError(f"{n_components=} != {n_component_configs=}")
 
 
 class CatalogExposurePsfABC(CatalogExposureABC):
@@ -451,14 +451,14 @@ class CatalogPsfFitter:
         priors = []
         sigmas = [
             np.linalg.norm((comp.size_x.value_initial, comp.size_y.value_initial))
-            for comp in config_data.componentconfigs.values()
+            for comp in config_data.component_configs.values()
         ]
 
         psfmodel = config_data.psfmodel
         model_source = g2f.Source(psfmodel.components)
 
         for idx, (comp, config_comp) in enumerate(
-            zip(psfmodel.components, config_data.componentconfigs.values())
+            zip(psfmodel.components, config_data.component_configs.values())
         ):
             prior = config_comp.get_shape_prior(comp.ellipse)
             if prior:
@@ -603,7 +603,7 @@ class CatalogPsfFitter:
             limits_y = g2f.LimitsD(0, n_rows)
 
         for component, config_comp in zip(
-            config_data.components.values(), config_data.componentconfigs.values()
+            config_data.components.values(), config_data.component_configs.values()
         ):
             centroid = component.centroid
             if centroid not in centroids:

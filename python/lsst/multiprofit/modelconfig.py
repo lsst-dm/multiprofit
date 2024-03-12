@@ -47,23 +47,23 @@ class ModelConfig(pexConfig.Config):
 
     def make_sources(
         self,
-        componentgroup_fluxes_srcs: Iterable[list[list[Fluxes]]],
+        component_group_fluxes_srcs: Iterable[list[list[Fluxes]]],
         label_integral: str | None = None,
     ) -> tuple[list[g2f.Source], list[g2f.Prior]]:
         n_src = len(self.sources)
-        if componentgroup_fluxes_srcs is None or len(componentgroup_fluxes_srcs) != n_src:
-            raise ValueError(f"{len(componentgroup_fluxes_srcs)=} != {n_src=}")
+        if component_group_fluxes_srcs is None or len(component_group_fluxes_srcs) != n_src:
+            raise ValueError(f"{len(component_group_fluxes_srcs)=} != {n_src=}")
 
         sources = []
         priors = []
-        for componentgroup_fluxes, (name_src, config_src) in zip(
-                componentgroup_fluxes_srcs, self.sources.items()
+        for component_group_fluxes, (name_src, config_src) in zip(
+                component_group_fluxes_srcs, self.sources.items()
         ):
             label_integral_src = label_integral if label_integral is not None else (
                 self.get_integral_label_default(config_src))
 
             source, priors_src = config_src.make_source(
-                componentgroup_fluxes=componentgroup_fluxes,
+                component_group_fluxes=component_group_fluxes,
                 label_integral=self.format_label(label=label_integral_src, name_source=name_src)
             )
             sources.append(source)
@@ -73,13 +73,13 @@ class ModelConfig(pexConfig.Config):
 
     def make_model(
         self,
-        componentgroup_fluxes_srcs: Iterable[list[list[Fluxes]]],
+        component_group_fluxes_srcs: Iterable[list[list[Fluxes]]],
         data: g2f.Data,
         psfmodels: list[g2f.PsfModel],
         label_integral: str | None = None,
     ) -> g2f.Model:
         sources, priors = self.make_sources(
-            componentgroup_fluxes_srcs=componentgroup_fluxes_srcs,
+            component_group_fluxes_srcs=component_group_fluxes_srcs,
             label_integral=label_integral,
         )
 

@@ -80,7 +80,7 @@ def model(channels, data, psfmodels):
     modelconfig = ModelConfig(
         sources={
             'src': SourceConfig(
-                componentgroups={
+                component_groups={
                     '': ComponentGroupConfig(
                         centroids={"default": CentroidConfig(
                             x=ParameterConfig(value_initial=6., fixed=True),

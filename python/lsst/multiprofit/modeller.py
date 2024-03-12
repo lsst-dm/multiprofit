@@ -82,7 +82,7 @@ class LinearGaussians:
 
     @staticmethod
     def make(
-        componentmixture: g2f.ComponentMixture,
+        component_mixture: g2f.ComponentMixture,
         channel: g2f.Channel = None,
         is_psf: bool = False,
     ):
@@ -90,7 +90,7 @@ class LinearGaussians:
 
         Parameters
         ----------
-        componentmixture
+        component_mixture
             A component mixture to initialize Gaussians from.
         channel
             The channel all Gaussians are applicable for.
@@ -105,9 +105,9 @@ class LinearGaussians:
         """
         if channel is None:
             channel = g2f.Channel.NONE
-        components = componentmixture.components
+        components = component_mixture.components
         if len(components) == 0:
-            raise ValueError(f"Can't get linear Source from {componentmixture=} with no components")
+            raise ValueError(f"Can't get linear Source from {component_mixture=} with no components")
 
         gaussians_free = []
         gaussians_fixed = []
@@ -780,13 +780,13 @@ class Modeller:
 
     @staticmethod
     def make_components_linear(
-        componentmixture: g2f.ComponentMixture,
+        component_mixture: g2f.ComponentMixture,
     ) -> list[g2f.GaussianComponent]:
         """Make a list of fixed Gaussian components from a ComponentMixture.
 
         Parameters
         ----------
-        componentmixture : `gauss2d.fit.ComponentMixture`
+        component_mixture : `gauss2d.fit.ComponentMixture`
             A component mixture to create a component list for.
 
         Returns
@@ -795,9 +795,9 @@ class Modeller:
             A list of Gaussians components with fixed parameters and values
             matching those in the original component mixture.
         """
-        components = componentmixture.components
+        components = component_mixture.components
         if len(components) == 0:
-            raise ValueError(f"Can't get linear Source from {componentmixture=} with no components")
+            raise ValueError(f"Can't get linear Source from {component_mixture=} with no components")
         components_new = [None] * len(components)
         for idx, component in enumerate(components):
             gaussians = component.gaussians(g2f.Channel.NONE)

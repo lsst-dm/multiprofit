@@ -90,7 +90,7 @@ def psfmodels(channels) -> list[g2f.PsfModel]:
     for idx_chan, channel in enumerate(channels.values()):
         frac_chan = frac + idx_chan*dfrac
         config = SourceConfig(
-            componentgroups={
+            component_groups={
                 'psf': ComponentGroupConfig(
                     components_gauss={
                         str(idx): GaussianComponentConfig(
@@ -112,12 +112,12 @@ def psfmodels(channels) -> list[g2f.PsfModel]:
         )
         config.validate()
         psfmodel, priors = config.make_psfmodel([
-            componentgroup.get_fluxes_default(
+            component_group.get_fluxes_default(
                 channels=(g2f.Channel.NONE,),
-                componentconfigs=componentgroup.get_componentconfigs(),
-                is_fractional=componentgroup.is_fractional,
+                component_configs=component_group.get_component_configs(),
+                is_fractional=component_group.is_fractional,
             )
-            for componentgroup in config.componentgroups.values()
+            for component_group in config.component_groups.values()
         ])
         psfmodels.append(psfmodel)
     return psfmodels
@@ -150,7 +150,7 @@ def model(channels, data, psfmodels) -> g2f.Model:
     modelconfig = ModelConfig(
         sources={
             "src": SourceConfig(
-                componentgroups={
+                component_groups={
                     "": ComponentGroupConfig(
                         components_sersic=components_sersic,
                         centroids={"default": CentroidConfig(

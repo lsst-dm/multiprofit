@@ -206,7 +206,7 @@ class EllipticalComponentConfig(ShapePriorConfig):
 
         Returns
         -------
-        componentdata
+        component_data
             An appropriate ComponentData including the initialized component.
 
         Notes
@@ -338,7 +338,7 @@ class GaussianComponentConfig(EllipticalComponentConfig):
     ) -> ComponentData:
         ellipse = self.make_gaussianparametricellipse()
         prior = self.get_shape_prior(ellipse)
-        componentdata = ComponentData(
+        component_data = ComponentData(
             component=g2f.GaussianComponent(
                 centroid=centroid,
                 ellipse=ellipse,
@@ -347,7 +347,7 @@ class GaussianComponentConfig(EllipticalComponentConfig):
             integral_model=integral_model,
             priors=[] if prior is None else [prior],
         )
-        return componentdata
+        return component_data
 
 
 class SersicIndexParameterConfig(ParameterConfig):

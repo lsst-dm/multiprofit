@@ -164,24 +164,24 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         n_sources = len(self.config_model.sources)
         if source_fluxes is None:
             source_fluxes = [None]*n_sources
-            for idx, (config_source, componentgroup_fluxes) in enumerate(zip(
+            for idx, (config_source, component_group_fluxes) in enumerate(zip(
                     self.config_model.sources.values(), source_fluxes,
             )):
-                componentgroup_fluxes = [
-                    componentgroup.get_fluxes_default(
+                component_group_fluxes = [
+                    component_group.get_fluxes_default(
                         channels=channels,
-                        componentconfigs=componentgroup.get_componentconfigs(),
-                        is_fractional=componentgroup.is_fractional,
+                        component_configs=component_group.get_component_configs(),
+                        is_fractional=component_group.is_fractional,
                     )
-                    for componentgroup in config_source.componentgroups.values()
+                    for component_group in config_source.component_groups.values()
                 ]
-                source_fluxes[idx] = componentgroup_fluxes
+                source_fluxes[idx] = component_group_fluxes
         else:
             if len(source_fluxes) != n_sources:
                 raise ValueError(f"{len(source_fluxes)=} != {len(self.config_model.sources)=}")
 
         sources, priors = self.config_model.make_sources(
-            componentgroup_fluxes_srcs=source_fluxes,
+            component_group_fluxes_srcs=source_fluxes,
         )
 
         has_prior_x = self.prior_cen_x_stddev > 0 and np.isfinite(self.prior_cen_x_stddev)
@@ -282,10 +282,10 @@ class CatalogSourceFitterConfigData:
             prefix_source = f"{name_source}_" if has_prefix_source else ""
             has_prefix_group = config_source.has_prefix_group()
 
-            for name_group, config_group in config_source.componentgroups.items():
+            for name_group, config_group in config_source.component_groups.items():
                 prefix_group = f"{prefix_source}{name_group}_" if has_prefix_group else prefix_source
                 multicen = len(config_group.centroids) > 1
-                configs_comp = config_group.get_componentconfigs().items()
+                configs_comp = config_group.get_component_configs().items()
 
                 for idx_comp_group, (name_comp, config_comp) in enumerate(configs_comp):
                     component = self.components[idx_comp_first + idx_comp_group]

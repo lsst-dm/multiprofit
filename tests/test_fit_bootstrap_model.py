@@ -75,7 +75,7 @@ def configfitter_psfs(channels) -> dict[g2f.Channel, CatalogExposurePsfBootstrap
         n_cols = 15 + idx*2
         config = CatalogPsfFitterConfig(
             model=SourceConfig(
-                componentgroups={"": ComponentGroupConfig(
+                component_groups={"": ComponentGroupConfig(
                     centroids={
                         "default": CentroidConfig(
                             x=ParameterConfig(value_initial=n_cols/2.),
@@ -118,7 +118,7 @@ def configfitter_source(channels) -> CatalogSourceFitterConfigData:
         config_model=ModelConfig(
             sources={
                 "": SourceConfig(
-                    componentgroups={
+                    component_groups={
                         "": ComponentGroupConfig(
                             components_gauss={
                                 "ps": GaussianComponentConfig(
