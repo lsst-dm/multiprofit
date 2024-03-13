@@ -92,7 +92,7 @@ def test_SourceConfig_fractional(centroid):
     )
     config.validate()
     channel = g2f.Channel.NONE
-    psfmodel, priors = config.make_psfmodel(
+    psf_model, priors = config.make_psf_model(
         [
             [
                 {channel: 1.0},
@@ -101,7 +101,7 @@ def test_SourceConfig_fractional(centroid):
         ],
     )
     assert len(priors) == 0
-    assert len(psfmodel.components) == n_components
+    assert len(psf_model.components) == n_components
 
 
 def test_SourceConfig_linear(centroid, channels):

@@ -51,7 +51,7 @@ def data(channels) -> g2f.Data:
 
 
 @pytest.fixture(scope="module")
-def psfmodel():
+def psf_model():
     rho, size_x, size_y = 0.25, 1.6, 1.2
     drho, dsize_x, dsize_y = -0.4, 1.1, 1.9
 
@@ -75,19 +75,19 @@ def psfmodel():
     )
     config.validate()
     channel = g2f.Channel.NONE
-    psfmodel, priors = config.make_psfmodel(
+    psf_model, priors = config.make_psf_model(
         [
             [
                 {channel: flux} for flux in fluxes
             ],
         ],
     )
-    return psfmodel
+    return psf_model
 
 
 @pytest.fixture(scope="module")
-def psfmodels(psfmodel, channels) -> list[g2f.PsfModel]:
-    return [psfmodel]*len(channels)
+def psf_models(psf_model, channels) -> list[g2f.PsfModel]:
+    return [psf_model]*len(channels)
 
 
 @pytest.fixture(scope="module")
@@ -134,9 +134,9 @@ def modelconfig_fluxes(channels):
     return modelconfig, fluxes_mix
 
 
-def test_ModelConfig(modelconfig_fluxes, data, psfmodels):
+def test_ModelConfig(modelconfig_fluxes, data, psf_models):
     modelconfig, fluxes = modelconfig_fluxes
-    model = modelconfig.make_model([[fluxes]], data=data, psfmodels=psfmodels)
+    model = modelconfig.make_model([[fluxes]], data=data, psf_models=psf_models)
     assert model is not None
     assert model.data is data
     for observation in model.data:

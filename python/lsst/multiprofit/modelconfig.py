@@ -75,7 +75,7 @@ class ModelConfig(pexConfig.Config):
         self,
         component_group_fluxes_srcs: Iterable[list[list[Fluxes]]],
         data: g2f.Data,
-        psfmodels: list[g2f.PsfModel],
+        psf_models: list[g2f.PsfModel],
         label_integral: str | None = None,
     ) -> g2f.Model:
         sources, priors = self.make_sources(
@@ -83,6 +83,6 @@ class ModelConfig(pexConfig.Config):
             label_integral=label_integral,
         )
 
-        model = g2f.Model(data=data, psfmodels=psfmodels, sources=sources, priors=priors)
+        model = g2f.Model(data=data, psfmodels=psf_models, sources=sources, priors=priors)
 
         return model

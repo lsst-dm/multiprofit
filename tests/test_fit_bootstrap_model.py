@@ -201,13 +201,13 @@ def test_fit_psf(config_fitter_psfs, tables_psf_fits):
         assert np.sum(results["mpf_psf_unknown_flag"]) == 0
         assert all(np.isfinite(list(results[0].values())))
         config_data_psf = config_fitter_psfs[band]
-        psfmodel_init = config_data_psf.config.make_psfmodel()
+        psf_model_init = config_data_psf.config.make_psf_model()
         psfdata = CatalogPsfFitterConfigData(config=config_data_psf.config)
-        psfmodel_fit = psfdata.psfmodel
-        psfdata.init_psfmodel(results[0])
-        assert len(psfmodel_init.components) == len(psfmodel_fit.components)
-        params_init = psfmodel_init.parameters()
-        params_fit = psfmodel_fit.parameters()
+        psf_model_fit = psfdata.psf_model
+        psfdata.init_psf_model(results[0])
+        assert len(psf_model_init.components) == len(psf_model_fit.components)
+        params_init = psf_model_init.parameters()
+        params_fit = psf_model_fit.parameters()
         assert len(params_init) == len(params_fit)
         for p_init, p_meas in zip(params_init, params_fit):
             assert p_meas.fixed == p_init.fixed

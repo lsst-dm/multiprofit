@@ -21,7 +21,7 @@
 
 import gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import CentroidConfig, GaussianComponentConfig, ParameterConfig
-from lsst.multiprofit.model_utils import make_psfmodel_null
+from lsst.multiprofit.model_utils import make_psf_model_null
 from lsst.multiprofit.modelconfig import ModelConfig
 from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
 from lsst.multiprofit.plots import abs_mag_sol_lsst, bands_weights_lsst, plot_model_rgb
@@ -64,17 +64,17 @@ def data(channels) -> g2f.Data:
 
 
 @pytest.fixture(scope="module")
-def psfmodel():
-    return make_psfmodel_null()
+def psf_model():
+    return make_psf_model_null()
 
 
 @pytest.fixture(scope="module")
-def psfmodels(psfmodel, channels) -> list[g2f.PsfModel]:
-    return [psfmodel]*len(channels)
+def psf_models(psf_model, channels) -> list[g2f.PsfModel]:
+    return [psf_model]*len(channels)
 
 
 @pytest.fixture(scope="module")
-def model(channels, data, psfmodels):
+def model(channels, data, psf_models):
     fluxes_group = [{channels[band]: 10**(-0.4*(mag - 8.9)) for band, mag in abs_mag_sol_lsst.items()}]
 
     modelconfig = ModelConfig(
@@ -98,7 +98,7 @@ def model(channels, data, psfmodels):
             ),
         },
     )
-    model = modelconfig.make_model([[fluxes_group]], data=data, psfmodels=psfmodels)
+    model = modelconfig.make_model([[fluxes_group]], data=data, psf_models=psf_models)
     model.setup_evaluators(model.EvaluatorMode.image)
     model.evaluate()
     rng = np.random.default_rng(1)
@@ -109,7 +109,9 @@ def model(channels, data, psfmodels):
 
 
 def test_plot_model_rgb(model):
-    fig, ax, fig_gs, ax_gs, *_ = plot_model_rgb(model, minimum=0, stretch=0.15, Q=4, weights=bands_weights_lsst)
+    fig, ax, fig_gs, ax_gs, *_ = plot_model_rgb(
+        model, minimum=0, stretch=0.15, Q=4, weights=bands_weights_lsst,
+    )
     assert fig is not None
     assert ax is not None
     assert fig_gs is not None

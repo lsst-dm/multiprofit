@@ -61,7 +61,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         """Return the exposure's associated channel object."""
 
     @abstractmethod
-    def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
+    def get_psf_model(self, params: Mapping[str, Any]) -> g2f.PsfModel:
         """Get the PSF model for a given source row.
 
         Parameters
@@ -72,7 +72,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
 
         Returns
         -------
-        psfmodel : `gauss2d.fit.PsfModel`
+        psf_model : `gauss2d.fit.PsfModel`
             A PsfModel object initialized with the best-fit parameters.
         """
 
@@ -119,7 +119,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         idx_row,
         catexps: list[CatalogExposureSourcesABC],
     ) -> tuple[g2f.Data, list[g2f.PsfModel]]:
-        """Make data and psfmodels for a catalog row.
+        """Make data and psf_models for a catalog row.
 
         Parameters
         ----------
@@ -132,24 +132,24 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         -------
         data
             The resulting data object.
-        psfmodels
-            A list of psfmodels, one per catexp.
+        psf_models
+            A list of psf_models, one per catexp.
         """
         observations = []
-        psfmodels = []
+        psf_models = []
 
         for catexp in catexps:
             source = catexp.get_catalog()[idx_row]
             observation = catexp.get_source_observation(source)
             if observation is not None:
                 observations.append(observation)
-                psfmodel = catexp.get_psfmodel(source)
-                for param in get_params_uniq(psfmodel):
+                psf_model = catexp.get_psf_model(source)
+                for param in get_params_uniq(psf_model):
                     param.fixed = True
-                psfmodels.append(psfmodel)
+                psf_models.append(psf_model)
 
         data = g2f.Data(observations)
-        return data, psfmodels
+        return data, psf_models
 
     def make_sources(
         self,
@@ -537,9 +537,9 @@ class CatalogSourceFitterABC(ABC):
         range_idx = range(n_rows)
 
         # TODO: Do this check with dummy data
-        # data, psfmodels = config.make_model_data(
+        # data, psf_models = config.make_model_data(
         #     idx_row=range_idx[0], catexps=catexps)
-        # model = g2f.Model(data=data, psfmodels=psfmodels,
+        # model = g2f.Model(data=data, psfmodels=psf_models,
         #     sources=model_sources, priors=priors)
         # Remember to filter out fixed centroids from params
         # assert list(params.values()) == get_params_uniq(model, fixed=False)
@@ -552,8 +552,8 @@ class CatalogSourceFitterABC(ABC):
             row[config.column_id] = id_source
 
             try:
-                data, psfmodels = config.make_model_data(idx_row=idx, catexps=catexps)
-                model = g2f.Model(data=data, psfmodels=psfmodels, sources=model_sources, priors=priors)
+                data, psf_models = config.make_model_data(idx_row=idx, catexps=catexps)
+                model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
                 self.initialize_model(
                     model, source_multi, catexps, values_init,
                     centroid_pixel_offset=config_data.config.centroid_pixel_offset,
@@ -794,11 +794,11 @@ class CatalogSourceFitterABC(ABC):
         model_sources, priors = config_data.sources_priors
         source_multi = catalog_multi[idx_row]
 
-        data, psfmodels = config.make_model_data(
+        data, psf_models = config.make_model_data(
             idx_row=idx_row,
             catexps=catexps,
         )
-        model = g2f.Model(data=data, psfmodels=psfmodels, sources=model_sources, priors=priors)
+        model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
         self.initialize_model(model, source_multi, catexps, **kwargs)
 
         if results is not None:

@@ -24,7 +24,7 @@ from typing import Any
 import gauss2d as g2
 import gauss2d.fit as g2f
 
-__all__ = ["make_image_gaussians", "make_psfmodel_null"]
+__all__ = ["make_image_gaussians", "make_psf_model_null"]
 
 
 def make_image_gaussians(
@@ -63,7 +63,7 @@ def make_image_gaussians(
     return g2.make_gaussians_pixel_D(gaussians=gaussians, **kwargs)
 
 
-def make_psfmodel_null() -> g2f.PsfModel:
+def make_psf_model_null() -> g2f.PsfModel:
     """Make a default (null) PSF model.
 
     Returns

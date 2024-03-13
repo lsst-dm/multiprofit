@@ -43,7 +43,7 @@ from .componentconfig import (
 )
 from .errors import PsfRebuildFitFlagError
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
-from .modeller import FitInputsDummy, LinearGaussians, Modeller, make_psfmodel_null
+from .modeller import FitInputsDummy, LinearGaussians, Modeller, make_psf_model_null
 from .sourceconfig import ComponentConfigs, ComponentGroupConfig, SourceConfig
 from .utils import FrozenArbitraryAllowedConfig, get_params_uniq
 
@@ -78,7 +78,7 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
     )
     prior_axrat_mean = pexConfig.Field[float](default=0.95, doc="Mean for axis ratio prior")
 
-    def make_psfmodel(
+    def make_psf_model(
         self, component_group_fluxes: list[list[Fluxes]] = None,
     ) -> [g2f.PsfModel, list[g2f.Prior]]:
         """Make a PsfModel object for a given source.
@@ -90,7 +90,7 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
 
         Returns
         -------
-        psfmodel
+        psf_model
             The rebuilt PSF model.
 
         Notes
@@ -108,8 +108,8 @@ class CatalogPsfFitterConfig(CatalogFitterConfig):
                 for component_group in self.model.component_groups.values()
             ]
 
-        psfmodel, priors = self.model.make_psfmodel(component_group_fluxes=component_group_fluxes)
-        return psfmodel
+        psf_model, priors = self.model.make_psf_model(component_group_fluxes=component_group_fluxes)
+        return psf_model
 
     def schema_configurable(self) -> list[ColumnInfo]:
         columns = []
@@ -172,7 +172,7 @@ class CatalogPsfFitterConfigData:
 
     @cached_property
     def components(self) -> dict[str, ComponentGroupConfig]:
-        components = self.psfmodel.components
+        components = self.psf_model.components
         names = self.component_configs.keys()
         if len(components) != len(names):
             raise RuntimeError(f"{len(components)=} != {len(names)=}")
@@ -187,7 +187,7 @@ class CatalogPsfFitterConfigData:
     def componentgroupconfigs(self) -> dict[str, ComponentGroupConfig]:
         return {k: v for k, v in self.config.model.component_groups.items()}
 
-    def init_psfmodel(
+    def init_psf_model(
         self,
         params: astropy.table.Row | Mapping[str, Any],
     ) -> None:
@@ -211,7 +211,7 @@ class CatalogPsfFitterConfigData:
     def parameters(self) -> dict[str, g2f.ParameterD]:
         parameters = {}
         has_prefix_group = self.config.model.has_prefix_group()
-        components = self.psfmodel.components
+        components = self.psf_model.components
         idx_comp_first = 0
         for name_group, config_group in self.componentgroupconfigs.items():
             prefix_group = f"{name_group}_" if has_prefix_group else ""
@@ -278,19 +278,19 @@ class CatalogPsfFitterConfigData:
         return parameters
 
     @cached_property
-    def psfmodel(self) -> g2f.PsfModel:
-        psfmodel = self.config.make_psfmodel()
-        return psfmodel
+    def psf_model(self) -> g2f.PsfModel:
+        psf_model = self.config.make_psf_model()
+        return psf_model
 
     @cached_property
-    def psfmodel_gaussians(self):
-        gaussians = self.psfmodel.gaussians()
+    def psf_model_gaussians(self):
+        gaussians = self.psf_model.gaussians()
         return gaussians
 
     def __post_init__(self):
         self.config.freeze()
         n_component_configs = len(self.component_configs)
-        n_components = len(self.psfmodel.components)
+        n_components = len(self.psf_model.components)
         if n_components != n_component_configs:
             raise AssertionError(f"{n_components=} != {n_component_configs=}")
 
@@ -454,11 +454,11 @@ class CatalogPsfFitter:
             for comp in config_data.component_configs.values()
         ]
 
-        psfmodel = config_data.psfmodel
-        model_source = g2f.Source(psfmodel.components)
+        psf_model = config_data.psf_model
+        model_source = g2f.Source(psf_model.components)
 
         for idx, (comp, config_comp) in enumerate(
-            zip(psfmodel.components, config_data.component_configs.values())
+            zip(psf_model.components, config_data.component_configs.values())
         ):
             prior = config_comp.get_shape_prior(comp.ellipse)
             if prior:
@@ -469,7 +469,7 @@ class CatalogPsfFitter:
                 priors.append(prior)
 
         params = config_data.parameters
-        flux_total = tuple(get_params_uniq(psfmodel, nonlinear=False, channel=g2f.Channel.NONE))
+        flux_total = tuple(get_params_uniq(psf_model, nonlinear=False, channel=g2f.Channel.NONE))
         if len(flux_total) != 1:
             raise RuntimeError(f"len({flux_total=}) != 1; PSF model is badly-formed")
         flux_total = flux_total[0]
@@ -480,7 +480,7 @@ class CatalogPsfFitter:
             if isinstance(param, g2f.ProperFractionParameterD)
         )
         # We're fitting the PSF, so there's nothing to convolve with
-        model_psf = make_psfmodel_null()
+        model_psf = make_psf_model_null()
 
         catalog = catexp.get_catalog()
         n_rows = len(catalog)

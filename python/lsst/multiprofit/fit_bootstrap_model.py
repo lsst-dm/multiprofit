@@ -111,13 +111,13 @@ class CatalogExposurePsfBootstrap(CatalogExposurePsfABC, CatalogPsfFitterConfigD
 
     @cached_property
     def image(self) -> np.ndarray:
-        psfmodel_init = self.config.make_psfmodel()
-        # A hacky way to initialize the psfmodel property to the same values
+        psf_model_init = self.config.make_psf_model()
+        # A hacky way to initialize the psf_model property to the same values
         # TODO: Include this functionality in fit_psf.py
-        for param_init, param in zip(get_params_uniq(psfmodel_init), get_params_uniq(self.psfmodel)):
+        for param_init, param in zip(get_params_uniq(psf_model_init), get_params_uniq(self.psf_model)):
             param.value = param_init.value
         image = make_image_gaussians(
-            psfmodel_init.gaussians(g2f.Channel.NONE),
+            psf_model_init.gaussians(g2f.Channel.NONE),
             n_rows=self.config_boot.observation.n_rows,
             n_cols=self.config_boot.observation.n_cols,
         )
@@ -155,10 +155,10 @@ class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC):
     def get_catalog(self) -> astropy.table.Table:
         return self.config_boot.catalog
 
-    def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
-        psfmodel = self.psfmodel_data.psfmodel
-        self.psfmodel_data.init_psfmodel(self.table_psf_fits[params["id"]])
-        return psfmodel
+    def get_psf_model(self, params: Mapping[str, Any]) -> g2f.PsfModel:
+        psf_model = self.psf_model_data.psf_model
+        self.psf_model_data.init_psf_model(self.table_psf_fits[params["id"]])
+        return psf_model
 
     def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
         obs = self.config_boot.observation.make_observation()
@@ -169,7 +169,7 @@ class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC):
         config = CatalogPsfFitterConfig()
         set_config_from_dict(config, config_dict)
         config_data = CatalogPsfFitterConfigData(config=config)
-        object.__setattr__(self, "psfmodel_data", config_data)
+        object.__setattr__(self, "psf_model_data", config_data)
 
 
 @dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)

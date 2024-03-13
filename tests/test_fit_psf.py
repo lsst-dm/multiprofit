@@ -36,4 +36,4 @@ def fitter_config_data(fitter_config) -> CatalogPsfFitterConfigData:
 
 def test_fitter_config_data(fitter_config_data):
     parameters = fitter_config_data.parameters
-    psfmodel = fitter_config_data.psfmodel
+    psf_model = fitter_config_data.psf_model

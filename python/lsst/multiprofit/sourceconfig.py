@@ -340,7 +340,7 @@ class SourceConfig(pexConfig.Config):
         source = g2f.Source(components)
         return source, priors
 
-    def make_psfmodel(
+    def make_psf_model(
         self,
         component_group_fluxes: list[list[Fluxes]],
         label_integral: str | None = None,
@@ -361,7 +361,7 @@ class SourceConfig(pexConfig.Config):
 
         Returns
         -------
-        psfmodel
+        psf_model
             An appropriate gauss2d.fit.PSfModel.
         priors
             A list of priors from all constituent components.

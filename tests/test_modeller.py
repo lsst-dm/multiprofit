@@ -33,7 +33,7 @@ from lsst.multiprofit.componentconfig import (
     SersicComponentConfig,
     SersicIndexParameterConfig,
 )
-from lsst.multiprofit.model_utils import make_image_gaussians, make_psfmodel_null
+from lsst.multiprofit.model_utils import make_image_gaussians, make_psf_model_null
 from lsst.multiprofit.modelconfig import ModelConfig
 from lsst.multiprofit.modeller import FitInputs, LinearGaussians, Modeller, fitmethods_linear
 from lsst.multiprofit.observationconfig import CoordinateSystemConfig, ObservationConfig
@@ -78,14 +78,14 @@ def data(channels) -> g2f.Data:
 
 
 @pytest.fixture(scope="module")
-def psfmodels(channels) -> list[g2f.PsfModel]:
+def psf_models(channels) -> list[g2f.PsfModel]:
     rho, size_x, size_y = 0.12, 1.6, 1.2
     drho, dsize_x, dsize_y = -0.3, 1.1, 1.9
     drho_chan, dsize_x_chan, dsize_y_chan = 0.03, 0.12, 0.14
     frac, dfrac = 0.62, -0.08
 
     n_components = 2
-    psfmodels = []
+    psf_models = []
 
     for idx_chan, channel in enumerate(channels.values()):
         frac_chan = frac + idx_chan*dfrac
@@ -111,7 +111,7 @@ def psfmodels(channels) -> list[g2f.PsfModel]:
             },
         )
         config.validate()
-        psfmodel, priors = config.make_psfmodel([
+        psf_model, priors = config.make_psf_model([
             component_group.get_fluxes_default(
                 channels=(g2f.Channel.NONE,),
                 component_configs=component_group.get_component_configs(),
@@ -119,12 +119,12 @@ def psfmodels(channels) -> list[g2f.PsfModel]:
             )
             for component_group in config.component_groups.values()
         ])
-        psfmodels.append(psfmodel)
-    return psfmodels
+        psf_models.append(psf_model)
+    return psf_models
 
 
 @pytest.fixture(scope="module")
-def model(channels, data, psfmodels) -> g2f.Model:
+def model(channels, data, psf_models) -> g2f.Model:
     rho, size_x, size_y, sersicn, flux = 0.4, 1.5, 1.9, 1.0, 4.7
     drho, dsize_x, dsize_y, dsersicn, dflux = -0.9, 2.5, 5.4, 3.0, 13.9
 
@@ -162,7 +162,7 @@ def model(channels, data, psfmodels) -> g2f.Model:
             ),
         },
     )
-    model = modelconfig.make_model([[fluxes_group]], data=data, psfmodels=psfmodels)
+    model = modelconfig.make_model([[fluxes_group]], data=data, psf_models=psf_models)
     return model
 
 
@@ -173,19 +173,19 @@ def model_jac(model) -> g2f.Model:
 
 
 @pytest.fixture(scope="module")
-def psf_observations(psfmodels) -> list[g2f.Observation]:
+def psf_observations(psf_models) -> list[g2f.Observation]:
     config = ObservationConfig(n_rows=17, n_cols=19)
     rng = np.random.default_rng(1)
 
     observations = []
-    for psfmodel in psfmodels:
+    for psf_model in psf_models:
         observation = config.make_observation()
         # Have to make a duplicate image here because one can only call
         # make_image_gaussians with an owning pointer, whereas
         # observation.image is a reference
         image = g2.ImageD(observation.image.data)
         # Make the kernel centered
-        gaussians_source = psfmodel.gaussians(g2f.Channel.NONE)
+        gaussians_source = psf_model.gaussians(g2f.Channel.NONE)
         for idx in range(len(gaussians_source)):
             gaussian_idx = gaussians_source.at(idx)
             gaussian_idx.centroid.x = image.n_cols/2.
@@ -204,11 +204,11 @@ def psf_observations(psfmodels) -> list[g2f.Observation]:
 
 
 @pytest.fixture(scope="module")
-def psf_fit_models(psfmodels, psf_observations):
-    psf_null = [make_psfmodel_null()]
+def psf_fit_models(psf_models, psf_observations):
+    psf_null = [make_psf_model_null()]
     return [
-        g2f.Model(g2f.Data([observation]), psf_null, [g2f.Source(psfmodel.components)])
-        for psfmodel, observation in zip(psfmodels, psf_observations)
+        g2f.Model(g2f.Data([observation]), psf_null, [g2f.Source(psf_model.components)])
+        for psf_model, observation in zip(psf_models, psf_observations)
     ]
 
 
@@ -219,8 +219,8 @@ def test_model_evaluation(channels, model, model_jac):
     printout = False
     # Freeze the PSF params - they can't be fit anyway
     for m in (model, model_jac):
-        for psfmodel in m.psfmodels:
-            params = psfmodel.parameters()
+        for psf_model in m.psfmodels:
+            params = psf_model.parameters()
             for param in params:
                 param.fixed = True
 
@@ -295,20 +295,20 @@ def test_model_evaluation(channels, model, model_jac):
 
 
 @pytest.fixture(scope="module")
-def psfmodels_linear_gaussians(channels, psfmodels):
-    gaussians = [None] * len(psfmodels)
-    for idx, psfmodel in enumerate(psfmodels):
-        params = psfmodel.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE))
+def psf_models_linear_gaussians(channels, psf_models):
+    gaussians = [None] * len(psf_models)
+    for idx, psf_model in enumerate(psf_models):
+        params = psf_model.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=g2f.Channel.NONE))
         params[0].fixed = False
-        gaussians[idx] = LinearGaussians.make(psfmodel, is_psf=True)
+        gaussians[idx] = LinearGaussians.make(psf_model, is_psf=True)
         # If this is not done, test_psf_model_fit will fail
         params[0].fixed = True
     return gaussians
 
 
-def test_make_psf_source_linear(psfmodels, psfmodels_linear_gaussians):
-    for psfmodel, linear_gaussians in zip(psfmodels, psfmodels_linear_gaussians):
-        gaussians = psfmodel.gaussians(g2f.Channel.NONE)
+def test_make_psf_source_linear(psf_models, psf_models_linear_gaussians):
+    for psf_model, linear_gaussians in zip(psf_models, psf_models_linear_gaussians):
+        gaussians = psf_model.gaussians(g2f.Channel.NONE)
         assert len(gaussians) == (
             len(linear_gaussians.gaussians_free) + len(linear_gaussians.gaussians_fixed)
         )
@@ -329,8 +329,8 @@ def test_modeller(model):
         )
 
     # Freeze the PSF params - they can't be fit anyway
-    for psfmodel in model.psfmodels:
-        for param in psfmodel.parameters():
+    for psf_model in model.psfmodels:
+        for param in psf_model.parameters():
             param.fixed = True
 
     params_free = tuple(get_params_uniq(model, fixed=False))
@@ -468,10 +468,10 @@ def test_psf_model_fit(psf_fit_models):
         assert len(errors) == 0
 
 
-def test_psfmodels_linear_gaussians(data, psfmodels_linear_gaussians, psf_observations):
+def test_psf_models_linear_gaussians(data, psf_models_linear_gaussians, psf_observations):
     results = [None] * len(psf_observations)
     for idx, (gaussians_linear, observation_psf) in enumerate(
-        zip(psfmodels_linear_gaussians, psf_observations)
+        zip(psf_models_linear_gaussians, psf_observations)
     ):
         results[idx] = Modeller.fit_gaussians_linear(
             gaussians_linear=gaussians_linear,

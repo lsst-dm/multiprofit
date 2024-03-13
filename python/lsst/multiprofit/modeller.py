@@ -32,7 +32,7 @@ import pydantic
 from pydantic.dataclasses import dataclass
 import scipy.optimize as spopt
 
-from .model_utils import make_image_gaussians, make_psfmodel_null
+from .model_utils import make_image_gaussians, make_psf_model_null
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
@@ -49,7 +49,7 @@ __all__ = [
     "fitmethods_linear",
     "LinearGaussians",
     "make_image_gaussians",
-    "make_psfmodel_null",
+    "make_psf_model_null",
     "FitInputsBase",
     "FitInputsDummy",
     "ModelFitConfig",
@@ -405,7 +405,7 @@ class Modeller:
     def fit_gaussians_linear(
         gaussians_linear: LinearGaussians,
         observation: g2f.Observation,
-        psfmodel: g2f.PsfModel = None,
+        psf_model: g2f.PsfModel = None,
         fitmethods: dict[str, dict[str, Any]] = None,
         plot: bool = False,
     ) -> dict[str, FitResult]:
@@ -417,7 +417,7 @@ class Modeller:
             The Gaussian components - fixed or otherwise - to fit.
         observation : gauss2d.fit.Observation
             The observation to fit against.
-        psfmodel : gauss2d.fit.PsfModel
+        psf_model : gauss2d.fit.PsfModel
             A PSF model for the observation, if fitting sources.
         fitmethods : dict[str, dict[str, Any]]
             A dictionary of fitting methods to employ, keyed by method name,
@@ -430,8 +430,8 @@ class Modeller:
         results : dict[str, FitResult]
             Fit results for each method, keyed by the fit method name.
         """
-        if psfmodel is None:
-            psfmodel = make_psfmodel_null()
+        if psf_model is None:
+            psf_model = make_psf_model_null()
         if fitmethods is None:
             fitmethods = {"scipy.optimize.nnls": fitmethods_linear["scipy.optimize.nnls"]}
         else:
@@ -462,7 +462,7 @@ class Modeller:
             sigma_inv = sigma_inv[mask_inv]
             size = np.sum(mask_inv)
 
-        gaussians_psf = psfmodel.gaussians(g2f.Channel.NONE)
+        gaussians_psf = psf_model.gaussians(g2f.Channel.NONE)
         if len(gaussians_linear.gaussians_fixed) > 0:
             image_fixed = make_image_gaussians(
                 gaussians_source=gaussians_linear.gaussians_fixed,
@@ -749,7 +749,7 @@ class Modeller:
         for idx_obs in indices:
             obs = model.data[idx_obs]
             gaussians_linear = LinearGaussians.make(model.sources[0], channel=obs.channel)
-            result = cls.fit_gaussians_linear(gaussians_linear, obs, psfmodel=model.psfmodels[idx_obs])
+            result = cls.fit_gaussians_linear(gaussians_linear, obs, psf_model=model.psfmodels[idx_obs])
             values = list(result.values())[0]
 
             for (_, parameter), ratio in zip(gaussians_linear.gaussians_free, values):
