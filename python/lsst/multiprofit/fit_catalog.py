@@ -36,6 +36,8 @@ __all__ = ["CatalogExposureABC", "ColumnInfo", "CatalogFitterConfig"]
 class CatalogExposureABC(ABC):
     """Interface for catalog-exposure pairs."""
 
+    # TODO: add get_exposure (with Any return type?)
+
     @abstractmethod
     def get_catalog(self) -> Iterable:
         """Return a row-iterable catalog covering an exposure."""
@@ -111,12 +113,6 @@ class CatalogFitterConfig(pexConfig.Config):
             ColumnInfo(key="unknown_flag", dtype="bool"),
         ]
         schema.extend([ColumnInfo(key=key, dtype="bool") for key in self.flag_errors.keys()])
-        # Always have a centroid column, even if not fitting
-        # It may still be useful for reconstruction
-        schema.extend(
-            [
-                ColumnInfo(key="cen_x", dtype="f8", unit=u.pix),
-                ColumnInfo(key="cen_y", dtype="f8", unit=u.pix),
-            ]
-        )
+        # Subclasses should always write out centroids even if not fitting
+        # They are helpful for reconstructing models
         return schema

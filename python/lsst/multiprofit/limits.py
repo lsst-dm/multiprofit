@@ -29,6 +29,7 @@ limits_ref = {
     "none": Limits(),
     "axrat": Limits(min=1e-2, max=1),
     "con": Limits(min=1, max=10),
+    "fluxfrac": Limits(min=0.001, max=0.999),
     "n_ser": Limits(min=0.3, max=6.0),
     "n_ser_multigauss": Limits(min=0.5, max=6.0),
     "rho": Limits(min=-0.999, max=0.999),

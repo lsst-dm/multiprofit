@@ -19,18 +19,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from importlib.util import find_spec
 import math
 import timeit
-from importlib.util import find_spec
 from typing import Iterable
 
 import galsim as gs
 import gauss2d as g2
 import gauss2d.fit as g2f
+from lsst.multiprofit.componentconfig import (
+    GaussianConfig,
+    ParameterConfig,
+    SersicConfig,
+    SersicIndexParameterConfig,
+)
+from lsst.multiprofit.utils import get_params_uniq
 import matplotlib.pyplot as plt
 import numpy as np
-from lsst.multiprofit.componentconfig import GaussianConfig, ParameterConfig, SersicConfig, SersicIndexConfig
-from lsst.multiprofit.utils import get_params_uniq
 
 names_params_ellipse = ["sigma_x", "sigma_y", "rho"]
 names_params_ellipse_psf = ["psf_" + x for x in names_params_ellipse]
@@ -49,7 +54,7 @@ def get_model(
             size_x=ParameterConfig(value_initial=sigma_x, fixed=True),
             size_y=ParameterConfig(value_initial=sigma_y, fixed=True),
             rho=ParameterConfig(value_initial=rho, fixed=True),
-            sersicindex=SersicIndexConfig(value_initial=nser, fixed=True),
+            sersicindex=SersicIndexParameterConfig(value_initial=nser, fixed=True),
             order=order,
         ).make_component(centroid=cens, channels=fluxes.keys())
         for (channel, flux), param in zip(fluxes.items(), get_params_uniq(component, nonlinear=False)):
@@ -145,34 +150,36 @@ def gaussian_test(
     Parameters
     ----------
     xdim
-        x-axis dimensions of image.
+        The x-axis dimensions of the image.
     ydim
-        y-axis dimensions of image.
+        The y-axis dimensions of the image.
     reffs
-        Iterable of effective radii
+        Iterable of effective radii.
     angs
-        Iterable of position angles in degrees CCW from +x
+        Iterable of position angles in degrees CCW from +x.
     axrats
-        Iterable of major-to-minor axis ratios
+        Iterable of major-to-minor axis ratios.
     nbenchmark
-        Number of times to repeat function evaluation for benchmarking
+        Number of times to repeat function evaluation for benchmarking.
     nsub
-        Number of (identical) Gaussians to evaluate (as for a GMM)
+        Number of (identical) Gaussians to evaluate (as for a GMM).
     do_like
-        Whether to evaluate the likelihood
+        Whether to evaluate the likelihood.
     do_residual
-        Whether to evaluate the residual
+        Whether to evaluate the residual.
     do_grad
-        Whether to evaluate the likelihood gradient
+        Whether to evaluate the likelihood gradient.
     do_jac
-        Whether to evaluate the model Jacobian
+        Whether to evaluate the model Jacobian.
     do_meas_modelfit
-        Whether to test meas_modelfit's code
+        Whether to test meas_modelfit's code.
     plot
+        Whether to plot.
 
     Returns
     -------
-    List of dicts with results for each combination of parameters.
+    results
+        List of dicts with results for each combination of parameters.
 
     Usage
     -----
@@ -329,9 +336,9 @@ def gradient_test(
     Parameters
     ----------
     xdim
-        x-axis dimensions of image.
+        The x-axis dimensions of the image.
     ydim
-        y-axis dimensions of image.
+        The y-axis dimensions of the image.
     flux
         Total source flux.
     reff
@@ -498,9 +505,9 @@ def mgsersic_test(
     Parameters
     ----------
     xdim
-        x-axis dimensions of image.
+        The x-axis dimensions of the image.
     ydim
-        y-axis dimensions of image.
+        The y-axis dimensions of the image.
     flux
         Total source flux.
     reff

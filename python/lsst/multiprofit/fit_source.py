@@ -20,9 +20,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
+from functools import cached_property
 import logging
 import time
-from typing import Any, Mapping, Sequence, Type
+from typing import Any, Iterable, Mapping, Sequence, Type
 
 import astropy
 from astropy.table import Table
@@ -33,13 +34,16 @@ import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
 
-from .componentconfig import SersicConfig
+from .componentconfig import Fluxes
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
+from .modelconfig import ModelConfig
 from .modeller import FitInputsDummy, Modeller
-from .transforms import transforms_ref
-from .utils import ArbitraryAllowedConfig, get_params_uniq
+from .utils import FrozenArbitraryAllowedConfig, get_params_uniq
 
-__all__ = ["CatalogExposureSourcesABC", "CatalogSourceFitterConfig", "CatalogSourceFitterABC"]
+__all__ = [
+    "CatalogExposureSourcesABC", "CatalogSourceFitterConfig", "CatalogSourceFitterConfigData",
+    "CatalogSourceFitterABC",
+]
 
 
 class CatalogExposureSourcesABC(CatalogExposureABC):
@@ -57,7 +61,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         """Return the exposure's associated channel object."""
 
     @abstractmethod
-    def get_psfmodel(self, params: Mapping[str, Any]) -> g2f.PsfModel:
+    def get_psf_model(self, params: Mapping[str, Any]) -> g2f.PsfModel:
         """Get the PSF model for a given source row.
 
         Parameters
@@ -68,12 +72,12 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
 
         Returns
         -------
-        psfmodel : `gauss2d.fit.PsfModel`
+        psf_model : `gauss2d.fit.PsfModel`
             A PsfModel object initialized with the best-fit parameters.
         """
 
     @abstractmethod
-    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
+    def get_source_observation(self, source: Mapping[str, Any], **kwargs: Any) -> g2f.Observation:
         """Get the Observation for a given source row.
 
         Parameters
@@ -81,6 +85,8 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         source : Mapping[str, Any]
             A mapping with any values needed to retrieve an observation for a
             single source.
+        **kwargs
+            Additional keyword arguments not used during fitting.
 
         Returns
         -------
@@ -93,149 +99,228 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
 class CatalogSourceFitterConfig(CatalogFitterConfig):
     """Configuration for the MultiProFit profile fitter."""
 
+    centroid_pixel_offset = pexConfig.Field[float](
+        doc="Number to add to MultiProFit centroids (bottom-left corner is 0,0) to convert to catalog"
+            " coordinates (e.g. set to -0.5 if the bottom-left corner is -0.5, -0.5)",
+        default=0,
+    )
+    config_model = pexConfig.ConfigField[ModelConfig](doc="Source model configuration")
     convert_cen_xy_to_radec = pexConfig.Field[bool](default=True, doc="Convert cen x/y params to RA/dec")
-    fit_cen_x = pexConfig.Field[bool](default=True, doc="Fit x centroid parameter")
-    fit_cen_y = pexConfig.Field[bool](default=True, doc="Fit y centroid parameter")
-    n_pointsources = pexConfig.Field[int](default=0, doc="Number of central point source components")
     prior_cen_x_stddev = pexConfig.Field[float](
         default=0, doc="Prior std. dev. on x centroid (ignored if not >0)"
     )
     prior_cen_y_stddev = pexConfig.Field[float](
         default=0, doc="Prior std. dev. on y centroid (ignored if not >0)"
     )
-
-    # TODO: Verify that component names don't clash
-    sersics = pexConfig.ConfigDictField(
-        default={},
-        doc="Sersic components",
-        itemtype=SersicConfig,
-        keytype=str,
-        optional=False,
-    )
-    unit_flux = pexConfig.Field[str](default="", doc="Flux unit")
+    unit_flux = pexConfig.Field[str](default=None, doc="Flux unit", optional=True)
 
     def make_model_data(
         self,
-        idx_source,
+        idx_row,
         catexps: list[CatalogExposureSourcesABC],
-        model_priors: tuple[g2f.Source, list[g2f.Prior]] = None,
-    ):
-        if model_priors is None:
-            model_source, priors, *_ = self.make_source([catexp.channel for catexp in catexps])
-        else:
-            model_source, priors = model_priors
-        n_catexps = len(catexps)
-        observations = [None] * n_catexps
-        psfmodels = [None] * n_catexps
+    ) -> tuple[g2f.Data, list[g2f.PsfModel]]:
+        """Make data and psf_models for a catalog row.
 
-        for idx_catexp in range(n_catexps):
-            catexp = catexps[idx_catexp]
-            source = catexp.get_catalog()[idx_source]
-            observations[idx_catexp] = catexp.get_source_observation(source)
-            psfmodel = catexp.get_psfmodel(source)
-            for param in psfmodel.parameters():
-                param.fixed = True
-            psfmodels[idx_catexp] = psfmodel
+        Parameters
+        ----------
+        idx_row
+            The index of the row in each catalog.
+        catexps
+            Catalog-exposure pairs to initialize observations from.
+
+        Returns
+        -------
+        data
+            The resulting data object.
+        psf_models
+            A list of psf_models, one per catexp.
+        """
+        observations = []
+        psf_models = []
+
+        for catexp in catexps:
+            source = catexp.get_catalog()[idx_row]
+            observation = catexp.get_source_observation(source)
+            if observation is not None:
+                observations.append(observation)
+                psf_model = catexp.get_psf_model(source)
+                for param in get_params_uniq(psf_model):
+                    param.fixed = True
+                psf_models.append(psf_model)
 
         data = g2f.Data(observations)
-        model = g2f.Model(data=data, psfmodels=psfmodels, sources=[model_source], priors=priors)
-        return model, data, psfmodels
+        return data, psf_models
 
-    def make_source(
+    def make_sources(
         self,
-        channels: list[g2f.Channel],
+        channels: Iterable[g2f.Channel],
+        source_fluxes: list[list[list[Fluxes]]] = None,
     ) -> tuple[
-        g2f.Source,
+        list[g2f.Source],
         list[g2f.Prior],
         g2f.LimitsD,
         g2f.LimitsD,
-        g2f.CentroidXParameterD,
-        g2f.CentroidXParameterD,
     ]:
-        limits_x = g2f.LimitsD(min=0, max=np.Inf)
-        limits_y = g2f.LimitsD(min=0, max=np.Inf)
-        cen_x = g2f.CentroidXParameterD(value=0, limits=limits_x, fixed=not self.fit_cen_x)
-        cen_y = g2f.CentroidYParameterD(value=0, limits=limits_y, fixed=not self.fit_cen_y)
-        centroid = g2f.CentroidParameters(cen_x, cen_y)
-        priors = []
-        n_sersics = len(self.sersics)
-        components = [None] * (self.n_pointsources + n_sersics)
-        for idx in range(self.n_pointsources):
-            components[idx] = g2f.GaussianComponent(
-                centroid=centroid,
-                ellipse=g2f.GaussianParametricEllipse(
-                    sigma_x=g2f.SigmaXParameterD(0, fixed=True),
-                    sigma_y=g2f.SigmaYParameterD(0, fixed=True),
-                    rho=g2f.RhoParameterD(0, fixed=True),
-                ),
-                integral=g2f.LinearIntegralModel(
-                    [
-                        (
-                            channel,
-                            g2f.IntegralParameterD(
-                                1.0, transform=transforms_ref["log10"], label=f"Pt. Src {channel.name}-band"
-                            ),
-                        )
-                        for channel in channels
-                    ]
-                ),
-            )
-        idx = self.n_pointsources
-        for sersic in self.sersics.values():
-            component, priors_comp = sersic.make_component(centroid=centroid, channels=channels)
-            components[idx] = component
-            priors.extend(priors_comp)
-            idx += 1
-        if self.prior_cen_x_stddev > 0 and np.isfinite(self.prior_cen_x_stddev):
-            priors.append(g2f.GaussianPrior(centroid.x_param_ptr, 0, self.prior_cen_x_stddev))
-        if self.prior_cen_y_stddev > 0 and np.isfinite(self.prior_cen_y_stddev):
-            priors.append(g2f.GaussianPrior(centroid.y_param_ptr, 0, self.prior_cen_y_stddev))
-        return g2f.Source(components), priors, limits_x, limits_y, cen_x, cen_y
+        n_sources = len(self.config_model.sources)
+        if source_fluxes is None:
+            source_fluxes = [None]*n_sources
+            for idx, (config_source, component_group_fluxes) in enumerate(zip(
+                    self.config_model.sources.values(), source_fluxes,
+            )):
+                component_group_fluxes = [
+                    component_group.get_fluxes_default(
+                        channels=channels,
+                        component_configs=component_group.get_component_configs(),
+                        is_fractional=component_group.is_fractional,
+                    )
+                    for component_group in config_source.component_groups.values()
+                ]
+                source_fluxes[idx] = component_group_fluxes
+        else:
+            if len(source_fluxes) != n_sources:
+                raise ValueError(f"{len(source_fluxes)=} != {len(self.config_model.sources)=}")
+
+        sources, priors = self.config_model.make_sources(
+            component_group_fluxes_srcs=source_fluxes,
+        )
+
+        has_prior_x = self.prior_cen_x_stddev > 0 and np.isfinite(self.prior_cen_x_stddev)
+        has_prior_y = self.prior_cen_y_stddev > 0 and np.isfinite(self.prior_cen_y_stddev)
+        if has_prior_x or has_prior_y:
+            for source in sources:
+                for param in get_params_uniq(source, fixed=False):
+                    if has_prior_x and isinstance(param, g2f.CentroidXParameterD):
+                        priors.append(g2f.GaussianPrior(param.x_param_ptr, 0, self.prior_cen_x_stddev))
+                    elif has_prior_y and isinstance(param, g2f.CentroidYParameterD):
+                        priors.append(g2f.GaussianPrior(param.y_param_ptr, 0, self.prior_cen_y_stddev))
+
+        return sources, priors
+
+    def schema_configurable(self) -> list[ColumnInfo]:
+        columns = []
+        if self.config_fit.eval_residual:
+            columns.append(ColumnInfo(key="n_eval_jac", dtype="i4"))
+        if self.fit_linear_final:
+            columns.append(ColumnInfo(key="delta_ll_fit_linear", dtype="f8"))
+        return columns
 
     def schema(
         self,
         bands: list[str] = None,
     ) -> list[ColumnInfo]:
         if bands is None or not (len(bands) > 0):
-            raise ValueError("PSF CatalogSourceFitter must provide at least one band")
-        columns = super().schema(bands)
-        suffixes = ("", "_err") if self.compute_errors else ("",)
-        for suffix in suffixes:
-            if suffix == "_err":
-                if self.fit_cen_x:
-                    columns.append(ColumnInfo(key=f"cen_x{suffix}", dtype="f8", unit=u.pix))
-                if self.fit_cen_y:
-                    columns.append(ColumnInfo(key=f"cen_y{suffix}", dtype="f8", unit=u.pix))
-            for idx in range(self.n_pointsources):
-                prefix_comp = f"ps{idx + 1}_"
-                for band in bands:
-                    columns.append(ColumnInfo(key=f"{prefix_comp}{band}_flux{suffix}", dtype="f8"))
+            raise ValueError("CatalogSourceFitter must provide at least one band")
+        schema = super().schema(bands)
 
-            for idx, (name_comp, comp) in enumerate(self.sersics.items()):
-                prefix_comp = f"{name_comp}_"
-                columns_comp = [
-                    ColumnInfo(key=f"{prefix_comp}reff_x{suffix}", dtype="f8", unit=u.pix),
-                    ColumnInfo(key=f"{prefix_comp}reff_y{suffix}", dtype="f8", unit=u.pix),
-                    ColumnInfo(key=f"{prefix_comp}rho{suffix}", dtype="f8", unit=u.pix),
-                ]
-                for band in bands:
-                    columns_comp.append(
-                        ColumnInfo(
-                            key=f"{prefix_comp}{band}_flux{suffix}",
-                            dtype="f8",
-                            unit=u.Unit(self.unit_flux) if self.unit_flux else None,
-                        )
-                    )
-                if not comp.sersicindex.fixed:
-                    columns_comp.append(ColumnInfo(key=f"{prefix_comp}nser{suffix}", dtype="f8"))
-                columns.extend(columns_comp)
-            if self.convert_cen_xy_to_radec:
-                columns.append(ColumnInfo(key=f"cen_ra{suffix}", dtype="f8", unit=u.deg))
-                columns.append(ColumnInfo(key=f"cen_dec{suffix}", dtype="f8", unit=u.deg))
-        return columns
+        parameters = CatalogSourceFitterConfigData(
+            config=self,
+            channels=tuple((g2f.Channel.get(band) for band in bands)),
+        ).parameters
+        unit_size = u.Unit("pix")
+        units = {
+            g2f.IntegralParameterD: self.unit_flux,
+            g2f.ReffXParameterD: unit_size,
+            g2f.ReffYParameterD: unit_size,
+            g2f.SizeXParameterD: unit_size,
+            g2f.SizeYParameterD: unit_size,
+        }
+        idx_start = len(schema)
+        schema.extend([
+            ColumnInfo(key=key, dtype="f8", unit=units.get(type(param)))
+            for key, param in parameters.items()
+        ])
+        if self.convert_cen_xy_to_radec:
+            for key, param in parameters.items():
+                suffix = "cen_ra" if isinstance(param, g2f.CentroidXParameterD) else (
+                    "cen_dec" if isinstance(param, g2f.CentroidYParameterD) else None)
+                if suffix is not None:
+                    schema.append(ColumnInfo(key=f"{key[:-5]}{suffix}", dtype="f8", unit=u.deg))
+        if self.compute_errors != "NONE":
+            idx_end = len(schema)
+            # Do not remove idx_end unless you like infinite recursion
+            for column in schema[idx_start:idx_end]:
+                schema.append(ColumnInfo(key=f"{column.key}_err", dtype=column.dtype, unit=column.unit))
+
+        schema.extend(self.schema_configurable())
+        return schema
 
 
-@dataclass(kw_only=True, frozen=True, config=ArbitraryAllowedConfig)
+@dataclass(frozen=True, kw_only=True, config=FrozenArbitraryAllowedConfig)
+class CatalogSourceFitterConfigData:
+    """Configuration data for a fitter that can initialize gauss2d.fit models
+    and images thereof.
+
+    This class relies on cached properties being computed once, mostly shortly
+    after initialization. Therefore, it and the config field must be frozen to
+    ensure that the model remains unchanged.
+    """
+
+    channels: list[g2f.Channel] = pydantic.Field(title="The list of channels")
+    config: CatalogSourceFitterConfig = pydantic.Field(title="A CatalogSourceFitterConfig to be frozen")
+
+    @pydantic.model_validator(mode="after")
+    def validate_config(self):
+        self.config.validate()
+
+    @cached_property
+    def components(self) -> tuple[g2f.Component]:
+        sources = self.sources_priors[0]
+        components = []
+        for source in sources:
+            components.extend(source.components)
+        return components
+
+    @cached_property
+    def parameters(self) -> dict[str, g2f.ParameterD]:
+        config_model = self.config.config_model
+        idx_comp_first = 0
+        has_prefix_source = config_model.has_prefix_source()
+        n_channels = len(self.channels)
+        parameters = {}
+
+        for name_source, config_source in config_model.sources.items():
+            prefix_source = f"{name_source}_" if has_prefix_source else ""
+            has_prefix_group = config_source.has_prefix_group()
+
+            for name_group, config_group in config_source.component_groups.items():
+                prefix_group = f"{prefix_source}{name_group}_" if has_prefix_group else prefix_source
+                multicen = len(config_group.centroids) > 1
+                configs_comp = config_group.get_component_configs().items()
+
+                for idx_comp_group, (name_comp, config_comp) in enumerate(configs_comp):
+                    component = self.components[idx_comp_first + idx_comp_group]
+                    label_size = config_comp.get_size_label()
+                    prefix_comp = f"{prefix_group}{name_comp}{'_' if name_comp else ''}"
+                    if multicen or (idx_comp_group == 0):
+                        prefix_cen = prefix_comp if multicen else prefix_group
+                        parameters[f"{prefix_cen}cen_x"] = component.centroid.x_param
+                        parameters[f"{prefix_cen}cen_y"] = component.centroid.y_param
+                    if not config_comp.size_x.fixed:
+                        parameters[f"{prefix_comp}{label_size}_x"] = component.ellipse.size_x_param
+                    if not config_comp.size_y.fixed:
+                        parameters[f"{prefix_comp}{label_size}_y"] = component.ellipse.size_y_param
+                    if not config_comp.rho.fixed:
+                        parameters[f"{prefix_comp}rho"] = component.ellipse.rho_param
+                    if not config_comp.flux.fixed:
+                        # TODO: return this to component.integralmodel
+                        # when binding for g2f.FractionalIntegralModel is fixed
+                        params_flux = get_params_uniq(component, fixed=False, nonlinear=False)
+                        if len(params_flux) != n_channels:
+                            raise ValueError(f"{params_flux=} len={len(params_flux)} != {n_channels=}")
+                        for channel, param_flux in zip(self.channels, params_flux):
+                            parameters[f"{prefix_comp}{channel.name}_flux"] = param_flux
+                    if hasattr(config_comp, "sersic_index") and not config_comp.sersic_index.fixed:
+                        parameters[f"{prefix_comp}sersicindex"] = component.sersicindex_param
+
+        return parameters
+
+    @cached_property
+    def sources_priors(self) -> tuple[tuple[g2f.Source], tuple[g2f.Prior]]:
+        sources, priors = self.config.make_sources(channels=self.channels)
+        return tuple(sources), tuple(priors)
+
+
+@dataclass(kw_only=True, frozen=True, config=FrozenArbitraryAllowedConfig)
 class CatalogSourceFitterABC(ABC):
     """Fit a Gaussian mixture source model to an image with a PSF model.
 
@@ -262,12 +347,26 @@ class CatalogSourceFitterABC(ABC):
 
         return logger
 
+    def copy_centroid_errors(
+        self,
+        columns_cenx_err_copy: tuple[str],
+        columns_ceny_err_copy: tuple[str],
+        results: Table,
+        catalog_multi: Sequence,
+        catexps: list[CatalogExposureSourcesABC],
+        config_data: CatalogSourceFitterConfigData,
+    ):
+        if columns_cenx_err_copy or columns_ceny_err_copy:
+            raise RuntimeError(
+                f"Fitter of {type(self)=} got {columns_cenx_err_copy=} and/or {columns_ceny_err_copy=}"
+                f" but has not overriden copy_centroid_errors"
+            )
+
     def fit(
         self,
         catalog_multi: Sequence,
-        # TODO: Need to support catexps with band but no channel
         catexps: list[CatalogExposureSourcesABC],
-        config: CatalogSourceFitterConfig = None,
+        config_data: CatalogSourceFitterConfigData = None,
         logger: logging.Logger = None,
         **kwargs: Any,
     ) -> astropy.table.Table:
@@ -284,8 +383,8 @@ class CatalogSourceFitterABC(ABC):
             A multi-band source catalog to fit a model to.
         catexps
             A list of (source and psf) catalog-exposure pairs.
-        config
-            Configuration settings for fitting and output.
+        config_data
+            Configuration settings and data for fitting and output.
         logger
             The logger. Defaults to calling `_getlogger`.
         **kwargs
@@ -297,10 +396,22 @@ class CatalogSourceFitterABC(ABC):
             A table with fit parameters for the PSF model at the location
             of each source.
         """
-        if config is None:
-            config = CatalogSourceFitterConfig()
+        if config_data is None:
+            config_data = CatalogSourceFitterConfigData(
+                config=CatalogSourceFitterConfig(),
+                channels=[catexp.channel for catexp in catexps],
+            )
         if logger is None:
             logger = self._get_logger()
+
+        self.validate_fit_inputs(
+            catalog_multi=catalog_multi,
+            catexps=catexps,
+            config_data=config_data,
+            logger=logger,
+            **kwargs
+        )
+        config = config_data.config
 
         if len(self.errors_expected) != len(config.flag_errors):
             raise ValueError(f"{self.errors_expected=} keys not same len as {config.flag_errors=}")
@@ -315,37 +426,93 @@ class CatalogSourceFitterABC(ABC):
             raise ValueError(f"{self.errors_expected=} keys contain duplicates from {config.flag_errors=}")
 
         channels = self.get_channels(catexps)
-        model_source, priors, limits_x, limits_y, cen_x, cen_y = config.make_source(
-            channels=tuple(channels.values())
-        )
-        params = tuple(get_params_uniq(model_source, fixed=False))
+        model_sources, priors = config_data.sources_priors
+        # TODO: If free Observation params are ever supported, make null Data
+        # Because config_data knows nothing about the Observation(s)
+        params = config_data.parameters
+        values_init = {param: param.value for param in params.values() if param.free}
+        prefix = config.prefix_column
+        columns_param_fixed: dict[str, tuple[g2f.ParameterD, float]] = {}
+        columns_param_free: dict[str, tuple[g2f.ParameterD, float]] = {}
+        columns_param_flux: dict[str, g2f.IntegralParameterD] = {}
+        params_radec = {}
+        columns_err = []
 
-        n_rows = len(catalog_multi)
-        range_idx = range(n_rows)
+        errors_hessian = config.compute_errors == "INV_HESSIAN"
+        errors_hessian_bestfit = config.compute_errors == "INV_HESSIAN_BESTFIT"
+        compute_errors = errors_hessian or errors_hessian_bestfit
+
+        columns_cenx_err_copy = []
+        columns_ceny_err_copy = []
+
+        for key, param in params.items():
+            key_full = f"{prefix}{key}"
+            is_cenx = isinstance(param, g2f.CentroidXParameterD)
+            is_ceny = isinstance(param, g2f.CentroidYParameterD)
+
+            if compute_errors:
+                if param.free:
+                    columns_err.append(f"{key_full}_err")
+                elif is_cenx:
+                    columns_cenx_err_copy.append(f"{key_full}_err")
+                elif is_ceny:
+                    columns_ceny_err_copy.append(f"{key_full}_err")
+
+            (columns_param_fixed if param.fixed else columns_param_free)[key_full] = (
+                param,
+                config_data.config.centroid_pixel_offset if (is_cenx or is_ceny) else 0,
+            )
+            if isinstance(param, g2f.IntegralParameterD):
+                columns_param_flux[key_full] = param
+            elif config.convert_cen_xy_to_radec:
+                if is_cenx:
+                    params_radec[f"{key_full[:-5]}"] = [param, None]
+                elif is_ceny:
+                    params_radec[f"{key_full[:-5]}"][1] = param
+
+        if config.convert_cen_xy_to_radec:
+            columns_params_radec = []
+            columns_params_radec_err = []
+
+            for key_base, (param_cen_x, param_cen_y) in params_radec.items():
+                if param_cen_y is None:
+                    raise RuntimeError(
+                        f"Fitter failed to find corresponding cen_y param for {key_base=}; is it fixed?")
+                columns_params_radec.append(
+                    (f"{key_base}cen_ra", f"{key_base}cen_dec",  f"{key_base}cen_x",  f"{key_base}cen_y")
+                )
+                if compute_errors:
+                    columns_params_radec_err.append(
+                        (f"{key_base}cen_ra_err", f"{key_base}cen_dec_err", f"{key_base}cen_x",
+                         f"{key_base}cen_y", f"{key_base}cen_x_err",  f"{key_base}cen_y_err")
+                    )
 
         columns = config.schema([channel.name for channel in channels.values()])
         keys = [column.key for column in columns]
-        prefix = config.prefix_column
         idx_flag_first = keys.index("unknown_flag")
-        idx_flag_last = keys.index("cen_x")
+        idx_flag_last = next(iter(
+            idx for idx, key in enumerate(keys[idx_flag_first:]) if key.endswith("cen_x")
+        )) + idx_flag_first
         assert idx_flag_last > idx_flag_first
-        idx_var_first = idx_flag_last + (not config.fit_cen_x) + (not config.fit_cen_x)
-        idx_var_last = idx_var_first + len(params)
-        column_cen_x, column_cen_y = (f"{prefix}cen_{v}" for v in ("x", "y"))
-        columns_write = [f"{prefix}{col.key}" for col in columns[idx_var_first:idx_var_last]]
-        n_radec = 2 * config.convert_cen_xy_to_radec
-        columns_radec = [f"{prefix}{col.key}" for col in columns[idx_var_last : idx_var_last + n_radec]]
-        idx_var_last += n_radec
-        columns_write_err = [f"{prefix}{col.key}" for col in columns[idx_var_last : len(columns) - n_radec]]
-        assert len(columns_write_err) == len(params)
-        columns_radec_err = [f"{prefix}{col.key}" for col in columns[len(columns) - n_radec : len(columns)]]
+
+        n_rows = len(catalog_multi)
         dtypes = [(f'{prefix if col.key != config.column_id else ""}{col.key}', col.dtype) for col in columns]
         meta = {"config": config.toDict()}
-        results = Table(data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns], meta=meta)
+        results = Table(
+            data=np.full(n_rows, 0, dtype=dtypes), units=[x.unit for x in columns], meta=meta,
+        )
+        self.copy_centroid_errors(
+            columns_cenx_err_copy=columns_cenx_err_copy,
+            columns_ceny_err_copy=columns_ceny_err_copy,
+            results=results,
+            catalog_multi=catalog_multi,
+            catexps=catexps,
+            config_data=config_data,
+        )
 
         # Validate that the columns are in the right order
         # assert because this is a logic error if it fails
-        for idx in range(idx_flag_first, len(columns)):
+        for idx in range(idx_flag_first, idx_flag_last):
             column = columns[idx]
             dtype = results.columns[idx].dtype
             if idx < idx_flag_last:
@@ -358,9 +525,6 @@ class CatalogSourceFitterABC(ABC):
         size, size_new = 0, 0
         fitInputs = FitInputsDummy()
         plot = False
-        errors_hessian = config.compute_errors == "INV_HESSIAN"
-        errors_hessian_bestfit = config.compute_errors == "INV_HESSIAN_BESTFIT"
-        compute_errors = errors_hessian or errors_hessian_bestfit
 
         kwargs_err_default = {
             True: {
@@ -370,6 +534,16 @@ class CatalogSourceFitterABC(ABC):
             False: {"options": g2f.HessianOptions(findiff_add=1e-6, findiff_frac=1e-6)},
         }
 
+        range_idx = range(n_rows)
+
+        # TODO: Do this check with dummy data
+        # data, psf_models = config.make_model_data(
+        #     idx_row=range_idx[0], catexps=catexps)
+        # model = g2f.Model(data=data, psfmodels=psf_models,
+        #     sources=model_sources, priors=priors)
+        # Remember to filter out fixed centroids from params
+        # assert list(params.values()) == get_params_uniq(model, fixed=False)
+
         for idx in range_idx:
             time_init = time.process_time()
             row = results[idx]
@@ -378,12 +552,12 @@ class CatalogSourceFitterABC(ABC):
             row[config.column_id] = id_source
 
             try:
-                model, data, psfmodels = config.make_model_data(
-                    idx_source=idx,
-                    model_priors=(model_source, priors),
-                    catexps=catexps,
+                data, psf_models = config.make_model_data(idx_row=idx, catexps=catexps)
+                model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
+                self.initialize_model(
+                    model, source_multi, catexps, values_init,
+                    centroid_pixel_offset=config_data.config.centroid_pixel_offset,
                 )
-                self.initialize_model(model, source_multi, limits_x=limits_x, limits_y=limits_y)
 
                 # Caches the jacobian residual if the data size is unchanged
                 # Note: this will need to change with priors
@@ -398,7 +572,10 @@ class CatalogSourceFitterABC(ABC):
                 # TODO: set limits_flux, transform_flux
                 # (if not config.fit_linear_init)
                 if config.fit_linear_init:
-                    self.modeller.fit_model_linear(model=model, ratio_min=1e-3)
+                    self.modeller.fit_model_linear(model=model, ratio_min=0.01)
+
+                for observation in data:
+                    observation.image.data[~np.isfinite(observation.image.data)] = 0
 
                 result_full = self.modeller.fit_model(
                     model, fitinputs=fitInputs, config=config.config_fit, **kwargs
@@ -407,31 +584,32 @@ class CatalogSourceFitterABC(ABC):
                 results[f"{prefix}n_iter"][idx] = result_full.n_eval_func
                 results[f"{prefix}time_eval"][idx] = result_full.time_eval
                 results[f"{prefix}time_fit"][idx] = result_full.time_run
+                if config.config_fit.eval_residual:
+                    results[f"{prefix}n_eval_jac"][idx] = result_full.n_eval_jac
 
                 # Set all params to best fit values
                 # In case the optimizer doesn't
-                for param, value, column in zip(params, result_full.params_best, columns_write):
+                for (key, (param, offset)), value in zip(columns_param_free.items(), result_full.params_best):
                     param.value_transformed = value
-                    results[column][idx] = param.value
+                    results[key][idx] = param.value + offset
+
+                for key, (param, offset) in columns_param_fixed.items():
+                    results[key][idx] = param.value + offset
 
                 if config.fit_linear_final:
                     loglike_init, loglike_new = self.modeller.fit_model_linear(
                         model=model, ratio_min=0.01, validate=True
                     )
-                    np.sum(loglike_new) - np.sum(loglike_init)
-                    # TODO: See if it makes sense to set only flux params
-                    for param, column in zip(params, columns_write):
+                    results[f"{prefix}delta_ll_fit_linear"][idx] = np.sum(loglike_new) - np.sum(loglike_init)
+                    for column, param in columns_param_flux.items():
                         results[column][idx] = param.value
 
-                if not config.fit_cen_x:
-                    results[column_cen_x][idx] = cen_x.value
-                if not config.fit_cen_y:
-                    results[column_cen_y][idx] = cen_y.value
-
                 if config.convert_cen_xy_to_radec:
-                    radec = self.get_model_radec(source_multi, cen_x.value, cen_y.value)
-                    for value, column in zip(radec, columns_radec):
-                        results[column][idx] = value
+                    for (key_ra, key_dec, key_cen_x, key_cen_y) in columns_params_radec:
+                        # These will have been converted back if necessary
+                        cen_x, cen_y = results[key_cen_x][idx], results[key_cen_y][idx]
+                        radec = self.get_model_radec(source_multi, cen_x, cen_y)
+                        results[key_ra][idx], results[key_dec][idx] = radec
 
                 if compute_errors:
                     errors = []
@@ -510,14 +688,13 @@ class CatalogSourceFitterABC(ABC):
                                 for param in params:
                                     param.fixed = False
 
-                        for value, column in zip(errors, columns_write_err):
-                            results[column][idx] = value
+                        for value, column_err in zip(errors, columns_err):
+                            results[column_err][idx] = value
                         if config.convert_cen_xy_to_radec:
-                            if not config.fit_cen_x and config.fit_cen_y:
-                                # Note this will make naive tests that check
-                                # for all-finite results fail
-                                radec_err = np.nan, np.nan
-                            else:
+                            for (
+                                key_ra_err, key_dec_err, key_cen_x, key_cen_y, key_cen_x_err, key_cen_y_err
+                            ) in columns_params_radec_err:
+                                cen_x, cen_y = results[key_cen_x][idx], results[key_cen_y][idx]
                                 # TODO: improve this
                                 # For one, it won't work right at RA=359.99...
                                 # Could consider dividing by sqrt(2)
@@ -525,13 +702,12 @@ class CatalogSourceFitterABC(ABC):
                                 radec_err = np.array(
                                     self.get_model_radec(
                                         source_multi,
-                                        cen_x.value + errors[0],
-                                        cen_y.value + errors[1],
+                                        cen_x + results[key_cen_x_err][idx],
+                                        cen_y + results[key_cen_y_err][idx],
                                     )
                                 )
                                 radec_err -= radec
-                            for value, column in zip(radec_err, columns_radec_err):
-                                results[column][idx] = np.abs(value)
+                                results[key_ra_err][idx], results[key_dec_err][idx] = np.abs(radec_err)
 
                 results[f"{prefix}chisq_red"][idx] = np.sum(fitInputs.residual**2) / size
                 results[f"{prefix}time_full"][idx] = time.process_time() - time_init
@@ -544,7 +720,8 @@ class CatalogSourceFitterABC(ABC):
                 else:
                     row[f"{prefix}unknown_flag"] = True
                     logger.info(
-                        f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}", exc_info=1
+                        f"{id_source=} ({idx=}/{n_rows}) fit failed with unexpected exception={e}",
+                        exc_info=1
                     )
         return results
 
@@ -570,8 +747,9 @@ class CatalogSourceFitterABC(ABC):
         idx_row: int,
         catalog_multi: Sequence,
         catexps: list[CatalogExposureSourcesABC],
-        config: CatalogSourceFitterConfig = None,
+        config_data: CatalogSourceFitterConfigData = None,
         results: astropy.table.Table = None,
+        **kwargs: Any
     ) -> g2f.Model:
         """Reconstruct the model for a single row of a fit catalog.
 
@@ -583,20 +761,28 @@ class CatalogSourceFitterABC(ABC):
             The multi-band catalog originally used for initialization.
         catexps
             The catalog-exposure pairs to reconstruct the model for.
-        config
+        config_data
             The configuration used to generate sources.
             Default-initialized if None.
         results
             The corresponding best-fit parameter catalog to initialize
             parameter values from.
+        **kwargs
+            Additional keyword arguments to pass to initialize_model. Not
+            used during fitting.
 
         Returns
         -------
         model
             The reconstructed model.
         """
-        if config is None:
-            config = CatalogSourceFitterConfig()
+        channels = self.get_channels(catexps)
+        if config_data is None:
+            config_data = CatalogSourceFitterConfigData(
+                config=CatalogSourceFitterConfig,
+                channels=list(channels.values()),
+            )
+        config = config_data.config
 
         if not idx_row >= 0:
             raise ValueError(f"{idx_row=} !>=0")
@@ -605,25 +791,20 @@ class CatalogSourceFitterABC(ABC):
         if (results is not None) and not (len(results) > idx_row):
             raise ValueError(f"{len(results)=} !> {idx_row=}")
 
-        channels = self.get_channels(catexps)
-        model_source, priors, limits_x, limits_y, *_ = config.make_source(channels=list(channels.values()))
+        model_sources, priors = config_data.sources_priors
         source_multi = catalog_multi[idx_row]
 
-        model, data, psfmodels = config.make_model_data(
-            idx_source=idx_row,
-            model_priors=(model_source, priors),
+        data, psf_models = config.make_model_data(
+            idx_row=idx_row,
             catexps=catexps,
         )
-        self.initialize_model(model, source_multi, limits_x=limits_x, limits_y=limits_y)
+        model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
+        self.initialize_model(model, source_multi, catexps, **kwargs)
 
         if results is not None:
-            params = get_params_uniq(model_source, fixed=False)
-            columns = list(results.columns)
             row = results[idx_row]
-            idx_col_start = columns.index(f"{config.prefix_column}cen_x")
-            n_params = len(params)
-            for param, column in zip(params, columns[idx_col_start : idx_col_start + n_params]):
-                param.value = row[column]
+            for column, param in config_data.parameters.items():
+                param.value = row[f"{config.prefix_column}{column}"]
 
         return model
 
@@ -635,20 +816,57 @@ class CatalogSourceFitterABC(ABC):
         self,
         model: g2f.Model,
         source: Mapping[str, Any],
-        limits_x: g2f.LimitsD = None,
-        limits_y: g2f.LimitsD = None,
+        catexps: list[CatalogExposureSourcesABC],
+        values_init: Mapping[g2f.ParameterD, float] | None = None,
+        centroid_pixel_offset: float = 0,
+        **kwargs: Any
     ) -> None:
         """Initialize a Model for a single source row.
 
         Parameters
         ----------
-        model : `gauss2d.fit.Model`
+        model
             The model object to initialize.
-        source : typing.Mapping[str, typing.Any]
+        source
             A mapping with fields expected to be populated in the
             corresponding source catalog for initialization.
-        limits_x : `gauss2d.fit.LimitsD`
-            Hard limits for the source's x centroid.
-        limits_y : `gauss2d.fit.LimitsD`
-            Hard limits for the source's y centroid.
+        catexps
+            A list of (source and psf) catalog-exposure pairs.
+        values_init
+            Initial parameter values from the model configuration.
+        centroid_pixel_offset
+            The value of the offset required to convert pixel centroids from
+            MultiProFit coordinates to catalog coordinates.
+        **kwargs
+            Additional keyword arguments that cannot be required for fitting.
         """
+
+    @abstractmethod
+    def validate_fit_inputs(
+        self,
+        catalog_multi: Sequence,
+        catexps: list[CatalogExposureSourcesABC],
+        config_data: CatalogSourceFitterConfigData = None,
+        logger: logging.Logger = None,
+        **kwargs: Any,
+    ) -> None:
+        """Validate inputs to self.fit.
+
+        This method is called before any fitting is done. It may be used for
+        any purpose, including checking that the inputs are a particular
+        subclass of the base classes.
+
+        Parameters
+        ----------
+        catalog_multi
+            A multi-band source catalog to fit a model to.
+        catexps
+            A list of (source and psf) catalog-exposure pairs.
+        config_data
+            Configuration settings and data for fitting and output.
+        logger
+            The logger. Defaults to calling `_getlogger`.
+        **kwargs
+            Additional keyword arguments to pass to self.modeller.
+        """
+        pass

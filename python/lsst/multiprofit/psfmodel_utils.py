@@ -27,6 +27,7 @@ from .limits import limits_ref
 __all__ = ["make_psf_source"]
 
 
+# TODO: This function should be replaced with SourceConfig.make_source
 def make_psf_source(
     sigma_xs: list[float] | None = None,
     sigma_ys: list[float] | None = None,
@@ -39,23 +40,23 @@ def make_psf_source(
 
     Parameters
     ----------
-    sigma_xs : list[float]
+    sigma_xs
         Gaussian sigma_x values.
-    sigma_ys : list[float]
+    sigma_ys
         Gaussian sigma_y values.
-    rhos : list[float]
+    rhos
         Gaussian rho values.
-    fracs : list[float]
+    fracs
         Gaussian sigma_x values.
-    transforms : dict[str, gauss2d.fit.TransformD]
+    transforms
         Dict of transforms by variable name (frac/rho/sigma). If not set,
         will default to Logit/LogitLimited/Log10, respectively.
-    limits_rho : gauss2d.fit.LimitsD
+    limits_rho
         Limits for rho parameters. Defaults to limits_ref['rho'].
 
     Returns
     -------
-    source : gauss2d.fit.Source
+    source
         A source model with Gaussians initialized as specified.
 
     Notes

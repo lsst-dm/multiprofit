@@ -32,6 +32,7 @@ import pydantic
 from pydantic.dataclasses import dataclass
 import scipy.optimize as spopt
 
+from .model_utils import make_image_gaussians, make_psf_model_null
 from .utils import ArbitraryAllowedConfig, get_params_uniq
 
 try:
@@ -48,7 +49,7 @@ __all__ = [
     "fitmethods_linear",
     "LinearGaussians",
     "make_image_gaussians",
-    "make_psfmodel_null",
+    "make_psf_model_null",
     "FitInputsBase",
     "FitInputsDummy",
     "ModelFitConfig",
@@ -81,7 +82,7 @@ class LinearGaussians:
 
     @staticmethod
     def make(
-        componentmixture: g2f.ComponentMixture,
+        component_mixture: g2f.ComponentMixture,
         channel: g2f.Channel = None,
         is_psf: bool = False,
     ):
@@ -89,7 +90,7 @@ class LinearGaussians:
 
         Parameters
         ----------
-        componentmixture
+        component_mixture
             A component mixture to initialize Gaussians from.
         channel
             The channel all Gaussians are applicable for.
@@ -104,9 +105,9 @@ class LinearGaussians:
         """
         if channel is None:
             channel = g2f.Channel.NONE
-        components = componentmixture.components
+        components = component_mixture.components
         if len(components) == 0:
-            raise ValueError(f"Can't get linear Source from {componentmixture=} with no components")
+            raise ValueError(f"Can't get linear Source from {component_mixture=} with no components")
 
         gaussians_free = []
         gaussians_fixed = []
@@ -132,54 +133,6 @@ class LinearGaussians:
         return LinearGaussians(
             gaussians_fixed=g2.Gaussians(gaussians_fixed), gaussians_free=tuple(gaussians_free)
         )
-
-
-def make_image_gaussians(
-    gaussians_source: g2.Gaussians,
-    gaussians_kernel: g2.Gaussians | None = None,
-    **kwargs: Any,
-) -> g2.ImageD:
-    """Make an image array from a set of Gaussians.
-
-    Parameters
-    ----------
-    gaussians_source
-        Gaussians representing components of sources.
-    gaussians_kernel
-        Gaussians representing the smoothing kernel.
-    **kwargs
-        Additional keyword arguments to pass to gauss2d.make_gaussians_pixel_D
-        (i.e. image size, etc).
-
-    Returns
-    -------
-    image
-        The rendered image of the given Gaussians.
-    """
-    if gaussians_kernel is None:
-        gaussians_kernel = g2.Gaussians([g2.Gaussian()])
-    n_gaussians_kernel = len(gaussians_kernel)
-    n_gaussians_source = len(gaussians_source)
-    gaussians = g2.ConvolvedGaussians(
-        [
-            g2.ConvolvedGaussian(source=source, kernel=kernel)
-            for source in (gaussians_source.at(idx) for idx in range(n_gaussians_source))
-            for kernel in (gaussians_kernel.at(idx) for idx in range(n_gaussians_kernel))
-        ]
-    )
-    return g2.make_gaussians_pixel_D(gaussians=gaussians, **kwargs)
-
-
-def make_psfmodel_null() -> g2f.PsfModel:
-    """Make a default (null) PSF model.
-
-    Returns
-    -------
-    model
-        A null PSF model consisting of a single, normalized, zero-size
-        Gaussian.
-    """
-    return g2f.PsfModel(g2f.GaussianComponent.make_uniq_default_gaussians([0], True))
 
 
 class FitInputsBase(ABC):
@@ -354,7 +307,7 @@ class FitInputs(FitInputsBase):
                 if not all(self.residuals[idx_obs].shape == shape_obs):
                     errors.append(f"{self.residuals[idx_obs].shape=} != {shape_obs=}")
 
-        shape_residual_prior = (n_prior_residuals, n_params_jac)
+        shape_residual_prior = [1, n_prior_residuals]
         if len(self.outputs_prior) != n_params_jac:
             errors.append(f"{len(self.outputs_prior)=} != {n_params_jac=}")
         elif n_prior_residuals > 0:
@@ -363,7 +316,6 @@ class FitInputs(FitInputsBase):
                     errors.append(f"{self.outputs_prior[idx].shape=} != {shape_residual_prior=}")
 
         if n_prior_residuals > 0:
-            shape_residual_prior = (1, n_prior_residuals)
             if self.residuals_prior.shape != shape_residual_prior:
                 errors.append(f"{self.residuals_prior.shape=} != {shape_residual_prior=}")
 
@@ -373,6 +325,11 @@ class FitInputs(FitInputsBase):
 class ModelFitConfig(pexConfig.Config):
     """Configuration for model fitting."""
 
+    eval_residual = pexConfig.Field[bool](
+        doc="Whether to evaluate the residual every iteration before the Jacobian, which can improve "
+            "performance if most steps do not call the Jacobian function",
+        default=True,
+    )
     fit_linear_iter = pexConfig.Field[int](
         doc="The number of iterations to wait before performing a linear fit during optimization."
         " Default 0 disables the feature.",
@@ -448,7 +405,7 @@ class Modeller:
     def fit_gaussians_linear(
         gaussians_linear: LinearGaussians,
         observation: g2f.Observation,
-        psfmodel: g2f.PsfModel = None,
+        psf_model: g2f.PsfModel = None,
         fitmethods: dict[str, dict[str, Any]] = None,
         plot: bool = False,
     ) -> dict[str, FitResult]:
@@ -460,7 +417,7 @@ class Modeller:
             The Gaussian components - fixed or otherwise - to fit.
         observation : gauss2d.fit.Observation
             The observation to fit against.
-        psfmodel : gauss2d.fit.PsfModel
+        psf_model : gauss2d.fit.PsfModel
             A PSF model for the observation, if fitting sources.
         fitmethods : dict[str, dict[str, Any]]
             A dictionary of fitting methods to employ, keyed by method name,
@@ -473,8 +430,8 @@ class Modeller:
         results : dict[str, FitResult]
             Fit results for each method, keyed by the fit method name.
         """
-        if psfmodel is None:
-            psfmodel = make_psfmodel_null()
+        if psf_model is None:
+            psf_model = make_psf_model_null()
         if fitmethods is None:
             fitmethods = {"scipy.optimize.nnls": fitmethods_linear["scipy.optimize.nnls"]}
         else:
@@ -484,18 +441,28 @@ class Modeller:
         n_params = len(gaussians_linear.gaussians_free)
         if not (n_params > 0):
             raise ValueError(f"!({len(gaussians_linear.gaussians_free)=}>0); can't fit with no free params")
-        image = observation.image.data
+        image = observation.image
         shape = image.shape
+        coordsys = image.coordsys
 
         mask_inv = observation.mask_inv.data
         sigma_inv = observation.sigma_inv.data
+        bad = ~(sigma_inv > 0)
+        n_bad = np.sum(bad)
+        mask_init_is_None = mask_inv is None
+
+        if mask_init_is_None is None and (n_bad > 0):
+            mask_inv = ~bad
+
         if mask_inv is None:
             size = np.prod(shape)
         else:
+            if not mask_init_is_None:
+                mask_inv &= ~bad
             sigma_inv = sigma_inv[mask_inv]
             size = np.sum(mask_inv)
 
-        gaussians_psf = psfmodel.gaussians(g2f.Channel.NONE)
+        gaussians_psf = psf_model.gaussians(g2f.Channel.NONE)
         if len(gaussians_linear.gaussians_fixed) > 0:
             image_fixed = make_image_gaussians(
                 gaussians_source=gaussians_linear.gaussians_fixed,
@@ -517,6 +484,7 @@ class Modeller:
                 gaussians_kernel=gaussians_psf,
                 n_rows=shape[0],
                 n_cols=shape[1],
+                coordsys=coordsys,
             ).data
             x[:, idx_param] = ((image_free if mask_inv is None else image_free[mask_inv]) * sigma_inv).flat
             params[idx_param] = param
@@ -597,28 +565,47 @@ class Modeller:
                 newline = "\n"
                 raise ValueError(f"fitinputs validation got errors:\n{newline.join(errors)}")
 
-        def residual_func(params_new, model, params, result):
+        def residual_func(params_new, model_jac, model_ll, params, result, jac):
             if not all(~np.isnan(params_new)):
-                raise InvalidProposalError(f"optimizer for {model=} proposed non-finite {params_new=}")
+                raise InvalidProposalError(f"optimizer for {model_ll=} proposed non-finite {params_new=}")
             try:
                 for param, value in zip(params, params_new):
                     param.value_transformed = value
                     if not np.isfinite(param.value):
                         raise RuntimeError(f"{param=} set to (transformed) non-finite {value=}")
             except RuntimeError as e:
-                raise InvalidProposalError(f"optimizer for {model=} proposal generated error={e}")
+                raise InvalidProposalError(f"optimizer for {model_ll=} proposal generated error={e}")
             config_fit = result.config
             fit_linear_iter = config_fit.fit_linear_iter
             if (fit_linear_iter > 0) and ((result.n_eval_resid + 1) % fit_linear_iter == 0):
-                self.fit_model_linear(model, ratio_min=1e-6)
+                self.fit_model_linear(model_ll, ratio_min=1e-6)
             time_init = time.process_time()
-            model.evaluate()
+            if config_fit.eval_residual:
+                model_ll.evaluate()
+            else:
+                model_jac.evaluate()
             result.time_eval += time.process_time() - time_init
             result.n_eval_resid += 1
-            return result.inputs.residual
+            return -result.inputs.residual
 
-        def jacobian_func(params_new, model, params, result):
-            return -result.inputs.jacobian[:, 1:]
+        def jacobian_func(params_new, model_jac, model_ll, params, result, jac):
+            if result.config.eval_residual:
+                time_init = time.process_time()
+                model_jac.evaluate()
+                result.time_eval += time.process_time() - time_init
+            return jac
+
+        if config.eval_residual:
+            model_ll = g2f.Model(
+                data=model.data, psfmodels=model.psfmodels, sources=model.sources, priors=model.priors,
+            )
+            model_ll.setup_evaluators(
+                evaluatormode=g2f.Model.EvaluatorMode.loglike,
+                residuals=fitinputs.residuals,
+                residuals_prior=fitinputs.residuals_prior,
+            )
+        else:
+            model_ll = None
 
         model.setup_evaluators(
             evaluatormode=g2f.Model.EvaluatorMode.jacobian,
@@ -630,7 +617,51 @@ class Modeller:
             force=True,
         )
 
-        params_free = tuple(get_params_uniq(model, fixed=False))
+        offsets_params = dict(model.offsets_parameters())
+        params_offsets = {v: k for (k, v) in offsets_params.items()}
+        params_free = tuple(params_offsets[idx] for idx in range(1, len(offsets_params) + 1))
+        params_free_sorted_all = tuple(get_params_uniq(model, fixed=False))
+        params_free_sorted = []
+        params_free_sorted_missing = []
+
+        # If we were forced to drop an observation, re-generate the modeller
+        # Only integral parameters should be missing
+        for param in params_free_sorted_all:
+            if param in params_offsets.values():
+                params_free_sorted.append(param)
+            else:
+                if not isinstance(param, g2f.IntegralParameterD):
+                    raise RuntimeError(f"non-integral {param=} missing from {offsets_params=}")
+                param.limits = g2f.LimitsD(param.min, param.max)
+                param.value = param.min
+                param.fixed = True
+                params_free_sorted_missing.append(param)
+
+        if params_free_sorted_missing:
+            if config.eval_residual:
+                model_ll.setup_evaluators(
+                    evaluatormode=g2f.Model.EvaluatorMode.loglike,
+                    residuals=fitinputs.residuals,
+                    residuals_prior=fitinputs.residuals_prior,
+                    force=True,
+                )
+            fitinputs = FitInputs.from_model(model)
+            model.setup_evaluators(
+                evaluatormode=g2f.Model.EvaluatorMode.jacobian,
+                outputs=fitinputs.jacobians,
+                residuals=fitinputs.residuals,
+                outputs_prior=fitinputs.outputs_prior,
+                residuals_prior=fitinputs.residuals_prior,
+                print=printout,
+                force=True,
+            )
+            params_free_sorted = tuple(params_free_sorted)
+        else:
+            params_free_sorted = params_free_sorted_all
+
+        jac = fitinputs.jacobian[:, 1:]
+        # Assert that this is a view, otherwise this won't work
+        assert id(jac.base) == id(fitinputs.jacobian)
         n_params_free = len(params_free)
         bounds = ([None] * n_params_free, [None] * n_params_free)
         params_init = [None] * n_params_free
@@ -656,20 +687,35 @@ class Modeller:
 
         results = FitResult(inputs=fitinputs, config=config)
         time_init = time.process_time()
+        _ll_init = model.evaluate()
+        x_scale_jac_clipped = np.clip(1.0/(np.sum(jac**2, axis=0)**0.5), 1e-5, 1e19)
         result_opt = spopt.least_squares(
             residual_func,
             params_init,
             jac=jacobian_func,
             bounds=bounds,
-            args=(model, params_free, results),
-            x_scale="jac",
+            args=(model, model_ll, params_free, results, jac),
+            x_scale=x_scale_jac_clipped,
             **kwargs,
         )
         results.time_run = time.process_time() - time_init
         results.result = result_opt
-        results.params_best = result_opt.x
+        if params_free_sorted_missing:
+            params_best = []
+            for param in params_free_sorted_all:
+                if param in params_free_sorted_missing:
+                    params_best.append(param.value)
+                    param.fixed = False
+                else:
+                    params_best.append(result_opt.x[offsets_params[param] - 1])
+            results.params_best = tuple(params_best)
+        else:
+            results.params_best = tuple(
+                result_opt.x[offsets_params[param] - 1] for param in params_free_sorted
+            )
         results.n_eval_func = result_opt.nfev
         results.n_eval_jac = result_opt.njev if result_opt.njev else 0
+
         return results
 
     # TODO: change to staticmethod if requiring py3.10+
@@ -703,7 +749,7 @@ class Modeller:
         for idx_obs in indices:
             obs = model.data[idx_obs]
             gaussians_linear = LinearGaussians.make(model.sources[0], channel=obs.channel)
-            result = cls.fit_gaussians_linear(gaussians_linear, obs, psfmodel=model.psfmodels[idx_obs])
+            result = cls.fit_gaussians_linear(gaussians_linear, obs, psf_model=model.psfmodels[idx_obs])
             values = list(result.values())[0]
 
             for (_, parameter), ratio in zip(gaussians_linear.gaussians_free, values):
@@ -714,6 +760,13 @@ class Modeller:
                 values_new[parameter] = value_new
 
         for parameter, value in values_new.items():
+            # TODO: maybe just np.clip instead
+            if not (value > parameter.limits.min):
+                value = parameter.limits.min + (1e-5 if (parameter.limits.max == np.Inf) else (
+                    0.02 * (parameter.limits.max - parameter.limits.min)
+                ))
+            elif not (value < parameter.limits.max):
+                value = parameter.limits.min + 0.98*(parameter.limits.max - parameter.limits.min)
             parameter.value = value
 
         if validate:
@@ -727,13 +780,13 @@ class Modeller:
 
     @staticmethod
     def make_components_linear(
-        componentmixture: g2f.ComponentMixture,
+        component_mixture: g2f.ComponentMixture,
     ) -> list[g2f.GaussianComponent]:
         """Make a list of fixed Gaussian components from a ComponentMixture.
 
         Parameters
         ----------
-        componentmixture : `gauss2d.fit.ComponentMixture`
+        component_mixture : `gauss2d.fit.ComponentMixture`
             A component mixture to create a component list for.
 
         Returns
@@ -742,9 +795,9 @@ class Modeller:
             A list of Gaussians components with fixed parameters and values
             matching those in the original component mixture.
         """
-        components = componentmixture.components
+        components = component_mixture.components
         if len(components) == 0:
-            raise ValueError(f"Can't get linear Source from {componentmixture=} with no components")
+            raise ValueError(f"Can't get linear Source from {component_mixture=} with no components")
         components_new = [None] * len(components)
         for idx, component in enumerate(components):
             gaussians = component.gaussians(g2f.Channel.NONE)

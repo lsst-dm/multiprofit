@@ -1,3 +1,24 @@
+# This file is part of multiprofit.
+#
+# Developed for the LSST Data Management System.
+# This product includes software developed by the LSST Project
+# (https://www.lsst.org).
+# See the COPYRIGHT file at the top-level directory of this distribution
+# for details of code ownership.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import cycle
@@ -5,8 +26,10 @@ from typing import Any, Iterable, Type, TypeAlias
 
 import astropy.table
 import astropy.visualization as apVis
+import gauss2d as g2
 import gauss2d.fit as g2f
 import matplotlib as mpl
+import matplotlib.axes
 import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,17 +37,46 @@ import numpy as np
 from .utils import get_params_uniq
 
 __all__ = [
+    "abs_mag_sol_lsst",
+    "bands_weights_lsst",
     "ErrorValues",
+    "Interpolator",
     "plot_catalog_bootstrap",
     "plot_loglike",
     "plot_model_rgb",
-    "Interpolator",
     "plot_sersicmix_interp",
 ]
 
+# See Wilmer 2018 (https://iopscience.iop.org/article/10.3847/1538-4365/aabfdf)
+# LSST ugrizy ABmags are:
+abs_mag_sol_lsst = {
+    "y": 4.50,
+    "z": 4.51,
+    "i": 4.52,
+    "r": 4.64,
+    "g": 5.06,
+    "u": 6.27,
+}
+# fluxes = u.ABmag.to(u.nanojansky, list(abs_mag_sol_lsst.values()))
+# # = ['5.754e+10', '5.702e+10', '5.649e+10',
+# #    '5.058e+10', '3.436e+10', '1.127e+10']
+# weights = 6*(1/fluxes)/np.sum(1/fluxes)
+
+bands_weights_lsst = {
+    'y': 0.5481722621482569,
+    'z': 0.553244437640313,
+    'i': 0.5583635453943578,
+    'r': 0.6236157227514114,
+    'g': 0.9181572253205194,
+    'u': 2.798446806745142,
+}
 
 linestyles_default = ["--", "-.", ":"]
 ln10 = np.log(10)
+
+Figure = matplotlib.figure.Figure
+Axes = matplotlib.axes.Axes | Iterable[matplotlib.axes.Axes]
+FigureAxes = tuple[Figure, Axes]
 
 
 @dataclass(kw_only=True)
@@ -331,21 +383,40 @@ def plot_loglike(
 
 
 def plot_model_rgb(
-    model: g2f.Model,
+    model: g2f.Model | None,
     weights: dict[str, float] | None = None,
     high_sn_threshold: float | None = None,
-) -> tuple[plt.Figure, plt.Axes, plt.Figure, plt.Axes, np.ndarray]:
+    plot_singleband: bool = True,
+    chi_max: float = 5.,
+    rgb_min_auto: bool = False,
+    rgb_stretch_auto: bool = False,
+    **kwargs
+) -> tuple[Figure, Axes, Figure, Axes, np.ndarray]:
     """Plot RGB images of a model, its data and residuals thereof.
 
     Parameters
     ----------
     model
-        The model to plot.
+        The model to plot. If None, only the data are plotted.
     weights
         Linear weights to multiply each band's image by.
     high_sn_threshold
-        If non-None, will return an image with the pixels having a model S/N
-        above this threshold in every band.
+        If non-None and given a model, this will return an image with the
+        pixels having a model S/N above this threshold in every band.
+    plot_singleband
+        Whether to make grayscale plots for each band.
+    chi_max
+        The maximum absolute value of chi in residual plots. Values of 3-5 are
+        suitable for good models while inadequate ones may need larger values.
+    rgb_min_auto
+        Whether to set the minimum in RGB plots automatically. Cannot supply
+        minimum in kwargs if enabled.
+    rgb_stretch_auto
+        Whether to set the stretch in RGB plots automatically. Cannot supply
+        stretch in kwargs if enabled.
+    **kwargs
+        Additional keyword arguments to pass to make_lupton_rgb when creating
+        RGB images.
 
     Returns
     -------
@@ -360,47 +431,178 @@ def plot_model_rgb(
     mask_inv_highsn
         The inverse mask (1=selected) if high_sn_threshold was specified.
     """
+    if rgb_min_auto and "minimum" in kwargs:
+        raise ValueError(f"Cannot set rgb_min_auto and pass {kwargs['minimum']=}")
+    if rgb_stretch_auto and "stretch" in kwargs:
+        raise ValueError(f"Cannot set rgb_stretch_auto and pass {kwargs['stretch']=}")
+    if not (chi_max > 0):
+        raise ValueError(f"{chi_max=} not >0")
     if weights is None:
-        bands_set = {}
-        bands = []
-        for obs in model.data:
-            band = obs.channel.name
-            if band not in bands_set:
-                bands_set.add(band)
-                bands.append(band)
-                weights[band] = 1.0
+        if model is None:
+            weights = {band: 1.0 for band in kwargs["observations"].keys()}
+        else:
+            bands_set = set()
+            bands = []
+            weights = {}
+            for obs in model.data:
+                band = obs.channel.name
+                if band not in bands_set:
+                    bands_set.add(band)
+                    bands.append(band)
+                    weights[band] = 1.0
     bands = tuple(weights.keys())
     band_str = ",".join(bands)
+    has_model = model is not None
+    n_bands = len(bands)
 
-    if any([output is None for output in model.outputs]):
+    if has_model and (not model.outputs or any([output is None for output in model.outputs])):
         model.setup_evaluators(model.EvaluatorMode.image)
         model.evaluate()
 
-    observations = {}
+    if has_model:
+        observations = {}
+    else:
+        obs_kwarg = kwargs.pop("observations")
+        observations = {band: obs_kwarg[band] for band in bands}
+
     models = {}
-    for obs, output in zip(model.data, model.outputs):
-        band = obs.channel.name
-        if band in bands:
-            if band in observations:
-                raise ValueError(f"Cannot plot {model=} because {band=} has multiple observations")
-            observations[band] = obs
-            models[band] = output.data
+    x_min, x_max, y_min, y_max = np.Inf, -np.Inf, np.Inf, -np.Inf
+    coordsys_last = None
+    if has_model:
+        for obs, output in zip(model.data, model.outputs):
+            band = obs.channel.name
+            if band in bands:
+                if band in observations:
+                    raise ValueError(f"Cannot plot {model=} because {band=} has multiple observations")
+                observations[band] = obs
+                models[band] = output.data
 
-    img_rgb = apVis.make_lupton_rgb(
-        *[observation.image.data * weights[band] for band, observation in observations.items()]
-    )
-    img_model_rgb = apVis.make_lupton_rgb(
-        *[output.data * weight for output, weight in zip(model.outputs, weights.values())]
-    )
-    fig_rgb, ax_rgb = plt.subplots(2, 2)
-    fig_gs, ax_gs = plt.subplots(2, len(bands))
-    ax_rgb[0][0].imshow(img_model_rgb)
-    ax_rgb[0][0].set_title(f"Model ({band_str})")
-    ax_rgb[1][0].imshow(img_rgb)
-    ax_rgb[1][0].set_title("Data")
+    for band, obs in observations.items():
+        coordsys = obs.image.coordsys
+        if coordsys:
+            coordsys_last = coordsys
+            x_min = int(round(min(x_min, coordsys.x_min), 0))
+            x_max = int(round(max(x_max, coordsys.x_min + obs.image.n_cols), 0))
+            y_min = int(round(min(y_min, coordsys.y_min), 0))
+            y_max = int(round(max(y_max, coordsys.y_min + obs.image.n_rows), 0))
+        elif coordsys_last is not None:
+            raise ValueError(f"coordinate system for {band=} is None but last was not; they must either "
+                             f"all be None or all non-None")
 
-    residuals = {}
-    imgs_sigma_inv = {}
+    if coordsys_last:
+        shape_new = (y_max - y_min, x_max - x_min)
+        keys = ("image", "mask_inv", "sigma_inv")
+        if has_model:
+            keys += ("model",)
+        for band, obs in observations.items():
+            coordsys = obs.image.coordsys
+            x_min_c = int(round(coordsys.x_min, 0)) - x_min
+            y_min_c = int(round(coordsys.y_min, 0)) - y_min
+            x_min_o, x_max_o = x_min_c, x_min_c + obs.image.n_cols
+            y_min_o, y_max_o = y_min_c, y_min_c + obs.image.n_rows
+            if x_min_o or x_max_o or y_min_o or y_max_o:
+                # zero-pad the relevant images into a new observation
+                data_new = {}
+                for key in keys:
+                    img = np.zeros(shape_new)
+                    img[y_min_o:y_max_o, x_min_o:x_max_o] = (
+                        models[band] if (key == "model") else getattr(obs, key).data
+                    )
+                    if key == "model":
+                        models[band] = img
+                    else:
+                        data_new[key] = (g2.ImageB if (key == "mask_inv") else g2.ImageD)(img)
+                observations[band] = g2f.Observation(channel=obs.channel, **data_new)
+
+    extent = (x_min, x_max, y_min, y_max)
+
+    images_data = [None] * 3
+    images_data_unweighted = [None] * 3 if has_model else None
+    images_model = [None] * 3 if has_model else None
+    images_model_unweighted = [None] * 3 if has_model else None
+    images_sigma_inv = [None] * 3 if has_model else None
+    masks_inv_rgb = [None] * 3
+
+    weights_channel = np.linspace(0, 3, len(weights) + 1)[1:]
+    idx_channel = 0
+    weight_channel = 0
+
+    def add_if_not_none(array, index, arg):
+        if array[index] is not None:
+            array[index] += arg
+        else:
+            array[index] = arg
+
+    for idx_band, (band, weight) in enumerate(weights.items()):
+        observation = observations[band]
+        if has_model:
+            model_band = models[band]
+            variance_band = observation.sigma_inv.data ** -2
+        weight_channel_new = weights_channel[idx_band]
+        idx_channel_new = int(weight_channel_new // 1)
+        if idx_channel_new == idx_channel:
+            weight_low = weight_channel_new - weight_channel
+            weight_high = 0.
+        else:
+            weight_low = idx_channel_new - weight_channel
+            weight_high = weight_channel_new - idx_channel_new
+        assert weight_high >= 0
+        assert weight_low >= 0
+        if weight_low > 0:
+            data_band = observation.image.data * weight_low
+            add_if_not_none(images_data, idx_channel, data_band * weight)
+            add_if_not_none(masks_inv_rgb, idx_channel, observation.mask_inv.data*weight_low)
+            if has_model:
+                add_if_not_none(images_data_unweighted, idx_channel, data_band)
+                model_sub = model_band * weight_low
+                add_if_not_none(images_model, idx_channel, model_sub * weight)
+                add_if_not_none(images_model_unweighted, idx_channel, model_sub)
+                add_if_not_none(images_sigma_inv, idx_channel, variance_band * weight_low)
+        if (idx_channel_new != idx_channel) and (weight_high > 0):
+            data_band = observation.image.data * weight_high
+            images_data[idx_channel_new] = data_band * weight
+            masks_inv_rgb[idx_channel_new] = observation.mask_inv.data * weight_low
+            if has_model:
+                images_model_unweighted[idx_channel_new] = data_band
+                model_sub = model_band * weight_high
+                images_model[idx_channel_new] = model_sub * weight
+                images_model_unweighted[idx_channel_new] = model_sub
+                images_sigma_inv[idx_channel_new] = variance_band * weight_high
+        weight_channel = weight_channel_new
+        idx_channel = idx_channel_new
+
+    # convert variance to 1/sigma
+    if has_model:
+        for idx in range(3):
+            images_sigma_inv[idx] = 1 / np.sqrt(images_sigma_inv[idx])
+
+    if rgb_min_auto or rgb_stretch_auto:
+        # The model won't have negative pixels, so it ought to stretch fine
+        # the max/stretch is not as important anyway
+        rgb_min, rgb_max = np.nanpercentile(
+            np.concatenate([image[mask_inv != 0] for mask_inv, image in zip(masks_inv_rgb, images_data)]),
+            (5, 95)
+        )
+        if rgb_min_auto:
+            kwargs["minimum"] = rgb_min
+        if rgb_stretch_auto:
+            kwargs["stretch"] = 2*(rgb_max - rgb_min)
+
+    img_rgb = apVis.make_lupton_rgb(*images_data, **kwargs)
+    if has_model:
+        img_model_rgb = apVis.make_lupton_rgb(*images_model, **kwargs)
+    aspect = np.clip((y_max - y_min) / (x_max - x_min), 0.25, 4)
+
+    fig_rgb, ax_rgb = plt.subplots(1 + has_model, 1 + has_model, figsize=(16, 16 * aspect))
+    fig_gs, ax_gs = (None, None) if not plot_singleband else plt.subplots(
+        nrows=n_bands, ncols=1 + has_model, figsize=(8 * (1 + has_model), 8 * aspect * n_bands)
+    )
+    (ax_rgb[0][0] if has_model else ax_rgb).imshow(img_rgb, extent=extent, origin="lower")
+    (ax_rgb[0][0] if has_model else ax_rgb).set_title("Data")
+    if has_model:
+        ax_rgb[1][0].imshow(img_model_rgb, extent=extent, origin="lower")
+        ax_rgb[1][0].set_title(f"Model ({band_str})")
+
     masks_inv = {}
     # Create a mask of high-sn pixels (based on the model)
     mask_inv_highsn = np.ones(img_rgb.shape[:1], dtype="bool") if high_sn_threshold else None
@@ -411,52 +613,62 @@ def plot_model_rgb(
         masks_inv[band] = mask_inv
         img_data = obs.image.data
         img_sigma_inv = obs.sigma_inv.data
-        imgs_sigma_inv[band] = img_sigma_inv
-        img_model = model.outputs[idx].data
-        if mask_inv_highsn:
-            mask_inv_highsn *= (img_model * np.nanmedian(img_sigma_inv)) > high_sn_threshold
-        residual = (img_data - img_model) * mask_inv
-        residuals[band] = residual
-        value_max = np.percentile(np.abs(residual), 98)
-        ax_gs[0][idx].imshow(residual, cmap="gray", vmin=-value_max, vmax=value_max)
-        ax_gs[0][idx].tick_params(labelleft=False)
-        ax_gs[1][idx].imshow(np.clip(residual * img_sigma_inv, -20, 20), cmap="gray")
-        ax_gs[1][idx].tick_params(labelleft=False)
+        if plot_singleband:
+            if has_model:
+                img_model = models[band]
+                if mask_inv_highsn:
+                    mask_inv_highsn *= (img_model * np.nanmedian(img_sigma_inv)) > high_sn_threshold
+                residual = (img_data - img_model) * mask_inv
+                value_max = np.nanpercentile(np.abs(residual), 98)
+                ax_gs[idx][0].imshow(residual, cmap="gray", vmin=-value_max, vmax=value_max, origin="lower")
+                ax_gs[idx][0].tick_params(labelleft=False)
+                ax_gs[idx][0].set_title(f"{band}-band Residual (abs.)")
+                ax_gs[idx][1].imshow(
+                    np.clip(residual * img_sigma_inv, -chi_max, chi_max),
+                    cmap="gray", origin="lower",
+                )
+                ax_gs[idx][1].tick_params(labelleft=False)
+                ax_gs[idx][1].set_title(f"{band}-band Residual (chi, +/- {chi_max:.2f})")
+            else:
+                ax_gs[idx].imshow(img_data * mask_inv * (img_sigma_inv > 0), cmap="gray", origin="lower")
+                ax_gs[idx].set_title(band)
 
-    mask_inv_all = np.prod(list(masks_inv.values()), axis=0)
+    if has_model:
+        # TODO: Draw masks in each channel? or total?
+        # mask_inv_all = np.prod(list(masks_inv.values()), axis=0)
+        residuals = [(images_model_unweighted[idx] - images_data_unweighted[idx]) for idx in range(3)]
+        resid_max = np.nanpercentile(
+            np.abs(np.concatenate([residual[np.isfinite(residual)] for residual in residuals])), 98
+        )
 
-    resid_max = np.percentile(
-        np.abs(np.concatenate([(residual * mask_inv_all).flat for residual in residuals.values()])), 98
-    )
+        # This may or may not be equivalent to make_lupton_rgb
+        # I just can't figure out how to get that scaled so zero = 50% gray
+        stretch = 3
+        residual_rgb = np.stack(
+            [
+                np.arcsinh(np.clip(residuals[idx], -resid_max, resid_max) * stretch)
+                for idx in range(3)
+            ],
+            axis=-1,
+        )
+        residual_rgb /= 2 * np.arcsinh(resid_max * stretch)
+        residual_rgb += 0.5
 
-    # This may or may not be equivalent to make_lupton_rgb
-    # I just can't figure out how to get that scaled so zero = 50% gray
-    stretch = 3
-    residual_rgb = np.stack(
-        [
-            np.arcsinh(np.clip(residuals[band] * mask_inv_all * weight, -resid_max, resid_max) * stretch)
-            for band, weight in weights.items()
-        ],
-        axis=-1,
-    )
-    residual_rgb /= 2 * np.arcsinh(resid_max * stretch)
-    residual_rgb += 0.5
+        ax_rgb[0][1].imshow(residual_rgb, origin="lower")
+        ax_rgb[0][1].set_title(f"Residual (abs., += {resid_max:.3e})")
+        ax_rgb[0][1].tick_params(labelleft=False)
 
-    ax_rgb[0][1].imshow(residual_rgb)
-    ax_rgb[0][1].set_title("Residual (abs.)")
-    ax_rgb[0][1].tick_params(labelleft=False)
+        residual_rgb = np.stack(
+            [
+                (np.clip(residuals[idx] * images_sigma_inv[idx], -chi_max, chi_max) + chi_max) / (2*chi_max)
+                for idx in range(3)
+            ],
+            axis=-1,
+        )
 
-    residual_rgb = np.stack(
-        [
-            (np.clip(residuals[band] * imgs_sigma_inv[band] * mask_inv_all * weight, -20, 20) + 20) / 40
-            for band, weight in weights.items()
-        ],
-        axis=-1,
-    )
-
-    ax_rgb[1][1].imshow(residual_rgb)
-    ax_rgb[1][1].set_title("Residual (chi)")
-    ax_rgb[1][1].tick_params(labelleft=False)
+        ax_rgb[1][1].imshow(residual_rgb, origin="lower")
+        ax_rgb[1][1].set_title(f"Residual (chi, +/- {chi_max:.2f})")
+        ax_rgb[1][1].tick_params(labelleft=False)
 
     return fig_rgb, ax_rgb, fig_gs, ax_gs, mask_inv_highsn
 
@@ -466,7 +678,7 @@ Interpolator: TypeAlias = g2f.SersicMixInterpolator | tuple[Type, dict[str, Any]
 
 def plot_sersicmix_interp(
     interps: dict[str, tuple[Interpolator, str | tuple]], n_ser: np.ndarray, **kwargs: Any
-) -> matplotlib.figure.Figure:
+) -> FigureAxes:
     """Plot Gaussian mixture Sersic profile interpolated values.
 
     Parameters
@@ -590,4 +802,4 @@ def plot_sersicmix_interp(
                 axis.set_ylabel(f"{y_prefix}{y_label}")
             if make_label:
                 axis.legend(loc="upper left")
-    return fig
+    return fig, axes

@@ -25,7 +25,7 @@ import gauss2d.fit as g2f
 import numpy
 import numpy as np
 
-__all__ = ["ArbitraryAllowedConfig", "get_params_uniq", "normalize"]
+__all__ = ["ArbitraryAllowedConfig", "FrozenArbitraryAllowedConfig", "get_params_uniq", "normalize"]
 
 
 class ArbitraryAllowedConfig:
@@ -38,9 +38,6 @@ class ArbitraryAllowedConfig:
 
 class FrozenArbitraryAllowedConfig(ArbitraryAllowedConfig):
     """Pydantic config to allow arbitrary typed Fields for frozen classes."""
-
-    # Needed to allow __post_init__ to add attrs to a frozen class
-    post_init_call = "after_validation"
 
 
 def get_params_uniq(parametric: g2f.Parametric, **kwargs: Any):
@@ -58,7 +55,10 @@ def get_params_uniq(parametric: g2f.Parametric, **kwargs: Any):
     params
         The unique parameters from the parametric object matching the filter.
     """
-    return {p: None for p in parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))}.keys()
+    params = parametric.parameters(paramfilter=g2f.ParamFilter(**kwargs))
+    # This should always return the same list as:
+    # list({p: None for p in }.keys())
+    return g2f.params_unique(params)
 
 
 def normalize(ndarray: numpy.ndarray, return_sum: bool = False):
