@@ -779,7 +779,7 @@ class CatalogSourceFitterABC(ABC):
         channels = self.get_channels(catexps)
         if config_data is None:
             config_data = CatalogSourceFitterConfigData(
-                config=CatalogSourceFitterConfig,
+                config=CatalogSourceFitterConfig(),
                 channels=list(channels.values()),
             )
         config = config_data.config
