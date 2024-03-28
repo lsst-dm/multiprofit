@@ -582,10 +582,11 @@ class Modeller:
             time_init = time.process_time()
             if config_fit.eval_residual:
                 model_ll.evaluate()
+                result.n_eval_resid += 1
             else:
                 model_jac.evaluate()
+                result.n_eval_jac += 1
             result.time_eval += time.process_time() - time_init
-            result.n_eval_resid += 1
             return -result.inputs.residual
 
         def jacobian_func(params_new, model_jac, model_ll, params, result, jac):
@@ -593,6 +594,7 @@ class Modeller:
                 time_init = time.process_time()
                 model_jac.evaluate()
                 result.time_eval += time.process_time() - time_init
+                result.n_eval_jac += 1
             return jac
 
         if config.eval_residual:
