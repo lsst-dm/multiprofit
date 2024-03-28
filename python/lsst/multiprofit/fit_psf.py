@@ -473,6 +473,14 @@ class CatalogPsfFitter:
         if len(flux_total) != 1:
             raise RuntimeError(f"len({flux_total=}) != 1; PSF model is badly-formed")
         flux_total = flux_total[0]
+        gaussians_linear = None
+        if config.fit_linear_init:
+            # The total flux must be freed first or else LinearGaussians.make
+            # will fail to find the required number of free linear params
+            flux_total.fixed = False
+            gaussians_linear = LinearGaussians.make(model_source, is_psf=True)
+            flux_total.fixed = True
+
         # TODO: Remove isinstance when channel filtering is fixed
         fluxfracs = tuple(
             param
@@ -529,9 +537,6 @@ class CatalogPsfFitter:
                     fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
 
                 if config.fit_linear_init:
-                    flux_total.fixed = False
-                    gaussians_linear = LinearGaussians.make(model_source, is_psf=True)
-                    flux_total.fixed = True
                     result = self.modeller.fit_gaussians_linear(gaussians_linear, data[0])
                     result = list(result.values())[0]
                     # Re-normalize fluxes (hopefully close already)
@@ -611,6 +616,7 @@ class CatalogPsfFitter:
                 centroid.x_param.limits = limits_x
                 centroid.y_param.value = cen_y
                 centroid.y_param.limits = limits_y
+                centroids.add(centroid)
             ellipse = component.ellipse
             ellipse.size_x_param.limits = limits_x
             ellipse.size_x = config_comp.size_x.value_initial
