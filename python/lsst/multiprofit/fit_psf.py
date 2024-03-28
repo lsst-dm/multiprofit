@@ -514,6 +514,7 @@ class CatalogPsfFitter:
         # dummy size for first iteration
         size, size_new = 0, 0
         fitInputs = FitInputsDummy()
+        catexp_get_psf_image = catexp.get_psf_image
 
         for idx in range_idx:
             time_init = time.process_time()
@@ -524,7 +525,7 @@ class CatalogPsfFitter:
 
             try:
                 self.check_source(source, config=config)
-                img_psf = catexp.get_psf_image(source)
+                img_psf = catexp_get_psf_image(source)
                 data = self._get_data(img_psf)
                 model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
                 self.initialize_model(model=model, config_data=config_data)
@@ -532,7 +533,7 @@ class CatalogPsfFitter:
                 # Caches the jacobian residual if the kernel size is unchanged
                 if img_psf.size != size:
                     fitInputs = None
-                    size = np.copy(img_psf.size)
+                    size = int(img_psf.size)
                 else:
                     fitInputs = fitInputs if not fitInputs.validate_for_model(model) else None
 
@@ -549,7 +550,7 @@ class CatalogPsfFitter:
                     result /= np.sum(result)
                     for idx_param, param in enumerate(fluxfracs):
                         param.value = result[idx_param]
-                        result /= np.sum(result[idx_param + 1 :])
+                        result /= np.sum(result[idx_param + 1:])
 
                 result_full = self.modeller.fit_model(model, fitinputs=fitInputs, **kwargs)
                 fitInputs = result_full.inputs
