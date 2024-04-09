@@ -33,6 +33,15 @@ class CatalogError(RuntimeError):
         """Return the standard column name for this error."""
 
 
+class NoDataError(CatalogError):
+    """RuntimeError for when there is no data to fit."""
+
+    @classmethod
+    @abstractmethod
+    def column_name(cls) -> str:
+        return "no_data_flag"
+
+
 class PsfRebuildFitFlagError(RuntimeError):
     """RuntimeError for when a PSF can't be rebuilt because the fit failed."""
 
