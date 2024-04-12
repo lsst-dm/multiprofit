@@ -22,6 +22,7 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import cycle
+import math
 from typing import Any, Iterable, Type, TypeAlias
 
 import astropy.table
@@ -387,6 +388,7 @@ def plot_model_rgb(
     weights: dict[str, float] | None = None,
     high_sn_threshold: float | None = None,
     plot_singleband: bool = True,
+    plot_chi_hist: bool = True,
     chi_max: float = 5.,
     rgb_min_auto: bool = False,
     rgb_stretch_auto: bool = False,
@@ -405,6 +407,8 @@ def plot_model_rgb(
         pixels having a model S/N above this threshold in every band.
     plot_singleband
         Whether to make grayscale plots for each band.
+    plot_chi_hist
+        Whether to plot histograms of the chi (scaled residual) values.
     chi_max
         The maximum absolute value of chi in residual plots. Values of 3-5 are
         suitable for good models while inadequate ones may need larger values.
@@ -462,6 +466,8 @@ def plot_model_rgb(
     if has_model:
         observations = {}
     else:
+        if plot_chi_hist:
+            raise ValueError("Cannot plot chi histograms without a model")
         obs_kwarg = kwargs.pop("observations")
         observations = {band: obs_kwarg[band] for band in bands}
 
@@ -533,11 +539,18 @@ def plot_model_rgb(
         else:
             array[index] = arg
 
+    chis_unweighted = {}
+
     for idx_band, (band, weight) in enumerate(weights.items()):
         observation = observations[band]
         if has_model:
             model_band = models[band]
-            variance_band = observation.sigma_inv.data ** -2
+            sigma_inv = observation.sigma_inv.data
+            variance_band = sigma_inv ** -2
+            if plot_chi_hist:
+                chi_good = (sigma_inv > 0) & np.isfinite(sigma_inv)
+                chi_unweighted = (observation.image.data[chi_good] - model_band[chi_good])*sigma_inv[chi_good]
+                chis_unweighted[band] = chi_unweighted
         weight_channel_new = weights_channel[idx_band]
         idx_channel_new = int(weight_channel_new // 1)
         if idx_channel_new == idx_channel:
@@ -593,9 +606,13 @@ def plot_model_rgb(
         img_model_rgb = apVis.make_lupton_rgb(*images_model, **kwargs)
     aspect = np.clip((y_max - y_min) / (x_max - x_min), 0.25, 4)
 
-    fig_rgb, ax_rgb = plt.subplots(1 + has_model, 1 + has_model, figsize=(16, 16 * aspect))
+    n_rows = 1 + has_model
+    n_cols = 1 + has_model * (1 + plot_chi_hist)
+    figsize = (8 * n_cols, 8 * n_rows * aspect)
+
+    fig_rgb, ax_rgb = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=figsize)
     fig_gs, ax_gs = (None, None) if not plot_singleband else plt.subplots(
-        nrows=n_bands, ncols=1 + has_model, figsize=(8 * (1 + has_model), 8 * aspect * n_bands)
+        nrows=n_bands, ncols=n_cols, figsize=(figsize[0], 8*aspect*n_bands),
     )
     (ax_rgb[0][0] if has_model else ax_rgb).imshow(img_rgb, extent=extent, origin="lower")
     (ax_rgb[0][0] if has_model else ax_rgb).set_title("Data")
@@ -657,6 +674,27 @@ def plot_model_rgb(
         ax_rgb[0][1].imshow(residual_rgb, origin="lower")
         ax_rgb[0][1].set_title(f"Residual (abs., += {resid_max:.3e})")
         ax_rgb[0][1].tick_params(labelleft=False)
+
+        if plot_chi_hist:
+            cmap = mpl.colormaps["coolwarm"]
+            residuals_rgb = np.concatenate(tuple(chis_unweighted.values()))
+            residuals_abs = np.abs(residuals_rgb)
+            n_resid = len(residuals_abs)
+            chi_max = 5 + 2.5*((np.sum(residuals_abs > 5)/n_resid > 0.1)
+                               + (np.sum(residuals_abs > 7.5)/n_resid > 0.1))
+            n_bins = int(math.ceil(np.clip(n_resid/50, 2, 20))*chi_max)
+            # ax_rgb[0][2].set_adjustable('box')
+            ax_rgb[0][2].hist(
+                np.clip(residuals_rgb, -chi_max, chi_max),
+                bins=n_bins, histtype="step", label="all",
+            )
+            band_colors = cmap(np.linspace(0, 1, n_bands))
+            for band, band_color in zip(bands, band_colors):
+                ax_rgb[0][2].hist(
+                    np.clip(residuals_rgb, -chi_max, chi_max),
+                    bins=n_bins, histtype="step", label=band,
+                )
+                ax_rgb[0][2].legend()
 
         residual_rgb = np.stack(
             [
