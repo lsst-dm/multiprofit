@@ -35,6 +35,7 @@ import pydantic
 from pydantic.dataclasses import dataclass
 
 from .componentconfig import Fluxes
+from .errors import NoDataError
 from .fit_catalog import CatalogExposureABC, CatalogFitterConfig, ColumnInfo
 from .modelconfig import ModelConfig
 from .modeller import FitInputsDummy, Modeller
@@ -61,7 +62,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         """Return the exposure's associated channel object."""
 
     @abstractmethod
-    def get_psf_model(self, params: Mapping[str, Any]) -> g2f.PsfModel:
+    def get_psf_model(self, params: Mapping[str, Any]) -> g2f.PsfModel | None:
         """Get the PSF model for a given source row.
 
         Parameters
@@ -73,7 +74,9 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         Returns
         -------
         psf_model : `gauss2d.fit.PsfModel`
-            A PsfModel object initialized with the best-fit parameters.
+            A PsfModel object initialized with the best-fit parameters, or None
+            if PSF rebuilding failed for an expected reason (i.e. the input PSF
+            fit table has a flag set).
         """
 
     @abstractmethod
@@ -142,11 +145,12 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
             source = catexp.get_catalog()[idx_row]
             observation = catexp.get_source_observation(source)
             if observation is not None:
-                observations.append(observation)
                 psf_model = catexp.get_psf_model(source)
-                for param in get_params_uniq(psf_model):
-                    param.fixed = True
-                psf_models.append(psf_model)
+                if psf_model is not None:
+                    observations.append(observation)
+                    for param in get_params_uniq(psf_model):
+                        param.fixed = True
+                    psf_models.append(psf_model)
 
         data = g2f.Data(observations)
         return data, psf_models
@@ -553,6 +557,8 @@ class CatalogSourceFitterABC(ABC):
 
             try:
                 data, psf_models = config.make_model_data(idx_row=idx, catexps=catexps)
+                if data.size == 0:
+                    raise NoDataError("make_model_data returned empty data")
                 model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
                 self.initialize_model(
                     model, source_multi, catexps, values_init,

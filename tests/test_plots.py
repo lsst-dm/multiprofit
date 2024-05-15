@@ -110,7 +110,7 @@ def model(channels, data, psf_models):
 
 def test_plot_model_rgb(model):
     fig, ax, fig_gs, ax_gs, *_ = plot_model_rgb(
-        model, minimum=0, stretch=0.15, Q=4, weights=bands_weights_lsst,
+        model, minimum=0, stretch=0.15, Q=4, weights=bands_weights_lsst, plot_chi_hist=True,
     )
     assert fig is not None
     assert ax is not None
@@ -121,7 +121,7 @@ def test_plot_model_rgb(model):
 def test_plot_model_rgb_auto(model):
     fig, ax, *_ = plot_model_rgb(
         model, Q=6, weights=bands_weights_lsst, rgb_min_auto=True, rgb_stretch_auto=True,
-        plot_singleband=False,
+        plot_singleband=False, plot_chi_hist=False,
     )
     assert fig is not None
     assert ax is not None
