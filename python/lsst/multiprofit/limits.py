@@ -19,7 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from gauss2d.fit import LimitsD as Limits
+from lsst.gauss2d.fit import LimitsD as Limits
 
 __all__ = ["limits_ref"]
 

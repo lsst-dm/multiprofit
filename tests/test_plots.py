@@ -19,7 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import CentroidConfig, GaussianComponentConfig, ParameterConfig
 from lsst.multiprofit.model_utils import make_psf_model_null
 from lsst.multiprofit.modelconfig import ModelConfig
@@ -38,7 +38,7 @@ def channels() -> dict[str, g2f.Channel]:
 
 
 @pytest.fixture(scope="module")
-def data(channels) -> g2f.Data:
+def data(channels) -> g2f.DataD:
     n_rows, n_cols = 16, 21
     x_min, y_min = 0, 0
 
@@ -60,7 +60,7 @@ def data(channels) -> g2f.Data:
         observation.sigma_inv.fill(sigma_inv)
         observation.mask_inv.fill(1)
         observations.append(observation)
-    return g2f.Data(observations)
+    return g2f.DataD(observations)
 
 
 @pytest.fixture(scope="module")
@@ -99,7 +99,7 @@ def model(channels, data, psf_models):
         },
     )
     model = modelconfig.make_model([[fluxes_group]], data=data, psf_models=psf_models)
-    model.setup_evaluators(model.EvaluatorMode.image)
+    model.setup_evaluators(g2f.EvaluatorMode.image)
     model.evaluate()
     rng = np.random.default_rng(1)
     for output, obs in zip(model.outputs, model.data):

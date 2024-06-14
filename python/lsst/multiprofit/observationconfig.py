@@ -19,8 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 
 
@@ -52,12 +52,12 @@ class ObservationConfig(pexConfig.Config):
     n_rows = pexConfig.Field[int](doc="The number of rows in the image")
     n_cols = pexConfig.Field[int](doc="The number of columns in the image")
 
-    def make_observation(self) -> g2f.Observation:
+    def make_observation(self) -> g2f.ObservationD:
         coordsys = self.coordsys.make_coordinate_system() if self.coordsys else None
         image = g2.ImageD(n_rows=self.n_rows, n_cols=self.n_cols, coordsys=coordsys)
         sigma_inv = g2.ImageD(n_rows=self.n_rows, n_cols=self.n_cols, coordsys=coordsys)
         mask = g2.ImageB(n_rows=self.n_rows, n_cols=self.n_cols, coordsys=coordsys)
-        observation = g2f.Observation(
+        observation = g2f.ObservationD(
             image=image,
             sigma_inv=sigma_inv,
             mask_inv=mask,

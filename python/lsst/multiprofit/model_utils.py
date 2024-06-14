@@ -21,8 +21,8 @@
 
 from typing import Any
 
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 
 __all__ = ["make_image_gaussians", "make_psf_model_null"]
 
@@ -51,13 +51,10 @@ def make_image_gaussians(
     """
     if gaussians_kernel is None:
         gaussians_kernel = g2.Gaussians([g2.Gaussian()])
-    n_gaussians_kernel = len(gaussians_kernel)
-    n_gaussians_source = len(gaussians_source)
     gaussians = g2.ConvolvedGaussians(
         [
             g2.ConvolvedGaussian(source=source, kernel=kernel)
-            for source in (gaussians_source.at(idx) for idx in range(n_gaussians_source))
-            for kernel in (gaussians_kernel.at(idx) for idx in range(n_gaussians_kernel))
+            for source in gaussians_source for kernel in gaussians_kernel
         ]
     )
     return g2.make_gaussians_pixel_D(gaussians=gaussians, **kwargs)
