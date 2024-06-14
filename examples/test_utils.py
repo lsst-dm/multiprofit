@@ -25,15 +25,17 @@ import timeit
 from typing import Iterable
 
 import galsim as gs
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
-    GaussianConfig,
+    CentroidConfig,
+    FluxParameterConfig,
+    GaussianComponentConfig,
     ParameterConfig,
-    SersicConfig,
+    SersicComponentConfig,
     SersicIndexParameterConfig,
 )
-from lsst.multiprofit.utils import get_params_uniq
+from lsst.multiprofit.sourceconfig import ComponentGroupConfig, SourceConfig
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -46,32 +48,45 @@ order_params_gauss = {name: idx for idx, name in enumerate(names_params_gauss)}
 
 def get_model(
     fluxes: dict[g2f.Channel, float], shape, sigma_xs, sigma_ys, rhos, nsers, order: int = 4
-) -> g2f.Model:
-    cens = g2f.CentroidParameters(shape[0] / 2.0, shape[1] / 2.0)
-    components = []
-    for sigma_x, sigma_y, rho, nser in zip(sigma_xs, sigma_ys, rhos, nsers):
-        component, *_ = SersicConfig(
+) -> g2f.ModelD:
+    components = {}
+    for idx, (sigma_x, sigma_y, rho, nser) in enumerate(zip(sigma_xs, sigma_ys, rhos, nsers, strict=True)):
+        component = SersicComponentConfig(
             size_x=ParameterConfig(value_initial=sigma_x, fixed=True),
             size_y=ParameterConfig(value_initial=sigma_y, fixed=True),
             rho=ParameterConfig(value_initial=rho, fixed=True),
-            sersicindex=SersicIndexParameterConfig(value_initial=nser, fixed=True),
+            sersic_index=SersicIndexParameterConfig(value_initial=nser, fixed=True),
             order=order,
-        ).make_component(centroid=cens, channels=fluxes.keys())
-        for (channel, flux), param in zip(fluxes.items(), get_params_uniq(component, nonlinear=False)):
-            param.value = flux
-            param.fixed = True
-        components.append(component)
-    source = g2f.Source(components)
+        )
+        components[f"c{idx}"] = component
+    source_config = SourceConfig(
+        component_groups={"": ComponentGroupConfig(
+            centroids={"default": CentroidConfig(x=ParameterConfig(value_initial=shape[1]/2.0),
+                                                 y=ParameterConfig(value_initial=shape[0]/2.0))},
+            components_sersic=components,
+        )}
+    )
+    source, priors_source = source_config.make_source(component_group_fluxes=[[fluxes]])
     img = g2.ImageD(np.zeros(shape, dtype=float))
     mask = g2.ImageB(np.ones(shape, dtype=bool))
-    data = g2f.Data([g2f.Observation(img, img, mask, channel) for channel in fluxes.keys()])
-    psf, *_ = GaussianConfig(
-        size_x=ParameterConfig(value_initial=0.0, fixed=True),
-        size_y=ParameterConfig(value_initial=0.0, fixed=True),
-        rho=ParameterConfig(value_initial=0.0, fixed=True),
-    ).make_component(centroid=g2f.CentroidParameters(0.0, 0.0), channels=[g2f.Channel.NONE])
-    psfmodels = tuple((g2f.PsfModel([psf]) for _ in range(len(fluxes))))
-    model = g2f.Model(data, psfmodels, [source])
+    data = g2f.DataD([g2f.ObservationD(img, img, mask, channel) for channel in fluxes.keys()])
+    source_psf = SourceConfig(
+        component_groups={"": ComponentGroupConfig(
+            centroids={"default": CentroidConfig(x=ParameterConfig(), y=ParameterConfig())},
+            components_gauss={
+                "gauss": GaussianComponentConfig(
+                    flux=FluxParameterConfig(value_initial=1.0, fixed=True),
+                    size_x=ParameterConfig(value_initial=0.0, fixed=True),
+                    size_y=ParameterConfig(value_initial=0.0, fixed=True),
+                    rho=ParameterConfig(value_initial=0.0, fixed=True),
+                ),
+            },
+            is_fractional=True,
+        )}
+    )
+    psfmodel, priors_psf = source_psf.make_psf_model([[{g2f.Channel.NONE: 1.0}]])
+    psfmodels = [psfmodel for _ in range(len(fluxes))]
+    model = g2f.ModelD(data, psfmodels, [source])
     return model
 
 
@@ -90,7 +105,7 @@ def get_setup(
     noise=1e-2,
 ):
     cmds = [
-        "import gauss2d as g2",
+        "import lsst.gauss2d as g2",
         "import numpy as np",
         f"xdim={xdim}",
         f"ydim={ydim}",
@@ -546,7 +561,7 @@ def mgsersic_test(
         nsers=[nser],
     )
 
-    model_mpf.setup_evaluators(model_mpf.EvaluatorMode.image)
+    model_mpf.setup_evaluators(g2f.EvaluatorMode.image)
     model_mpf.evaluate()
     img_ref = model_mpf.outputs[0].data
     imgs = {"mpf": img_ref}
