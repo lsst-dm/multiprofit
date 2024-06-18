@@ -19,8 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
     CentroidConfig,
     GaussianComponentConfig,
@@ -41,13 +41,13 @@ def channels() -> dict[str, g2f.Channel]:
 
 
 @pytest.fixture(scope="module")
-def data(channels) -> g2f.Data:
+def data(channels) -> g2f.DataD:
     config = ObservationConfig(n_rows=13, n_cols=19)
     observations = []
     for band in channels:
         config.band = band
         observations.append(config.make_observation())
-    return g2f.Data(observations)
+    return g2f.DataD(observations)
 
 
 @pytest.fixture(scope="module")
@@ -146,7 +146,7 @@ def test_ModelConfig(modelconfig_fluxes, data, psf_models):
     # Set the outputs to new images that refer to the existing data
     # because obs.image will not return a holding pointer
     outputs = [[g2.ImageD(obs.image.data)] for obs in model.data]
-    model.setup_evaluators(model.EvaluatorMode.image, outputs=outputs)
+    model.setup_evaluators(g2f.EvaluatorMode.image, outputs=outputs)
     model.evaluate()
-    model.setup_evaluators(model.EvaluatorMode.loglike)
+    model.setup_evaluators(g2f.EvaluatorMode.loglike)
     assert np.sum(model.evaluate()) == 0

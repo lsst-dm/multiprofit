@@ -24,8 +24,8 @@ import logging
 import time
 from typing import Any
 
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
@@ -56,6 +56,9 @@ __all__ = [
     "FitResult",
     "Modeller",
 ]
+
+
+Model = g2f.ModelD | g2f.ModelF
 
 
 class InvalidProposalError(ValueError):
@@ -121,10 +124,10 @@ class LinearGaussians:
                 n_g = len(gaussians)
                 if n_g != 1:
                     raise ValueError(f"{component=} has {gaussians=} of len {n_g=}!=1")
-            param_flux = component.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=channel))
-            if len(param_flux) != 1:
-                raise ValueError(f"Can't make linear source from {component=} with {len(param_flux)=}")
-            param_flux: g2f.ParameterD = param_flux[0]
+            param_fluxes = component.parameters(paramfilter=g2f.ParamFilter(nonlinear=False, channel=channel))
+            if len(param_fluxes) != 1:
+                raise ValueError(f"Can't make linear source from {component=} with {len(param_fluxes)=}")
+            param_flux: g2f.ParameterD = param_fluxes[0]
             if param_flux.fixed:
                 gaussians_fixed.append(gaussians.at(0))
             else:
@@ -139,7 +142,7 @@ class FitInputsBase(ABC):
     """Interface for inputs to a model fit."""
 
     @abstractmethod
-    def validate_for_model(self, model: g2f.Model) -> list[str]:
+    def validate_for_model(self, model: Model) -> list[str]:
         """Check that this FitInputs is valid for a Model.
 
         Parameters
@@ -161,7 +164,7 @@ class FitInputsDummy(FitInputsBase):
     reassigned to a non-dummy derived instance in a loop.
     """
 
-    def validate_for_model(self, model: g2f.Model) -> list[str]:
+    def validate_for_model(self, model: Model) -> list[str]:
         return [
             "This is a dummy FitInputs and will never validate",
         ]
@@ -190,7 +193,7 @@ class FitInputs(FitInputsBase):
     @classmethod
     def get_sizes(
         cls,
-        model: g2f.Model,
+        model: Model,
     ):
         """Initialize Jacobian and residual arrays for a model.
 
@@ -230,7 +233,7 @@ class FitInputs(FitInputsBase):
     @classmethod
     def from_model(
         cls,
-        model: g2f.Model,
+        model: Model,
     ):
         """Initialize Jacobian and residual arrays for a model.
 
@@ -276,7 +279,7 @@ class FitInputs(FitInputsBase):
             residuals_prior=residuals_prior,
         )
 
-    def validate_for_model(self, model: g2f.Model) -> list[str]:
+    def validate_for_model(self, model: Model) -> list[str]:
         n_obs, n_params_jac, n_prior_residuals, shapes = self.get_sizes(model)
         n_data = np.sum(np.prod(shapes, axis=1))
         size_data = n_data + n_prior_residuals
@@ -390,7 +393,7 @@ class Modeller:
         return logger
 
     @staticmethod
-    def compute_variances(model: g2f.Model, use_diag_only: bool = False, use_svd: bool = False, **kwargs):
+    def compute_variances(model: Model, use_diag_only: bool = False, use_svd: bool = False, **kwargs):
         hessian = model.compute_hessian(**kwargs).data
         if use_diag_only:
             return -1 / np.diag(hessian)
@@ -404,7 +407,7 @@ class Modeller:
     @staticmethod
     def fit_gaussians_linear(
         gaussians_linear: LinearGaussians,
-        observation: g2f.Observation,
+        observation: g2f.ObservationD,
         psf_model: g2f.PsfModel = None,
         fitmethods: dict[str, dict[str, Any]] = None,
         plot: bool = False,
@@ -524,7 +527,7 @@ class Modeller:
 
     def fit_model(
         self,
-        model: g2f.Model,
+        model: Model,
         fitinputs: FitInputs | None = None,
         printout: bool = False,
         config: ModelFitConfig = None,
@@ -598,11 +601,11 @@ class Modeller:
             return jac
 
         if config.eval_residual:
-            model_ll = g2f.Model(
+            model_ll = g2f.ModelD(
                 data=model.data, psfmodels=model.psfmodels, sources=model.sources, priors=model.priors,
             )
             model_ll.setup_evaluators(
-                evaluatormode=g2f.Model.EvaluatorMode.loglike,
+                evaluatormode=g2f.EvaluatorMode.loglike,
                 residuals=fitinputs.residuals,
                 residuals_prior=fitinputs.residuals_prior,
             )
@@ -610,7 +613,7 @@ class Modeller:
             model_ll = None
 
         model.setup_evaluators(
-            evaluatormode=g2f.Model.EvaluatorMode.jacobian,
+            evaluatormode=g2f.EvaluatorMode.jacobian,
             outputs=fitinputs.jacobians,
             residuals=fitinputs.residuals,
             outputs_prior=fitinputs.outputs_prior,
@@ -642,14 +645,14 @@ class Modeller:
         if params_free_sorted_missing:
             if config.eval_residual:
                 model_ll.setup_evaluators(
-                    evaluatormode=g2f.Model.EvaluatorMode.loglike,
+                    evaluatormode=g2f.EvaluatorMode.loglike,
                     residuals=fitinputs.residuals,
                     residuals_prior=fitinputs.residuals_prior,
                     force=True,
                 )
             fitinputs = FitInputs.from_model(model)
             model.setup_evaluators(
-                evaluatormode=g2f.Model.EvaluatorMode.jacobian,
+                evaluatormode=g2f.EvaluatorMode.jacobian,
                 outputs=fitinputs.jacobians,
                 residuals=fitinputs.residuals,
                 outputs_prior=fitinputs.outputs_prior,
@@ -724,7 +727,7 @@ class Modeller:
     @classmethod
     def fit_model_linear(
         cls,
-        model: g2f.Model,
+        model: Model,
         idx_obs: int = None,
         ratio_min: float = 0,
         validate: bool = False,
@@ -741,7 +744,7 @@ class Modeller:
             indices = range(n_data)
 
         if validate:
-            model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+            model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike)
             loglike_init = model.evaluate()
         else:
             loglike_init = None

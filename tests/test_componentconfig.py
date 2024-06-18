@@ -19,7 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
     EllipticalComponentConfig,
     GaussianComponentConfig,

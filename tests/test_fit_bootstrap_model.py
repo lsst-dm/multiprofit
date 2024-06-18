@@ -20,7 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import astropy.table
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
     CentroidConfig,
     FluxFractionParameterConfig,
@@ -241,7 +241,7 @@ def test_fit_source(config_fitter_source, config_data_sources):
     model_sources, priors = config_fitter_source.config.make_sources(
         channels=list(config_data_sources.keys())
     )
-    model_true = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model_sources)
+    model_true = g2f.ModelD(data=model.data, psfmodels=model.psfmodels, sources=model_sources)
     fitter.initialize_model(model_true, catalog_multi[0], catexps=catexps)
     params_true = tuple(param.value for param in get_params_uniq(model_true, fixed=False))
     plot_catalog_bootstrap(
@@ -270,7 +270,7 @@ def test_fit_source(config_fitter_source, config_data_sources):
             variances = list(variances)
 
     # Bootstrap errors
-    model.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
+    model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.image)
     model.evaluate()
     img_data_old = []
     for obs, output in zip(model.data, model.outputs):

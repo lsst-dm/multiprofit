@@ -21,7 +21,7 @@
 
 import string
 
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import pydantic
 from pydantic.dataclasses import dataclass

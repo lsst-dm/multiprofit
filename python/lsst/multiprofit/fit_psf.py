@@ -27,8 +27,8 @@ from typing import Any, Mapping, Type
 
 import astropy
 from astropy.table import Table
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
@@ -352,7 +352,7 @@ class CatalogPsfFitter:
         self.modeller = modeller
 
     @staticmethod
-    def _get_data_default(img_psf: np.array, gain: float = 1e5) -> g2f.Data:
+    def _get_data_default(img_psf: np.array, gain: float = 1e5) -> g2f.DataD:
         # TODO: Improve these arbitrary definitions
         # Look at S/N of PSF stars?
         background = np.std(img_psf[img_psf < 2 * np.abs(np.min(img_psf))])
@@ -361,9 +361,9 @@ class CatalogPsfFitter:
         if not (background > -min_psf):
             background = -1.1 * min_psf
         img_sig_inv = np.sqrt(gain / (img_psf + background))
-        return g2f.Data(
+        return g2f.DataD(
             [
-                g2f.Observation(
+                g2f.ObservationD(
                     channel=g2f.Channel.NONE,
                     image=g2.ImageD(img_psf),
                     sigma_inv=g2.ImageD(img_sig_inv),
@@ -372,7 +372,7 @@ class CatalogPsfFitter:
             ]
         )
 
-    def _get_data(self, img_psf: np.array, gain: float = 1e5) -> g2f.Data:
+    def _get_data(self, img_psf: np.array, gain: float = 1e5) -> g2f.DataD:
         """Build a Model-able gauss2d.fit.Data from a normalized PSF image.
 
         Parameters
@@ -527,7 +527,7 @@ class CatalogPsfFitter:
                 self.check_source(source, config=config)
                 img_psf = catexp_get_psf_image(source)
                 data = self._get_data(img_psf)
-                model = g2f.Model(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
+                model = g2f.ModelD(data=data, psfmodels=[model_psf], sources=[model_source], priors=priors)
                 self.initialize_model(model=model, config_data=config_data)
 
                 # Caches the jacobian residual if the kernel size is unchanged
@@ -582,7 +582,7 @@ class CatalogPsfFitter:
 
     def initialize_model(
         self,
-        model: g2f.Model,
+        model: g2f.ModelD,
         config_data: CatalogPsfFitterConfigData,
         limits_x: g2f.LimitsD = None,
         limits_y: g2f.LimitsD = None,

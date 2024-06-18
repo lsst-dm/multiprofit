@@ -22,7 +22,7 @@
 import string
 from typing import Iterable
 
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 
 from .componentconfig import Fluxes
@@ -74,15 +74,15 @@ class ModelConfig(pexConfig.Config):
     def make_model(
         self,
         component_group_fluxes_srcs: Iterable[list[list[Fluxes]]],
-        data: g2f.Data,
+        data: g2f.DataD,
         psf_models: list[g2f.PsfModel],
         label_integral: str | None = None,
-    ) -> g2f.Model:
+    ) -> g2f.ModelD:
         sources, priors = self.make_sources(
             component_group_fluxes_srcs=component_group_fluxes_srcs,
             label_integral=label_integral,
         )
 
-        model = g2f.Model(data=data, psfmodels=psf_models, sources=sources, priors=priors)
+        model = g2f.ModelD(data=data, psfmodels=psf_models, sources=sources, priors=priors)
 
         return model
