@@ -19,7 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 import numpy as np
 
 from .limits import limits_ref

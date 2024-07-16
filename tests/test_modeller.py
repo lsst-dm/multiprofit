@@ -22,8 +22,8 @@
 import math
 import time
 
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import (
     CentroidConfig,
     FluxFractionParameterConfig,
@@ -51,7 +51,7 @@ def channels() -> dict[str, g2f.Channel]:
 
 
 @pytest.fixture(scope="module")
-def data(channels) -> g2f.Data:
+def data(channels) -> g2f.DataD:
     n_rows, n_cols = 25, 27
     x_min, y_min = 0, 0
 
@@ -74,7 +74,7 @@ def data(channels) -> g2f.Data:
         observation.sigma_inv.fill(sigma_inv)
         observation.mask_inv.fill(1)
         observations.append(observation)
-    return g2f.Data(observations)
+    return g2f.DataD(observations)
 
 
 @pytest.fixture(scope="module")
@@ -124,19 +124,26 @@ def psf_models(channels) -> list[g2f.PsfModel]:
 
 
 @pytest.fixture(scope="module")
-def model(channels, data, psf_models) -> g2f.Model:
+def model(channels, data, psf_models) -> g2f.ModelD:
     rho, size_x, size_y, sersicn, flux = 0.4, 1.5, 1.9, 1.0, 4.7
     drho, dsize_x, dsize_y, dsersicn, dflux = -0.9, 2.5, 5.4, 3.0, 13.9
 
     components_sersic = {}
     fluxes_group = []
+
+    # Linear interpolators fail to compute accurate likelihoods at knot values
+    is_linear_interp = g2f.SersicMixComponentIndexParameterD(
+        interpolator=SersicComponentConfig().get_interpolator(4)
+    ).interptype == g2f.InterpType.linear
+
     for idx, name in enumerate(("exp", "dev")):
         components_sersic[name] = SersicComponentConfig(
             rho=ParameterConfig(value_initial=rho + idx*drho),
             size_x=ParameterConfig(value_initial=size_x + idx*dsize_x),
             size_y=ParameterConfig(value_initial=size_y + idx*dsize_y),
             sersic_index=SersicIndexParameterConfig(
-                value_initial=sersicn + idx * dsersicn,
+                # Add a small offset since 1.0 and 4.0 are bound to be knots
+                value_initial=sersicn + idx * dsersicn + 1e-4*is_linear_interp,
                 fixed=idx == 0,
                 prior_mean=None,
             ),
@@ -167,13 +174,13 @@ def model(channels, data, psf_models) -> g2f.Model:
 
 
 @pytest.fixture(scope="module")
-def model_jac(model) -> g2f.Model:
-    model_jac = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model.sources)
+def model_jac(model) -> g2f.ModelD:
+    model_jac = g2f.ModelD(data=model.data, psfmodels=model.psfmodels, sources=model.sources)
     return model_jac
 
 
 @pytest.fixture(scope="module")
-def psf_observations(psf_models) -> list[g2f.Observation]:
+def psf_observations(psf_models) -> list[g2f.ObservationD]:
     config = ObservationConfig(n_rows=17, n_cols=19)
     rng = np.random.default_rng(1)
 
@@ -207,7 +214,7 @@ def psf_observations(psf_models) -> list[g2f.Observation]:
 def psf_fit_models(psf_models, psf_observations):
     psf_null = [make_psf_model_null()]
     return [
-        g2f.Model(g2f.Data([observation]), psf_null, [g2f.Source(psf_model.components)])
+        g2f.ModelD(g2f.DataD([observation]), psf_null, [g2f.Source(psf_model.components)])
         for psf_model, observation in zip(psf_models, psf_observations)
     ]
 
@@ -279,11 +286,11 @@ def test_model_evaluation(channels, model, model_jac):
         residuals[idx_obs] = g2.ImageD(residual[offset:end].view().reshape(shape))
         offset = end
 
-    model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+    model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike)
     loglike_init = model.evaluate()
 
     model_jac.setup_evaluators(
-        evaluatormode=g2f.Model.EvaluatorMode.jacobian,
+        evaluatormode=g2f.EvaluatorMode.jacobian,
         outputs=jacobians,
         residuals=residuals,
         print=printout,
@@ -317,7 +324,7 @@ def test_make_psf_source_linear(psf_models, psf_models_linear_gaussians):
 def test_modeller(model):
     # For debugging purposes
     printout = False
-    model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
+    model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike_image)
     # Get the model images
     model.evaluate()
     rng = np.random.default_rng(3)
@@ -345,7 +352,7 @@ def test_modeller(model):
     kwargs_fit = dict(ftol=1e-6, xtol=1e-6)
 
     for delta_param in (0, 0.2):
-        model = g2f.Model(data=model.data, psfmodels=model.psfmodels, sources=model.sources)
+        model = g2f.ModelD(data=model.data, psfmodels=model.psfmodels, sources=model.sources)
         values_init = values_true
         if delta_param != 0:
             for param, value_init in zip(params_free, values_init):
@@ -355,7 +362,7 @@ def test_modeller(model):
                 except RuntimeError:
                     param.value_transformed -= delta_param
 
-        model.setup_evaluators(evaluatormode=model.EvaluatorMode.loglike)
+        model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike)
         loglike_init = np.array(model.evaluate())
         results = modeller.fit_model(model, **kwargs_fit)
         params_best = results.params_best
@@ -390,10 +397,10 @@ def test_modeller(model):
                 for p in priors:
                     assert p.evaluate().loglike == 0
                     assert p.loglike_const_terms[0] == -math.log(math.sqrt(2 * math.pi))
-            model = g2f.Model(
+            model = g2f.ModelD(
                 data=model.data, psfmodels=model.psfmodels, sources=model.sources, priors=priors
             )
-            model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+            model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike)
             loglike_init = sum(loglike_eval for loglike_eval in model.evaluate())
             if offset == 0:
                 assert np.isclose(loglike_init, loglike_noprior_sum, rtol=1e-10, atol=1e-10)
@@ -407,7 +414,7 @@ def test_modeller(model):
             for param, value in zip(params_free, results.params_best):
                 param.value_transformed = value
 
-            model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike)
+            model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike)
             loglike_model = sum(loglike_eval for loglike_eval in model.evaluate())
             assert np.isclose(loglike_new, loglike_model, rtol=1e-10, atol=1e-10)
             # This should be > 0. TODO: Determine why it isn't always
@@ -434,7 +441,7 @@ def test_psf_model_fit(psf_fit_models):
             else:
                 param.fixed = False
         # Necessary whenever parameters are freed/fixed
-        model.setup_evaluators(model.EvaluatorMode.jacobian, force=True)
+        model.setup_evaluators(g2f.EvaluatorMode.jacobian, force=True)
         errors = model.verify_jacobian(rtol=5e-4, atol=5e-4, findiff_add=1e-6, findiff_frac=1e-6)
         if errors:
             import matplotlib.pyplot as plt
@@ -442,7 +449,7 @@ def test_psf_model_fit(psf_fit_models):
 
             fitinputs = FitInputs.from_model(model)
             model.setup_evaluators(
-                evaluatormode=g2f.Model.EvaluatorMode.jacobian,
+                evaluatormode=g2f.EvaluatorMode.jacobian,
                 outputs=fitinputs.jacobians,
                 residuals=fitinputs.residuals,
                 print=True,
@@ -451,7 +458,7 @@ def test_psf_model_fit(psf_fit_models):
             model.evaluate(print=True)
             assert (fitinputs.jacobians[0][0].data == 0).all()
             assert np.sum(np.abs(fitinputs.jacobians[0][1].data)) > 0
-            model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.loglike_image)
+            model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.loglike_image)
             model.evaluate()
             outputs = model.outputs
             diffs = [g2.ImageD(img.data.copy()) for img in outputs]

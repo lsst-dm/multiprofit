@@ -28,7 +28,7 @@ from typing import Any, Iterable, Mapping, Sequence, Type
 import astropy
 from astropy.table import Table
 import astropy.units as u
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
@@ -80,7 +80,7 @@ class CatalogExposureSourcesABC(CatalogExposureABC):
         """
 
     @abstractmethod
-    def get_source_observation(self, source: Mapping[str, Any], **kwargs: Any) -> g2f.Observation:
+    def get_source_observation(self, source: Mapping[str, Any], **kwargs: Any) -> g2f.ObservationD:
         """Get the Observation for a given source row.
 
         Parameters
@@ -121,7 +121,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
         self,
         idx_row,
         catexps: list[CatalogExposureSourcesABC],
-    ) -> tuple[g2f.Data, list[g2f.PsfModel]]:
+    ) -> tuple[g2f.DataD, list[g2f.PsfModel]]:
         """Make data and psf_models for a catalog row.
 
         Parameters
@@ -152,7 +152,7 @@ class CatalogSourceFitterConfig(CatalogFitterConfig):
                         param.fixed = True
                     psf_models.append(psf_model)
 
-        data = g2f.Data(observations)
+        data = g2f.DataD(observations)
         return data, psf_models
 
     def make_sources(
@@ -543,7 +543,7 @@ class CatalogSourceFitterABC(ABC):
         # TODO: Do this check with dummy data
         # data, psf_models = config.make_model_data(
         #     idx_row=range_idx[0], catexps=catexps)
-        # model = g2f.Model(data=data, psfmodels=psf_models,
+        # model = g2f.ModelD(data=data, psfmodels=psf_models,
         #     sources=model_sources, priors=priors)
         # Remember to filter out fixed centroids from params
         # assert list(params.values()) == get_params_uniq(model, fixed=False)
@@ -559,7 +559,7 @@ class CatalogSourceFitterABC(ABC):
                 data, psf_models = config.make_model_data(idx_row=idx, catexps=catexps)
                 if data.size == 0:
                     raise NoDataError("make_model_data returned empty data")
-                model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
+                model = g2f.ModelD(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
                 self.initialize_model(
                     model, source_multi, catexps, values_init,
                     centroid_pixel_offset=config_data.config.centroid_pixel_offset,
@@ -637,10 +637,10 @@ class CatalogSourceFitterABC(ABC):
                         img_data_old = []
                         if errors_hessian_bestfit:
                             # Model sans prior
-                            model_eval = g2f.Model(
+                            model_eval = g2f.ModelD(
                                 data=model.data, psfmodels=model.psfmodels, sources=model.sources
                             )
-                            model_eval.setup_evaluators(evaluatormode=model.EvaluatorMode.image)
+                            model_eval.setup_evaluators(evaluatormode=g2f.EvaluatorMode.image)
                             model_eval.evaluate()
                             for obs, output in zip(model_eval.data, model_eval.outputs):
                                 img_data_old.append(obs.image.data.copy())
@@ -756,7 +756,7 @@ class CatalogSourceFitterABC(ABC):
         config_data: CatalogSourceFitterConfigData = None,
         results: astropy.table.Table = None,
         **kwargs: Any
-    ) -> g2f.Model:
+    ) -> g2f.ModelD:
         """Reconstruct the model for a single row of a fit catalog.
 
         Parameters
@@ -804,7 +804,7 @@ class CatalogSourceFitterABC(ABC):
             idx_row=idx_row,
             catexps=catexps,
         )
-        model = g2f.Model(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
+        model = g2f.ModelD(data=data, psfmodels=psf_models, sources=model_sources, priors=priors)
         self.initialize_model(model, source_multi, catexps, **kwargs)
 
         if results is not None:
@@ -820,7 +820,7 @@ class CatalogSourceFitterABC(ABC):
     @abstractmethod
     def initialize_model(
         self,
-        model: g2f.Model,
+        model: g2f.ModelD,
         source: Mapping[str, Any],
         catexps: list[CatalogExposureSourcesABC],
         values_init: Mapping[g2f.ParameterD, float] | None = None,

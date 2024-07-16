@@ -24,7 +24,7 @@ import logging
 from typing import Any, Mapping, Sequence
 
 import astropy
-import gauss2d.fit as g2f
+import lsst.gauss2d.fit as g2f
 import lsst.pex.config as pexConfig
 import numpy as np
 import pydantic
@@ -160,7 +160,7 @@ class CatalogExposureSourcesBootstrap(CatalogExposureSourcesABC):
         self.psf_model_data.init_psf_model(self.table_psf_fits[params["id"]])
         return psf_model
 
-    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
+    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.ObservationD:
         obs = self.config_boot.observation.make_observation()
         return obs
 
@@ -186,7 +186,7 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
 
     def initialize_model(
         self,
-        model: g2f.Model,
+        model: g2f.ModelD,
         source: Mapping[str, Any],
         catexps: list[CatalogExposureSourcesABC],
         values_init: Mapping[g2f.ParameterD, float] | None = None,
@@ -228,7 +228,7 @@ class CatalogSourceFitterBootstrap(CatalogSourceFitterABC):
         # Should be done in get_source_observation, but it gets called first
         # ... and therefore does not have the initialization above
         # Also, this must be done per-iteration because PSF parameters vary
-        model.setup_evaluators(evaluatormode=g2f.Model.EvaluatorMode.image)
+        model.setup_evaluators(evaluatormode=g2f.EvaluatorMode.image)
         model.evaluate()
 
         # The offset is to keep the rng seed different from the PSF image seed

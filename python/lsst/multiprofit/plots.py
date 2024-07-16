@@ -27,8 +27,8 @@ from typing import Any, Iterable, Type, TypeAlias
 
 import astropy.table
 import astropy.visualization as apVis
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 import matplotlib as mpl
 import matplotlib.axes
 import matplotlib.figure
@@ -244,7 +244,7 @@ def plot_catalog_bootstrap(
 
 
 def plot_loglike(
-    model: g2f.Model,
+    model: g2f.ModelD,
     params: list[g2f.ParameterD] = None,
     n_values: int = 15,
     errors: dict[str, ErrorValues] = None,
@@ -384,7 +384,7 @@ def plot_loglike(
 
 
 def plot_model_rgb(
-    model: g2f.Model | None,
+    model: g2f.ModelD | None,
     weights: dict[str, float] | None = None,
     high_sn_threshold: float | None = None,
     plot_singleband: bool = True,
@@ -460,7 +460,7 @@ def plot_model_rgb(
     n_bands = len(bands)
 
     if has_model and (not model.outputs or any([output is None for output in model.outputs])):
-        model.setup_evaluators(model.EvaluatorMode.image)
+        model.setup_evaluators(g2f.EvaluatorMode.image)
         model.evaluate()
 
     if has_model:
@@ -518,7 +518,7 @@ def plot_model_rgb(
                         models[band] = img
                     else:
                         data_new[key] = (g2.ImageB if (key == "mask_inv") else g2.ImageD)(img)
-                observations[band] = g2f.Observation(channel=obs.channel, **data_new)
+                observations[band] = g2f.ObservationD(channel=obs.channel, **data_new)
 
     extent = (x_min, x_max, y_min, y_max)
 

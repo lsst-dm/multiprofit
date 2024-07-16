@@ -16,8 +16,8 @@ import astropy.io.fits as fits
 import astropy.table as apTab
 import astropy.visualization as apVis
 from astropy.wcs import WCS
-import gauss2d as g2
-import gauss2d.fit as g2f
+import lsst.gauss2d as g2
+import lsst.gauss2d.fit as g2f
 from lsst.multiprofit.componentconfig import SersicComponentConfig, SersicIndexParameterConfig
 from lsst.multiprofit.fit_psf import (
     CatalogExposurePsfABC,
@@ -40,7 +40,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pydantic
 from pydantic.dataclasses import dataclass
-
 
 # In[2]:
 
@@ -252,7 +251,7 @@ config_data_source = CatalogSourceFitterConfigData(
 @dataclass(frozen=True, config=ArbitraryAllowedConfig)
 class CatalogExposureSources(CatalogExposureSourcesABC):
     config_data_psf: CatalogPsfFitterConfigData = pydantic.Field(title="The PSF fit config")
-    observation: g2f.Observation = pydantic.Field(title="The observation to fit")
+    observation: g2f.ObservationD = pydantic.Field(title="The observation to fit")
     table_psf_fits: apTab.Table = pydantic.Field(title="The table of PSF fit parameters")
 
     @property
@@ -266,7 +265,7 @@ class CatalogExposureSources(CatalogExposureSourcesABC):
         self.config_data_psf.init_psf_model(params)
         return self.config_data_psf.psf_model
 
-    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.Observation:
+    def get_source_observation(self, source: Mapping[str, Any]) -> g2f.ObservationD:
         return self.observation
 
 
@@ -278,7 +277,7 @@ class CatalogSourceFitter(CatalogSourceFitterABC):
 
     def initialize_model(
         self,
-        model: g2f.Model,
+        model: g2f.ModelD,
         source: Mapping[str, Any],
         catexps: list[CatalogExposureSourcesABC],
         values_init: Mapping[g2f.ParameterD, float] | None = None,
@@ -364,7 +363,7 @@ for band in bands:
     sigma_inv = 1.0/np.sqrt(data[hdu_var].data)
     sigma_inv[mask != 1] = 0
 
-    observation = g2f.Observation(
+    observation = g2f.ObservationD(
         image=g2.ImageD(data[hdu_img].data),
         sigma_inv=g2.ImageD(sigma_inv),
         mask_inv=g2.ImageB(mask),
@@ -420,7 +419,7 @@ for band, observation in bands.items():
 
 # Make a model for the best-fit params
 data, psf_models = config_source.make_model_data(idx_row=0, catexps=list(catexps.values()))
-model = g2f.Model(data=data, psfmodels=psf_models, sources=config_data_source.sources_priors[0], priors=config_data_source.sources_priors[1])
+model = g2f.ModelD(data=data, psfmodels=psf_models, sources=config_data_source.sources_priors[0], priors=config_data_source.sources_priors[1])
 params = get_params_uniq(model, fixed=False)
 result_multi_row = dict(result_multi[0])
 # This is the last column before fit params
@@ -428,24 +427,24 @@ idx_last = next(idx for idx, column in enumerate(result_multi_row.keys()) if col
 # Set params to best fit values
 for param, (column, value) in zip(params, list(result_multi_row.items())[idx_last+1:]):
     param.value = value
-model.setup_evaluators(model.EvaluatorMode.loglike_image)
+model.setup_evaluators(g2f.EvaluatorMode.loglike_image)
 # Print the loglikelihoods, which are from the data and end with the (sum of all) priors
 loglikes = model.evaluate()
 print(f"{loglikes=}")
 
 
 # ### Multiband Residuals
-# 
+#
 # What's with the structure in the residuals? Most broadly, a point source + exponential disk + deVauc bulge model is totally inadequate for this galaxy for several possible reasons:
-# 
+#
 # 1. The disk isn't exactly exponential (n=1)
 # 2. The disk has colour gradients not accounted for in this model*
 # 3. If the galaxy even has a bulge, it's very weak and def. not a deVaucouleurs (n=4) profile; it may be an exponential "pseudobulge"
-# 
+#
 # \*MultiProFit can do more general Gaussian mixture models (linear or non-linear), which may be explored in a future iteration of this notebook, but these are generally do not improve the accuracy of photometry for smaller/fainter galaxies.
-# 
+#
 # Note that the two scalings of the residual plots (98%ile and +/- 20 sigma) end up looking very similar.
-# 
+#
 
 # In[13]:
 
@@ -469,21 +468,21 @@ if write_mask_highsn:
 
 
 # ### More exercises for the reader
-# 
+#
 # These are of the sort that the author hasn't gotten around to yet because they're far from trivial. Try:
-# 
+#
 # 0. Use the WCS to compute ra, dec and errors thereof.
 # Hint: override CatalogSourceFitter.get_model_radec
-# 
+#
 # 1. Replace the real data with simulated data.
 # Make new observations using model.evaluate and add noise based on the variance maps.
 # Try fitting again and see how well results converge depending on the initialization scheme.
-# 
+#
 # 2. Fit every other source individually.
 # Try subtracting the best-fit galaxy model from above first.
 # Hint: get_source_observation should be redefined to return a smaller postage stamp around the nominal centroid.
 # Pass the full catalog (excluding the central galaxy) to catalog_multi.
-# 
+#
 # 3. Fit all sources simultaneously.
 # Redefine CatalogFitterConfig.make_model_data to make a model with multiple sources, using the catexp catalogs
 # initialize_model will no longer need to do anything
