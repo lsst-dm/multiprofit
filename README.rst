@@ -1,3 +1,6 @@
+This is the original repository for multiprofit and is now superseded by
+`multiprofit <https://github.com/lsst/multiprofit/>`_ in the lsst organization.
+
 MultiProFit
 ###########
 
